@@ -42,6 +42,20 @@ export const api = {
       body: JSON.stringify({ cols, rows }),
     }),
   getUsage: (id: string) => req<UsageInfo>(`/sessions/${id}/usage`),
+  // Raw-body upload (not the JSON helper): the server saves the file locally
+  // and types its path into the pane, like native-terminal drag-drop.
+  attachFile: async (id: string, file: Blob, name: string) => {
+    const res = await fetch(`/api/sessions/${id}/attach?name=${encodeURIComponent(name)}`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${TOKEN}`, 'Content-Type': 'application/octet-stream' },
+      body: file,
+    });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({} as { error?: string }));
+      throw new Error(body.error || res.statusText);
+    }
+    return res.json() as Promise<{ ok: boolean; path: string }>;
+  },
   updateSession: (id: string, patch: { name?: string; color?: string }) =>
     req<SessionInfo>(`/sessions/${id}`, { method: 'PATCH', body: JSON.stringify(patch) }),
   getGlobalUsage: () => req<AccountUsage[]>('/usage'),

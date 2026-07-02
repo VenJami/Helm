@@ -37,6 +37,13 @@ Browser (React + xterm.js grid) <--WS/REST--> Node server <--PTY--> claude.cmd
 - `POST /api/broadcast {text, sessionIds[]}` — type one instruction into
   several running panes (text lands as a paste; Enter follows ~250 ms later
   as its own keypress).
+- `POST /api/sessions/:id/attach?name=<file>` — raw file body (≤25 MB), saved
+  under `attachments\<session>\`; the file's PATH is then typed into the pane
+  (quoted if spaced, no Enter) — the native-terminal drag-drop mechanism, so
+  claude reads the file from disk. Session must be running (409 otherwise).
+  Deleted with the session; orphan dirs swept at server start. Note: claude
+  2.1.198 shows the path as plain text (no [Image #N] chip) but reads the
+  file fine when the prompt is submitted.
 - `GET/PATCH /api/settings` — server toggles, currently `{autoRevive}`.
 - `GET /api/logs?after=<seq>` — in-memory server event log for the UI's 🐞
   drawer; `startedAt`/`pid` identify the process (stale-server check).
@@ -84,6 +91,7 @@ the tab is focused. Tab title shows "(N waiting)".
   sessions.json          running sessions → revivable as 'dead' after restart
   settings.json          server toggles (currently autoRevive)
   hook-settings.json     generated hook config passed via --settings
+  attachments\<session>\ files pasted/dropped onto a pane (path typed into it)
   accounts\<profile>\    per-account CLAUDE_CONFIG_DIR (credentials, config,
                          projects\ = transcripts)
 ```

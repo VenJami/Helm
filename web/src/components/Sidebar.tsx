@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import type { SessionInfo, Workspace } from '../types';
+import { IconFolder, IconHelm, IconPlus, IconX } from './Icons';
 
 interface Props {
   workspaces: Workspace[];
@@ -34,7 +35,10 @@ export function Sidebar({ workspaces, sessions, selectedId, onSelect, onAdd, onR
 
   return (
     <aside className="sidebar">
-      <div className="sidebar-brand">Helm ⎈</div>
+      <div className="sidebar-brand">
+        <IconHelm size={17} /> Helm
+      </div>
+      <div className="sidebar-label">Workspaces</div>
       <div className="sidebar-list">
         {workspaces.map((ws) => (
           <div
@@ -43,6 +47,7 @@ export function Sidebar({ workspaces, sessions, selectedId, onSelect, onAdd, onR
             onClick={() => onSelect(ws.id)}
             title={ws.dir}
           >
+            <IconFolder size={14} />
             <span className="ws-name">{ws.name}</span>
             {runningIn(ws) > 0 && <span className="ws-badge">{runningIn(ws)}</span>}
             <button
@@ -53,7 +58,7 @@ export function Sidebar({ workspaces, sessions, selectedId, onSelect, onAdd, onR
                 onRemove(ws.id);
               }}
             >
-              ×
+              <IconX size={13} />
             </button>
           </div>
         ))}
@@ -79,8 +84,8 @@ export function Sidebar({ workspaces, sessions, selectedId, onSelect, onAdd, onR
           </div>
         </div>
       ) : (
-        <button className="btn sidebar-add" onClick={() => setAdding(true)}>
-          + Add workspace
+        <button className="btn btn-secondary sidebar-add" onClick={() => setAdding(true)}>
+          <IconPlus size={13} /> Add workspace
         </button>
       )}
     </aside>

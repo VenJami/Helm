@@ -39,6 +39,7 @@ const HELM_DIR = IS_WIN
   ? path.join(process.env.LOCALAPPDATA || os.homedir(), 'Helm')
   : path.join(os.homedir(), '.helm');
 const ACCOUNTS_DIR = path.join(HELM_DIR, 'accounts');
+const ATTACHMENTS_DIR = path.join(HELM_DIR, 'attachments');
 const WORKSPACES_FILE = path.join(HELM_DIR, 'workspaces.json');
 const SESSIONS_FILE = path.join(HELM_DIR, 'sessions.json');
 const HOOK_SETTINGS_FILE = path.join(HELM_DIR, 'hook-settings.json');
@@ -293,6 +294,16 @@ function loadPersistedSessions() {
 }
 loadPersistedSessions();
 
+// Attachments belong to a session — sweep dirs whose session no longer exists
+// (killed while the server was down, or cleaned sessions.json).
+try {
+  for (const d of fs.readdirSync(ATTACHMENTS_DIR, { withFileTypes: true })) {
+    if (d.isDirectory() && !sessions.has(d.name)) {
+      fs.rmSync(path.join(ATTACHMENTS_DIR, d.name), { recursive: true, force: true });
+    }
+  }
+} catch { /* no attachments yet */ }
+
 // Auto-revive (settings.autoRevive): respawn every dead session right at
 // server start instead of one revive click per pane. Panes send their real
 // size on attach, so the 80x24 default here is fine.
@@ -459,6 +470,10 @@ app.delete('/api/sessions/:id', (req, res) => {
   }
   for (const ws of session.sockets) ws.close(1000, 'session killed');
   sessions.delete(session.id);
+  // its uploaded attachments go with it
+  try {
+    fs.rmSync(path.join(ATTACHMENTS_DIR, session.id), { recursive: true, force: true });
+  } catch { /* none */ }
   dbg('kill', `${session.name} (${session.id.slice(0, 8)}) deleted (was ${session.status})`);
   persistSessions();
   res.json({ ok: true });
@@ -484,6 +499,45 @@ app.patch('/api/sessions/:id', (req, res) => {
   persistSessions();
   res.json(sessionInfo(session));
 });
+
+// ---- attachments: paste/drop a file in the browser → bytes land here → we
+// save them locally and type the file's PATH into the pane, exactly like
+// dropping a file onto a native terminal window. Claude reads it from disk.
+let attachSeq = 0;
+
+// keep a safe basename (+extension); never trust client-supplied paths
+function sanitizeFilename(name) {
+  const base = String(name || '').split(/[\\/]/).pop() || '';
+  const clean = base.replace(/[^\w. -]/g, '').replace(/^\.+/, '').trim();
+  return clean.slice(0, 80) || 'paste.png';
+}
+
+app.post('/api/sessions/:id/attach',
+  express.raw({ type: '*/*', limit: '25mb' }),
+  (req, res) => {
+    const session = sessions.get(req.params.id);
+    if (!session) return res.status(404).json({ error: 'no such session' });
+    if (session.status !== 'running' || !session.pty) {
+      return res.status(409).json({ error: 'session is not running' });
+    }
+    if (!Buffer.isBuffer(req.body) || req.body.length === 0) {
+      return res.status(400).json({ error: 'empty file' });
+    }
+    const name = sanitizeFilename(req.query.name);
+    const dir = path.join(ATTACHMENTS_DIR, session.id);
+    const file = path.join(dir, `${++attachSeq}-${name}`);
+    try {
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(file, req.body);
+    } catch (err) {
+      return res.status(500).json({ error: `failed to save: ${err.message}` });
+    }
+    // Type the path into the pane's input (quoted if it has spaces, trailing
+    // space, NO Enter — the user finishes their prompt and submits).
+    session.pty.write((/\s/.test(file) ? `"${file}"` : file) + ' ');
+    dbg('attach', `${session.name} (${session.id.slice(0, 8)}) ${name} (${req.body.length} bytes)`);
+    res.json({ ok: true, path: file });
+  });
 
 // Revive a session that is no longer running: 'dead' (PTY died with a previous
 // server process) or 'exited' (claude ended or crashed). Resumes the same

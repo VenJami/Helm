@@ -23,6 +23,10 @@ see their working at a glance instead of juggling terminal windows.
   (`claude --resume`) — or flip on auto-revive and they come back by themselves.
 - **Broadcast** — type one instruction into several panes at once
   ("commit your work, then summarize where you're at").
+- **Attach images & files** — paste a screenshot, drag-drop a file, or use the
+  paperclip button. Helm saves it locally and types its path into the pane —
+  the same mechanism as dropping a file on a native terminal — and Claude
+  reads it from disk.
 - **Multi-account** — run panes on different Claude subscriptions side by side
   via isolated profiles, no logout/login switching
   (see [docs/ACCOUNTS.md](docs/ACCOUNTS.md)).

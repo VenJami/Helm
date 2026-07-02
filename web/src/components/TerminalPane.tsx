@@ -7,6 +7,10 @@ import { SearchAddon } from '@xterm/addon-search';
 import '@xterm/xterm/css/xterm.css';
 import { api, wsUrl } from '../api';
 import { Modal } from './Modal';
+import {
+  IconChart, IconChevronDown, IconChevronUp, IconGrip, IconMaximize, IconMinimize, IconPaperclip,
+  IconSearch, IconX,
+} from './Icons';
 import type { SessionInfo, UsageInfo } from '../types';
 
 type Conn = 'connecting' | 'live' | 'disconnected' | 'exited' | 'dead';
@@ -58,12 +62,29 @@ export function TerminalPane({
   const [confirmKill, setConfirmKill] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchText, setSearchText] = useState('');
+  const [dropActive, setDropActive] = useState(false); // file dragged over the pane
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const searchRef = useRef<SearchAddon | null>(null);
   // Latest onToggleMax for the key handler (registered once per terminal life)
   const onToggleMaxRef = useRef(onToggleMax);
   onToggleMaxRef.current = onToggleMax;
   // Bumping this re-runs the connect effect (manual reconnect after a drop).
   const [connectNonce, setConnectNonce] = useState(0);
+
+  // Upload files to the server, which saves them locally and types each file's
+  // path into this pane — the same mechanism as dropping a file on a native
+  // terminal. Only uses session.id + refs, so the paste listener registered in
+  // the terminal-lifetime effect can safely capture one instance.
+  const uploadFiles = async (files: ArrayLike<File>) => {
+    for (const file of Array.from(files)) {
+      try {
+        await api.attachFile(session.id, file, file.name || 'paste.png');
+      } catch (err) {
+        termRef.current?.write(`\r\n\x1b[31m[attach failed: ${(err as Error).message}]\x1b[0m\r\n`);
+      }
+    }
+    termRef.current?.focus(); // keep typing the prompt around the path
+  };
 
   // Terminal lives for the lifetime of the pane; sockets may come and go.
   useEffect(() => {
@@ -73,7 +94,7 @@ export function TerminalPane({
       fontSize: 13,
       cursorBlink: true,
       scrollback: 5000,
-      theme: { background: '#14161a' },
+      theme: { background: '#0a0a0b' },
     });
     const fit = new FitAddon();
     term.loadAddon(fit);
@@ -101,6 +122,18 @@ export function TerminalPane({
     };
     const onMouseUp = () => copySelection();
     holder.addEventListener('mouseup', onMouseUp);
+    // Pasting an image (screenshot) attaches it; text pastes fall through to
+    // xterm untouched. Capture phase so xterm's own paste handler never runs
+    // for file pastes.
+    const onPaste = (e: ClipboardEvent) => {
+      const files = e.clipboardData?.files;
+      if (files && files.length > 0) {
+        e.preventDefault();
+        e.stopPropagation();
+        void uploadFiles(files);
+      }
+    };
+    holder.addEventListener('paste', onPaste, true);
     // Pane shortcuts intercepted before the PTY sees them:
     // Ctrl+Shift+C copy · Ctrl+Shift+F find · Ctrl+Shift+M maximize
     term.attachCustomKeyEventHandler((e) => {
@@ -147,6 +180,7 @@ export function TerminalPane({
       observer.disconnect();
       cancelAnimationFrame(raf);
       holder.removeEventListener('mouseup', onMouseUp);
+      holder.removeEventListener('paste', onPaste, true);
       inputSub.dispose();
       term.dispose();
       termRef.current = null;
@@ -301,7 +335,7 @@ export function TerminalPane({
             }}
             onDragEnd={onGripDragEnd}
           >
-            ⠿
+            <IconGrip size={13} />
           </span>
         )}
         <span className={`dot ${dotClass}`} />
@@ -338,27 +372,35 @@ export function TerminalPane({
           {label}
         </span>
         <button
-          className="btn btn-small btn-ghost"
+          className="ibtn"
+          disabled={conn !== 'live'}
+          onClick={() => fileInputRef.current?.click()}
+          title="Attach a file — or paste/drop one onto the pane"
+        >
+          <IconPaperclip size={14} />
+        </button>
+        <button
+          className="ibtn"
           onClick={() => (searchOpen ? closeSearch() : setSearchOpen(true))}
           title="Find in scrollback (Ctrl+Shift+F)"
         >
-          🔍
+          <IconSearch size={14} />
         </button>
         {session.hasTranscript && (
-          <button className="btn btn-small btn-ghost" onClick={toggleUsage} title="Token usage by model">
-            usage
+          <button className="ibtn" onClick={toggleUsage} title="Token usage by model">
+            <IconChart size={14} />
           </button>
         )}
         <button
-          className="btn btn-small btn-ghost"
+          className="ibtn"
           onClick={onToggleMax}
-          title={isMaximized ? 'Back to grid (Esc)' : 'Maximize this pane'}
+          title={isMaximized ? 'Back to grid (Esc)' : 'Maximize this pane (Ctrl+Shift+M)'}
         >
-          {isMaximized ? '🗗' : '🗖'}
+          {isMaximized ? <IconMinimize size={14} /> : <IconMaximize size={14} />}
         </button>
         {conn === 'disconnected' && (
           <button className="btn btn-small" onClick={() => setConnectNonce((n) => n + 1)}>
-            reconnect
+            Reconnect
           </button>
         )}
         {conn === 'exited' && (
@@ -370,7 +412,7 @@ export function TerminalPane({
               ? 'Start claude again and resume this conversation'
               : 'Start a fresh claude in this folder'}
           >
-            {reviving ? 'reviving…' : session.canResume ? 'resume' : 'restart'}
+            {reviving ? 'Reviving…' : session.canResume ? 'Resume' : 'Restart'}
           </button>
         )}
         <button
@@ -382,11 +424,33 @@ export function TerminalPane({
           }}
           title="Kill this session"
         >
-          {conn === 'exited' || conn === 'dead' ? 'close' : 'kill'}
+          {conn === 'exited' || conn === 'dead' ? 'Close' : 'Kill'}
         </button>
       </div>
-      <div className="pane-body">
+      <div
+        className="pane-body"
+        // Files dragged from the OS attach to this pane; the grip's
+        // reorder drag carries text/plain only, so it passes through here.
+        onDragOver={(e) => {
+          if (!e.dataTransfer.types.includes('Files')) return;
+          e.preventDefault();
+          e.dataTransfer.dropEffect = 'copy';
+          setDropActive(true);
+        }}
+        onDragLeave={(e) => {
+          if (e.currentTarget.contains(e.relatedTarget as Node)) return; // still inside
+          setDropActive(false);
+        }}
+        onDrop={(e) => {
+          setDropActive(false);
+          if (!e.dataTransfer.files.length) return;
+          e.preventDefault();
+          e.stopPropagation(); // a file drop is not a pane-reorder drop
+          void uploadFiles(e.dataTransfer.files);
+        }}
+      >
         <div className="pane-term" ref={holderRef} />
+        {dropActive && <div className="drop-overlay">Drop to attach</div>}
         {searchOpen && (
           <div className="search-bar">
             <input
@@ -407,21 +471,21 @@ export function TerminalPane({
               }}
             />
             <button
-              className="btn btn-small btn-ghost"
+              className="ibtn"
               title="Previous match (Shift+Enter)"
               onClick={() => searchRef.current?.findPrevious(searchText)}
             >
-              ↑
+              <IconChevronUp size={14} />
             </button>
             <button
-              className="btn btn-small btn-ghost"
+              className="ibtn"
               title="Next match (Enter)"
               onClick={() => searchRef.current?.findNext(searchText)}
             >
-              ↓
+              <IconChevronDown size={14} />
             </button>
-            <button className="btn btn-small btn-ghost" title="Close (Esc)" onClick={closeSearch}>
-              ✕
+            <button className="ibtn" title="Close (Esc)" onClick={closeSearch}>
+              <IconX size={14} />
             </button>
           </div>
         )}
@@ -478,6 +542,16 @@ export function TerminalPane({
           </div>
         )}
       </div>
+      <input
+        ref={fileInputRef}
+        type="file"
+        multiple
+        style={{ display: 'none' }}
+        onChange={(e) => {
+          if (e.target.files?.length) void uploadFiles(e.target.files);
+          e.target.value = ''; // allow re-picking the same file later
+        }}
+      />
       {confirmKill && (
         <Modal title={`Kill "${session.name}" mid-task?`} onClose={() => setConfirmKill(false)}>
           <p className="modal-desc">

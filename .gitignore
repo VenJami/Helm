@@ -5,6 +5,9 @@ web/dist/
 # local Claude Code settings (personal machine config)
 .claude/settings.local.json
 
+# local design references (third-party screenshots — not for the public repo)
+docs/context/
+
 # logs
 npm-debug.log*
 

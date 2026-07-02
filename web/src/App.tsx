@@ -4,6 +4,9 @@ import type { AccountUsage, LogEntry, Profile, SessionInfo, Workspace } from './
 import { Sidebar } from './components/Sidebar';
 import { TerminalPane } from './components/TerminalPane';
 import { Modal } from './components/Modal';
+import {
+  IconBell, IconBellOff, IconBug, IconChart, IconMegaphone, IconPlus, IconRefresh, IconTrash,
+} from './components/Icons';
 
 const NEW_PROFILE = '__new__';
 
@@ -374,14 +377,16 @@ export function App() {
                 ))}
                 <option value={NEW_PROFILE}>+ new profile…</option>
               </select>
-              <button className="btn" onClick={newPane}>New pane</button>
+              <button className="btn" onClick={newPane}>
+                <IconPlus size={13} /> New pane
+              </button>
               <button
-                className="btn"
+                className="btn btn-secondary"
                 onClick={openBroadcast}
                 disabled={!runningPanes.length}
                 title="Send one instruction to several panes at once"
               >
-                📣 Broadcast
+                <IconMegaphone size={13} /> Broadcast
               </button>
               {profileChoice && profileChoice !== NEW_PROFILE && (
                 <button
@@ -392,43 +397,44 @@ export function App() {
                   }}
                   title="Delete this profile (removes its stored login)"
                 >
-                  delete profile
+                  <IconTrash size={12} /> Delete profile
                 </button>
               )}
               {error && <span className="form-error">{error}</span>}
-              <button
-                className="btn btn-small notify-toggle"
-                style={{ marginLeft: 'auto' }}
-                onClick={openUsage}
-                title="Token usage per account — rolling windows from 1 h to 30 d, plus all time"
-              >
-                📊 usage
-              </button>
-              <button
-                className={`btn btn-small notify-toggle ${autoRevive ? 'on' : ''}`}
-                onClick={toggleAutoRevive}
-                title={autoRevive
-                  ? 'Auto-revive on: dead panes come back automatically when the server starts'
-                  : 'Auto-revive off — after a server restart, each dead pane needs a revive click'}
-              >
-                {autoRevive ? '♻️ auto-revive on' : '♻️ auto-revive off'}
-              </button>
-              <button
-                className={`btn btn-small notify-toggle ${debugOpen ? 'on' : ''}`}
-                onClick={() => setDebugOpen((o) => !o)}
-                title="Live server event log (spawns, attaches, hooks, errors)"
-              >
-                🐞 debug
-              </button>
-              <button
-                className={`btn btn-small notify-toggle ${notify ? 'on' : ''}`}
-                onClick={toggleNotify}
-                title={notify
-                  ? 'Alerts on: you get a desktop notification when a pane needs input or finishes (while this tab is unfocused)'
-                  : 'Alerts off — click to get desktop notifications when a pane needs input or finishes'}
-              >
-                {notify ? '🔔 alerts on' : '🔕 alerts off'}
-              </button>
+              <div className="toolbar-right">
+                <button
+                  className="tbtn"
+                  onClick={openUsage}
+                  title="Token usage per account — rolling windows from 1 h to 30 d, plus all time"
+                >
+                  <IconChart /> Usage
+                </button>
+                <button
+                  className={`tbtn ${autoRevive ? 'on' : ''}`}
+                  onClick={toggleAutoRevive}
+                  title={autoRevive
+                    ? 'Auto-revive on: dead panes come back automatically when the server starts'
+                    : 'Auto-revive off — after a server restart, each dead pane needs a revive click'}
+                >
+                  <IconRefresh /> Auto-revive
+                </button>
+                <button
+                  className={`tbtn ${debugOpen ? 'on' : ''}`}
+                  onClick={() => setDebugOpen((o) => !o)}
+                  title="Live server event log (spawns, attaches, hooks, errors)"
+                >
+                  <IconBug /> Debug
+                </button>
+                <button
+                  className={`tbtn ${notify ? 'on' : ''}`}
+                  onClick={toggleNotify}
+                  title={notify
+                    ? 'Alerts on: you get a desktop notification when a pane needs input or finishes (while this tab is unfocused)'
+                    : 'Alerts off — click to get desktop notifications when a pane needs input or finishes'}
+                >
+                  {notify ? <IconBell /> : <IconBellOff />} Alerts
+                </button>
+              </div>
             </div>
             {panes.length ? (
               <div className={maximizedId ? 'grid cols-1' : `grid cols-${Math.min(panes.length, 3)}`}>
@@ -479,8 +485,8 @@ export function App() {
                 {serverMeta &&
                   ` — up since ${new Date(serverMeta.startedAt).toLocaleTimeString()} · pid ${serverMeta.pid}`}
               </span>
-              <button className="btn btn-small btn-ghost" onClick={() => setLogs([])}>clear</button>
-              <button className="btn btn-small btn-ghost" onClick={() => setDebugOpen(false)}>close</button>
+              <button className="btn btn-small btn-ghost" onClick={() => setLogs([])}>Clear</button>
+              <button className="btn btn-small btn-ghost" onClick={() => setDebugOpen(false)}>Close</button>
             </div>
             <div className="debug-body">
               {logs.length === 0 && <div className="debug-line muted">waiting for events…</div>}

@@ -19,10 +19,16 @@ Ctrl+Shift+M maximize · kill-confirm for mid-task panes · PWA install manifest
 + icon · exited sessions persist as revivable · revive falls back to fresh
 when the transcript was never written (claude ≥2.1.198 team mode — GOTCHAS) ·
 usage-cache cap · macOS/Linux spawn + data dir (code support — untested
-off-Windows).
+off-Windows) · attachments: paste/drop/pick a file into a pane (saved locally,
+path typed into claude like native drag-drop; model-read verified).
 
 Also: GitHub release prep (2026-07-02) — MIT license, .gitignore/.gitattributes,
 CI build check, public README.
+
+UI redesign (2026-07-02) — Linear-style dark theme (near-black surfaces,
+hairline borders, amber accent; reference screenshot kept locally in
+docs/context/, gitignored) + inline SVG icon set replacing all emoji icons
+(web/src/components/Icons.tsx, no deps).
 
 ## Short-term backlog (rough priority order, owner-approved direction)
 1. Last un-themed UI bits: workspace-add as a modal, error toasts instead of
