@@ -23,6 +23,9 @@ interface Props {
   onToggleMax: () => void;
   onGripDragStart: () => void; // drag-to-reorder, handled by the grid
   onGripDragEnd: () => void;
+  // This pane receives Ctrl+V file-pastes even when its terminal isn't
+  // focused (the maximized pane, or the only pane in the workspace).
+  isPasteFallback: boolean;
 }
 
 const fmt = (n: number) =>
@@ -44,8 +47,24 @@ const PANE_COLORS = [
   '#ffd54f', '#4dd0e1', '#ff8a65', '#90a4ae', '#aed581',
 ];
 
+// Pasted screenshots surface as `files` in most Chromium builds but only as
+// `items` in some — read both so Ctrl+V never silently drops an image.
+const clipFiles = (e: ClipboardEvent): File[] => {
+  const out: File[] = e.clipboardData?.files ? Array.from(e.clipboardData.files) : [];
+  if (out.length === 0 && e.clipboardData?.items) {
+    for (const item of Array.from(e.clipboardData.items)) {
+      if (item.kind === 'file') {
+        const f = item.getAsFile();
+        if (f) out.push(f);
+      }
+    }
+  }
+  return out;
+};
+
 export function TerminalPane({
   session, onKilled, onChanged, isMaximized, onToggleMax, onGripDragStart, onGripDragEnd,
+  isPasteFallback,
 }: Props) {
   const holderRef = useRef<HTMLDivElement>(null);
   const wsRef = useRef<WebSocket | null>(null);
@@ -68,6 +87,8 @@ export function TerminalPane({
   // Latest onToggleMax for the key handler (registered once per terminal life)
   const onToggleMaxRef = useRef(onToggleMax);
   onToggleMaxRef.current = onToggleMax;
+  const isPasteFallbackRef = useRef(isPasteFallback);
+  isPasteFallbackRef.current = isPasteFallback;
   // Bumping this re-runs the connect effect (manual reconnect after a drop).
   const [connectNonce, setConnectNonce] = useState(0);
 
@@ -126,14 +147,28 @@ export function TerminalPane({
     // xterm untouched. Capture phase so xterm's own paste handler never runs
     // for file pastes.
     const onPaste = (e: ClipboardEvent) => {
-      const files = e.clipboardData?.files;
-      if (files && files.length > 0) {
+      const files = clipFiles(e);
+      if (files.length > 0) {
         e.preventDefault();
         e.stopPropagation();
         void uploadFiles(files);
       }
     };
     holder.addEventListener('paste', onPaste, true);
+    // Ctrl+V only reaches a terminal that has keyboard focus. So the
+    // maximized (or only) pane also catches file-pastes landing anywhere
+    // else on the page — except real text inputs (rename, modals).
+    const onDocPaste = (e: ClipboardEvent) => {
+      if (!isPasteFallbackRef.current) return;
+      const t = e.target as HTMLElement | null;
+      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.closest('.pane-term'))) return;
+      const files = clipFiles(e);
+      if (files.length === 0) return;
+      e.preventDefault();
+      e.stopPropagation();
+      void uploadFiles(files);
+    };
+    document.addEventListener('paste', onDocPaste, true);
     // Pane shortcuts intercepted before the PTY sees them:
     // Ctrl+Shift+C copy · Ctrl+Shift+F find · Ctrl+Shift+M maximize
     term.attachCustomKeyEventHandler((e) => {
@@ -181,6 +216,7 @@ export function TerminalPane({
       cancelAnimationFrame(raf);
       holder.removeEventListener('mouseup', onMouseUp);
       holder.removeEventListener('paste', onPaste, true);
+      document.removeEventListener('paste', onDocPaste, true);
       inputSub.dispose();
       term.dispose();
       termRef.current = null;

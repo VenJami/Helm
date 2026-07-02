@@ -464,6 +464,7 @@ export function App() {
                       onToggleMax={() => setMaximizedId((m) => (m === s.id ? null : s.id))}
                       onGripDragStart={() => setDragId(s.id)}
                       onGripDragEnd={() => { setDragId(null); setDragOverId(null); }}
+                      isPasteFallback={maximizedId === s.id || (!maximizedId && panes.length === 1)}
                     />
                   </div>
                 ))}
