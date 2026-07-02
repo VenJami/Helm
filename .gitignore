@@ -1,0 +1,13 @@
+# dependencies + build output
+node_modules/
+web/dist/
+
+# local Claude Code settings (personal machine config)
+.claude/settings.local.json
+
+# logs
+npm-debug.log*
+
+# OS cruft
+Thumbs.db
+.DS_Store

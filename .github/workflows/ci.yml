@@ -1,0 +1,29 @@
+# Minimal health check: the server files parse and the frontend
+# typechecks + builds. No test suite yet — Helm is verified end-to-end
+# against real claude panes (see docs/GOTCHAS.md "Testing pattern").
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Syntax-check server
+        run: node --check server/index.mjs && node --check server/hook-post.mjs
+      - name: Install frontend deps
+        working-directory: web
+        run: npm ci
+      - name: Typecheck frontend
+        working-directory: web
+        run: npx tsc --noEmit
+      - name: Build frontend
+        working-directory: web
+        run: npm run build
