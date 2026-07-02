@@ -28,6 +28,14 @@
 - **Frontend changes need `npm run build`** (or `watch`) — the server serves
   `web/dist` from disk per request, so a running server picks up new builds
   without restart; server-code changes DO need a restart.
+- **claude ≥2.1.198 "team" sessions may never write a transcript.** New
+  interactive sessions can start in team/agents mode: hooks still fire and
+  report a `transcript_path`, but no `projects\<cwd>\<id>.jsonl` is written —
+  ever, even on exit. Consequences: per-pane usage shows "no usage recorded",
+  the account roll-up undercounts new sessions, and `claude --resume <id>`
+  dies with "No conversation found". Helm degrades gracefully: `canResume`
+  checks the transcript actually exists, and revive falls back to a fresh
+  session when it doesn't (verified against a real pane 2026-07-02).
 - **Session persistence must be immediate for lifecycle changes**
   (create/delete/exit/revive call `persistSessions()` directly; only chatty
   hook updates use the debounced `schedulePersist()`). A hard-killed server

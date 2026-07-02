@@ -27,7 +27,9 @@ Browser (React + xterm.js grid) <--WS/REST--> Node server <--PTY--> claude.cmd
 - `PATCH /api/sessions/:id {name?, color?}` — pane identity (persisted).
 - `POST /api/sessions/:id/revive` — respawn a `dead` session; uses
   `claude --resume <claudeSessionId>` when hooks captured the id (same
-  conversation), else a fresh claude in the same workspace/profile.
+  conversation), else a fresh claude in the same workspace/profile. If the
+  recorded transcript was never written (claude team-mode sessions — see
+  GOTCHAS) it falls back to fresh instead of a doomed --resume.
 - `GET /api/sessions/:id/usage` — per-model tokens for that pane's transcript.
 - `GET /api/usage` — roll-up per account (default + each profile) from each
   account's whole transcript store; rolling windows 1 h / 5 h / 10 h / 24 h /
@@ -46,12 +48,14 @@ Browser (React + xterm.js grid) <--WS/REST--> Node server <--PTY--> claude.cmd
   (ring-buffer catch-up), `exit {code}`. Client→server: `input {data}`,
   `resize {cols, rows}`.
 
-## How panes are spawned (Windows specifics)
-`pty.spawn('claude.cmd', ['--settings', <hook-settings>, '-n', <paneName>,
+## How panes are spawned
+`pty.spawn(CLAUDE_CMD, ['--settings', <hook-settings>, '-n', <paneName>,
 ...extra], { cwd: workspace, env: {...process.env, CLAUDE_CONFIG_DIR?,
 HELM_SESSION_ID, HELM_HOOK_TOKEN, HELM_PORT} })`
-- Must be `claude.cmd` (node-pty on Windows can't spawn the `.ps1`). Needs
-  Node 22+ and `claude` on PATH.
+- `CLAUDE_CMD` = `claude.cmd` on Windows (node-pty can't spawn the `.ps1`),
+  plain `claude` elsewhere; override via the `HELM_CLAUDE_CMD` env var.
+  Needs Node 22+ and `claude` on PATH. macOS/Linux: code support only, not
+  yet tested on real hardware.
 - `-n <name>` = claude display name (shows in its /resume picker).
 - `extra` = `['/login']` when the profile finished onboarding but has no
   credentials → pane boots straight into the login screen. Fresh profiles are
@@ -74,7 +78,7 @@ the tab is focused. Tab title shows "(N waiting)".
 
 ## Data locations (all local-only, NEVER in the repo — repo syncs to OneDrive!)
 ```
-%LOCALAPPDATA%\Helm\
+%LOCALAPPDATA%\Helm\        (~/.helm on macOS/Linux)
   token, hook-token      auth tokens (persist across restarts; delete to rotate)
   workspaces.json        sidebar workspaces
   sessions.json          running sessions → revivable as 'dead' after restart

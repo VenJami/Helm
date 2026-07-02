@@ -31,7 +31,13 @@ const DIST_DIR = path.join(__dirname, '..', 'web', 'dist');
 const HOST = '127.0.0.1';
 const PORT = Number(process.env.PORT) || 7777;
 const RING_BUFFER_MAX = 200 * 1024; // ~200 KB of output kept per session for replay
-const HELM_DIR = path.join(process.env.LOCALAPPDATA || os.homedir(), 'Helm');
+const IS_WIN = process.platform === 'win32';
+// Windows must spawn the .cmd shim (node-pty can't run the .ps1); elsewhere
+// plain `claude` from PATH. HELM_CLAUDE_CMD overrides for unusual installs.
+const CLAUDE_CMD = process.env.HELM_CLAUDE_CMD || (IS_WIN ? 'claude.cmd' : 'claude');
+const HELM_DIR = IS_WIN
+  ? path.join(process.env.LOCALAPPDATA || os.homedir(), 'Helm')
+  : path.join(os.homedir(), '.helm');
 const ACCOUNTS_DIR = path.join(HELM_DIR, 'accounts');
 const WORKSPACES_FILE = path.join(HELM_DIR, 'workspaces.json');
 const SESSIONS_FILE = path.join(HELM_DIR, 'sessions.json');
@@ -154,7 +160,7 @@ function spawnPty(session, extraArgs, { cols, rows }) {
 
   // -n gives claude a display name too (shows up in its /resume picker)
   const nameArgs = session.name ? ['-n', session.name] : [];
-  const pty = spawn('claude.cmd', ['--settings', HOOK_SETTINGS_FILE, ...nameArgs, ...extraArgs], {
+  const pty = spawn(CLAUDE_CMD, ['--settings', HOOK_SETTINGS_FILE, ...nameArgs, ...extraArgs], {
     name: 'xterm-color',
     cwd: session.workspace,
     cols,
@@ -181,6 +187,7 @@ function spawnPty(session, extraArgs, { cols, rows }) {
     session.status = 'exited';
     session.exitCode = exitCode;
     session.activity = null;
+    session.activitySince = null;
     dbg('exit', `${session.name} (${session.id.slice(0, 8)}) exited code=${exitCode}`);
     persistSessions();
     // Small delay lets any final ConPTY output land in onData before we
@@ -223,6 +230,7 @@ function createSession({ workspace, profile, cols, rows }) {
     status: 'running',
     exitCode: null,
     activity: null,          // 'working' | 'waiting' | 'idle' (from hooks)
+    activitySince: null,     // when activity last changed — powers "working 7m"
     claudeSessionId: null,   // claude's internal session id (from hooks)
     transcriptPath: null,    // conversation JSONL (from hooks) — usage source
     createdAt: new Date().toISOString(),
@@ -239,6 +247,15 @@ function createSession({ workspace, profile, cols, rows }) {
 function reviveSession(session, { cols, rows }) {
   session.buffer = [];
   session.bufLen = 0;
+  // `claude --resume` reads the conversation's transcript JSONL. Some claude
+  // versions (≥2.1.198 team-mode sessions) report a transcript_path via hooks
+  // but never write the file — --resume would just die with "No conversation
+  // found". Detect that up front and fall back to a fresh session.
+  if (session.claudeSessionId && session.transcriptPath && !fs.existsSync(session.transcriptPath)) {
+    dbg('revive', `${session.name} (${session.id.slice(0, 8)}) transcript never written — cannot resume, starting fresh`);
+    session.claudeSessionId = null;
+    session.transcriptPath = null;
+  }
   const args = session.claudeSessionId ? ['--resume', session.claudeSessionId] : [];
   spawnPty(session, args, { cols, rows });
 }
@@ -267,6 +284,7 @@ function loadPersistedSessions() {
       status: 'dead', // its PTY died with the previous server process
       exitCode: null,
       activity: null,
+      activitySince: null,
       claudeSessionId: s.claudeSessionId ?? null,
       transcriptPath: s.transcriptPath ?? null,
       createdAt: s.createdAt ?? new Date().toISOString(),
@@ -296,8 +314,11 @@ let persistTimer = null;
 function persistSessions() {
   clearTimeout(persistTimer);
   persistTimer = null;
+  // running/dead sessions always survive a restart; exited ones only when a
+  // conversation id was captured — they reload as revivable 'dead' entries.
   const list = [...sessions.values()]
-    .filter((s) => s.status === 'running' || s.status === 'dead')
+    .filter((s) => s.status === 'running' || s.status === 'dead' ||
+      (s.status === 'exited' && s.claudeSessionId))
     .map((s) => ({
       id: s.id,
       name: s.name,
@@ -338,7 +359,11 @@ function sessionInfo(s) {
     status: s.status,
     exitCode: s.exitCode,
     activity: s.activity,
-    canResume: Boolean(s.claudeSessionId),
+    activitySince: s.activitySince,
+    // resumable = we have claude's session id AND its transcript actually
+    // exists on disk (team-mode claude can report a path it never writes)
+    canResume: Boolean(s.claudeSessionId &&
+      (!s.transcriptPath || fs.existsSync(s.transcriptPath))),
     hasTranscript: Boolean(s.transcriptPath),
     attached: s.sockets.size,
     createdAt: s.createdAt,
@@ -384,7 +409,12 @@ app.post('/api/hook', (req, res) => {
     Stop: 'idle',
     Notification: 'waiting',
   }[event.hook_event_name];
-  if (activity && session.status === 'running') session.activity = activity;
+  // Only a *change* resets the clock — repeated Notifications while waiting
+  // keep the original "waiting since".
+  if (activity && session.status === 'running' && session.activity !== activity) {
+    session.activity = activity;
+    session.activitySince = new Date().toISOString();
+  }
   schedulePersist();
   res.json({ ok: true });
 });
@@ -543,13 +573,18 @@ app.get('/api/logs', (req, res) => {
 // Per-file cache keyed by mtime+size; events keep timestamps so rolling
 // windows (5h ≈ subscription session window, 7d ≈ weekly cap) stay accurate.
 
-const fileUsageCache = new Map(); // file path → parsed
+const fileUsageCache = new Map(); // file path → parsed (insertion order ≈ recency)
+const FILE_USAGE_CACHE_MAX = 512; // bound memory — oldest-touched entries drop first
 
 function parseTranscriptFile(file) {
   let stat;
   try { stat = fs.statSync(file); } catch { return null; }
   const cached = fileUsageCache.get(file);
-  if (cached && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size) return cached;
+  if (cached && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size) {
+    fileUsageCache.delete(file); // re-insert to mark most-recently-used
+    fileUsageCache.set(file, cached);
+    return cached;
+  }
 
   // Streaming can log the same assistant message on several lines — dedupe by
   // message id so its usage counts once (last occurrence wins).
@@ -588,6 +623,9 @@ function parseTranscriptFile(file) {
   }
   const parsed = { mtimeMs: stat.mtimeMs, size: stat.size, models, events };
   fileUsageCache.set(file, parsed);
+  while (fileUsageCache.size > FILE_USAGE_CACHE_MAX) {
+    fileUsageCache.delete(fileUsageCache.keys().next().value);
+  }
   return parsed;
 }
 
@@ -786,12 +824,14 @@ const server = app.listen(PORT, HOST, () => {
 
 server.on('error', (err) => {
   if (err.code === 'EADDRINUSE') {
+    const killTip = IS_WIN
+      ? `  Get-NetTCPConnection -LocalPort ${PORT} -State Listen |\n` +
+        `    ForEach-Object { Stop-Process -Id $_.OwningProcess -Force }`
+      : `  lsof -ti :${PORT} | xargs kill`;
     console.error(
       `\nHelm is already running (something is listening on port ${PORT}).\n` +
       `Open http://${HOST}:${PORT} — or, to restart with new code, stop the old\n` +
-      `server first. PowerShell:\n` +
-      `  Get-NetTCPConnection -LocalPort ${PORT} -State Listen |\n` +
-      `    ForEach-Object { Stop-Process -Id $_.OwningProcess -Force }\n` +
+      `server first:\n${killTip}\n` +
       `(Live panes die with it but come back as revivable.)\n`,
     );
     process.exit(1);

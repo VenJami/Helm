@@ -3,8 +3,10 @@ import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { WebglAddon } from '@xterm/addon-webgl';
 import { WebLinksAddon } from '@xterm/addon-web-links';
+import { SearchAddon } from '@xterm/addon-search';
 import '@xterm/xterm/css/xterm.css';
 import { api, wsUrl } from '../api';
+import { Modal } from './Modal';
 import type { SessionInfo, UsageInfo } from '../types';
 
 type Conn = 'connecting' | 'live' | 'disconnected' | 'exited' | 'dead';
@@ -15,6 +17,8 @@ interface Props {
   onChanged: () => void; // parent re-fetches sessions (e.g. after revive)
   isMaximized: boolean;
   onToggleMax: () => void;
+  onGripDragStart: () => void; // drag-to-reorder, handled by the grid
+  onGripDragEnd: () => void;
 }
 
 const fmt = (n: number) =>
@@ -22,13 +26,23 @@ const fmt = (n: number) =>
 
 const shortModel = (m: string) => m.replace(/^claude-/, '');
 
+// " 7m" / " 1h05m" since the given ISO time; '' under a minute. Refreshes with
+// the 3 s session poll — minute granularity is all the badge needs.
+const elapsed = (iso: string) => {
+  const m = Math.floor((Date.now() - Date.parse(iso)) / 60000);
+  if (m < 1) return '';
+  return m < 60 ? ` ${m}m` : ` ${Math.floor(m / 60)}h${String(m % 60).padStart(2, '0')}m`;
+};
+
 // Keep in sync with PANE_COLORS in server/index.mjs
 const PANE_COLORS = [
   '#4fc3f7', '#81c784', '#ffb74d', '#f06292', '#ba68c8',
   '#ffd54f', '#4dd0e1', '#ff8a65', '#90a4ae', '#aed581',
 ];
 
-export function TerminalPane({ session, onKilled, onChanged, isMaximized, onToggleMax }: Props) {
+export function TerminalPane({
+  session, onKilled, onChanged, isMaximized, onToggleMax, onGripDragStart, onGripDragEnd,
+}: Props) {
   const holderRef = useRef<HTMLDivElement>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const termRef = useRef<Terminal | null>(null);
@@ -41,6 +55,13 @@ export function TerminalPane({ session, onKilled, onChanged, isMaximized, onTogg
   const [editName, setEditName] = useState<string | null>(null); // null = not editing
   const [colorOpen, setColorOpen] = useState(false);
   const [reviveError, setReviveError] = useState('');
+  const [confirmKill, setConfirmKill] = useState(false);
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [searchText, setSearchText] = useState('');
+  const searchRef = useRef<SearchAddon | null>(null);
+  // Latest onToggleMax for the key handler (registered once per terminal life)
+  const onToggleMaxRef = useRef(onToggleMax);
+  onToggleMaxRef.current = onToggleMax;
   // Bumping this re-runs the connect effect (manual reconnect after a drop).
   const [connectNonce, setConnectNonce] = useState(0);
 
@@ -56,6 +77,9 @@ export function TerminalPane({ session, onKilled, onChanged, isMaximized, onTogg
     });
     const fit = new FitAddon();
     term.loadAddon(fit);
+    const search = new SearchAddon();
+    term.loadAddon(search);
+    searchRef.current = search;
     // URLs in pane output (e.g. the OAuth sign-in link) become clickable
     term.loadAddon(new WebLinksAddon((_e, uri) => window.open(uri, '_blank')));
     term.open(holder);
@@ -77,10 +101,21 @@ export function TerminalPane({ session, onKilled, onChanged, isMaximized, onTogg
     };
     const onMouseUp = () => copySelection();
     holder.addEventListener('mouseup', onMouseUp);
+    // Pane shortcuts intercepted before the PTY sees them:
+    // Ctrl+Shift+C copy · Ctrl+Shift+F find · Ctrl+Shift+M maximize
     term.attachCustomKeyEventHandler((e) => {
-      if (e.type === 'keydown' && e.ctrlKey && e.shiftKey && e.code === 'KeyC') {
+      if (e.type !== 'keydown' || !e.ctrlKey || !e.shiftKey) return true;
+      if (e.code === 'KeyC') {
         copySelection();
         return false; // handled — don't send to the PTY
+      }
+      if (e.code === 'KeyF') {
+        setSearchOpen(true);
+        return false;
+      }
+      if (e.code === 'KeyM') {
+        onToggleMaxRef.current();
+        return false;
       }
       return true;
     });
@@ -115,6 +150,7 @@ export function TerminalPane({ session, onKilled, onChanged, isMaximized, onTogg
       inputSub.dispose();
       term.dispose();
       termRef.current = null;
+      searchRef.current = null;
     };
   }, [session.id]);
 
@@ -224,6 +260,12 @@ export function TerminalPane({ session, onKilled, onChanged, isMaximized, onTogg
     }
   };
 
+  const closeSearch = () => {
+    setSearchOpen(false);
+    setSearchText('');
+    termRef.current?.focus();
+  };
+
   const activity = conn === 'live' ? session.activity : null;
   const dotClass =
     conn === 'live'
@@ -231,9 +273,14 @@ export function TerminalPane({ session, onKilled, onChanged, isMaximized, onTogg
       : conn === 'exited' || conn === 'dead'
         ? 'dot-dead'
         : 'dot-idle';
+  // "working 7m" / "waiting 12m" — how long a pane has been busy or blocked
+  const since =
+    (activity === 'working' || activity === 'waiting') && session.activitySince
+      ? elapsed(session.activitySince)
+      : '';
   const label = {
     connecting: 'connecting…',
-    live: `${activity ?? 'live'}${session.profile ? ` · ${session.profile}` : ''}`,
+    live: `${activity ?? 'live'}${since}${session.profile ? ` · ${session.profile}` : ''}`,
     disconnected: 'disconnected',
     exited: `exited (${exitCode ?? session.exitCode})`,
     dead: 'dead — server restarted',
@@ -242,6 +289,21 @@ export function TerminalPane({ session, onKilled, onChanged, isMaximized, onTogg
   return (
     <div className="pane" style={{ borderTopColor: session.color }}>
       <div className="pane-header">
+        {!isMaximized && (
+          <span
+            className="pane-grip"
+            draggable
+            title="Drag onto another pane to reorder"
+            onDragStart={(e) => {
+              e.dataTransfer.effectAllowed = 'move';
+              e.dataTransfer.setData('text/plain', session.id);
+              onGripDragStart();
+            }}
+            onDragEnd={onGripDragEnd}
+          >
+            ⠿
+          </span>
+        )}
         <span className={`dot ${dotClass}`} />
         <button
           className="pane-swatch"
@@ -275,6 +337,13 @@ export function TerminalPane({ session, onKilled, onChanged, isMaximized, onTogg
         <span className="pane-title" title={session.workspace}>
           {label}
         </span>
+        <button
+          className="btn btn-small btn-ghost"
+          onClick={() => (searchOpen ? closeSearch() : setSearchOpen(true))}
+          title="Find in scrollback (Ctrl+Shift+F)"
+        >
+          🔍
+        </button>
         {session.hasTranscript && (
           <button className="btn btn-small btn-ghost" onClick={toggleUsage} title="Token usage by model">
             usage
@@ -304,12 +373,58 @@ export function TerminalPane({ session, onKilled, onChanged, isMaximized, onTogg
             {reviving ? 'reviving…' : session.canResume ? 'resume' : 'restart'}
           </button>
         )}
-        <button className="btn btn-small btn-danger" onClick={kill} title="Kill this session">
+        <button
+          className="btn btn-small btn-danger"
+          onClick={() => {
+            // Mid-task kills are the misclick that hurts — confirm those only
+            if (conn === 'live' && session.activity === 'working') setConfirmKill(true);
+            else void kill();
+          }}
+          title="Kill this session"
+        >
           {conn === 'exited' || conn === 'dead' ? 'close' : 'kill'}
         </button>
       </div>
       <div className="pane-body">
         <div className="pane-term" ref={holderRef} />
+        {searchOpen && (
+          <div className="search-bar">
+            <input
+              placeholder="find in scrollback"
+              value={searchText}
+              autoFocus
+              onChange={(e) => {
+                setSearchText(e.target.value);
+                searchRef.current?.findNext(e.target.value, { incremental: true });
+              }}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && e.shiftKey) searchRef.current?.findPrevious(searchText);
+                else if (e.key === 'Enter') searchRef.current?.findNext(searchText);
+                else if (e.key === 'Escape') {
+                  e.stopPropagation(); // Esc here closes search, not maximize
+                  closeSearch();
+                }
+              }}
+            />
+            <button
+              className="btn btn-small btn-ghost"
+              title="Previous match (Shift+Enter)"
+              onClick={() => searchRef.current?.findPrevious(searchText)}
+            >
+              ↑
+            </button>
+            <button
+              className="btn btn-small btn-ghost"
+              title="Next match (Enter)"
+              onClick={() => searchRef.current?.findNext(searchText)}
+            >
+              ↓
+            </button>
+            <button className="btn btn-small btn-ghost" title="Close (Esc)" onClick={closeSearch}>
+              ✕
+            </button>
+          </div>
+        )}
         {colorOpen && (
           <div className="color-panel">
             {PANE_COLORS.map((c) => (
@@ -363,6 +478,29 @@ export function TerminalPane({ session, onKilled, onChanged, isMaximized, onTogg
           </div>
         )}
       </div>
+      {confirmKill && (
+        <Modal title={`Kill "${session.name}" mid-task?`} onClose={() => setConfirmKill(false)}>
+          <p className="modal-desc">
+            This pane is still working
+            {session.activitySince && elapsed(session.activitySince)
+              ? ` (${elapsed(session.activitySince).trim()} in)`
+              : ''}
+            {' '}— killing stops the Claude process immediately and removes the pane.
+          </p>
+          <div className="modal-actions">
+            <button className="btn btn-ghost" onClick={() => setConfirmKill(false)}>Cancel</button>
+            <button
+              className="btn btn-danger"
+              onClick={() => {
+                setConfirmKill(false);
+                void kill();
+              }}
+            >
+              Kill pane
+            </button>
+          </div>
+        </Modal>
+      )}
     </div>
   );
 }

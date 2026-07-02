@@ -7,6 +7,7 @@ export interface SessionInfo {
   status: 'running' | 'exited' | 'dead'; // dead = PTY lost to a server restart
   exitCode: number | null;
   activity: 'working' | 'waiting' | 'idle' | null; // from Claude Code hooks
+  activitySince: string | null; // ISO — when activity last changed ("working 7m")
   canResume: boolean;    // claude session id captured → revive resumes it
   hasTranscript: boolean;
   attached: number;

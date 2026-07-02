@@ -29,7 +29,8 @@ notifications, all script-verified). Current backlog: see docs/ROADMAP.md.
 ## Tech Stack
 - **Backend:** Node 22 ESM · express · ws · node-pty (`server/index.mjs` is the
   whole server). **Frontend:** React 18 + TS + Vite · @xterm/xterm (+fit/webgl).
-- **No DB** — JSON files + tokens + account profiles in `%LOCALAPPDATA%\Helm\`.
+- **No DB** — JSON files + tokens + account profiles in `%LOCALAPPDATA%\Helm\`
+  (`~/.helm` on macOS/Linux).
 - **Panes ARE the product:** real `claude` CLI subscriptions via PTY — never a
   custom Anthropic-API agent loop.
 

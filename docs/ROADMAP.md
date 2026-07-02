@@ -12,27 +12,27 @@ persistence + revive (`claude --resume`) · usage per pane + per-account
 roll-up (rolling 1 h–30 d + all-time windows, per-model, cached) · desktop
 notifications + "(N waiting)" title · pane names/colors (random, editable) ·
 pane maximize · themed modals · node-pty kill-race crash guard · broadcast
-prompt to many panes · auto-revive toggle · 🐞 debug drawer (live server log).
+prompt to many panes · auto-revive toggle · 🐞 debug drawer (live server log) ·
+drag-to-reorder panes (⠿ grip, per-workspace order in localStorage) ·
+"working 7m" elapsed time on badges · find-in-scrollback (Ctrl+Shift+F) ·
+Ctrl+Shift+M maximize · kill-confirm for mid-task panes · PWA install manifest
++ icon · exited sessions persist as revivable · revive falls back to fresh
+when the transcript was never written (claude ≥2.1.198 team mode — GOTCHAS) ·
+usage-cache cap · macOS/Linux spawn + data dir (code support — untested
+off-Windows).
 
 Also: GitHub release prep (2026-07-02) — MIT license, .gitignore/.gitattributes,
 CI build check, public README.
 
 ## Short-term backlog (rough priority order, owner-approved direction)
-1. **Drag to reorder / resize panes** in the grid.
-2. Last un-themed UI bits: workspace-add as a modal, error toasts instead of
+1. Last un-themed UI bits: workspace-add as a modal, error toasts instead of
    inline red text.
-3. Font-size / theme settings.
+2. Font-size / theme settings.
+3. Drag-resize pane sizes (reorder is done; resize = grid column/row weights).
 
 ## Proposed by code review 2026-07-02 (not yet owner-prioritized)
-- macOS/Linux support (spawn `claude` not `claude.cmd`, portable data dir).
-- "working for 7 m" elapsed time on status badges (spot stuck agents).
-- PWA install manifest ("install as app" without Electron).
-- Ctrl+F scrollback search in panes (@xterm/addon-search).
-- Keyboard shortcuts (cycle panes, maximize, new pane).
+- Keyboard shortcut to cycle between panes.
 - Git branch + dirty indicator per workspace in the sidebar.
-- Confirm dialog before killing a pane that is actively working.
-- Persist resumable `exited` sessions across server restarts (today only
-  running/dead ones survive as revivable).
 
 ## Bigger ideas discussed with owner (not committed)
 - Remote access from phone/laptop via Tailscale (origin/token checks already

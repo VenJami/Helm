@@ -180,13 +180,45 @@ export function App() {
   };
 
   const selected = workspaces.find((w) => w.id === selectedId) ?? workspaces[0] ?? null;
-  const panes = useMemo(
-    () =>
-      sessions
-        .filter((s) => selected && s.workspace === selected.dir)
-        .sort((a, b) => a.createdAt.localeCompare(b.createdAt)),
-    [sessions, selected],
-  );
+
+  // Pane order per workspace — presentational, kept in localStorage.
+  // Unlisted panes (new ones) fall to the end in creation order.
+  const orderKey = selected ? `helm.paneorder.${selected.id}` : null;
+  const [paneOrder, setPaneOrder] = useState<string[]>([]);
+  useEffect(() => {
+    if (!orderKey) return;
+    try {
+      setPaneOrder(JSON.parse(localStorage.getItem(orderKey) || '[]'));
+    } catch {
+      setPaneOrder([]);
+    }
+  }, [orderKey]);
+
+  const panes = useMemo(() => {
+    const idx = new Map(paneOrder.map((id, i) => [id, i]));
+    return sessions
+      .filter((s) => selected && s.workspace === selected.dir)
+      .sort(
+        (a, b) =>
+          (idx.get(a.id) ?? Infinity) - (idx.get(b.id) ?? Infinity) ||
+          a.createdAt.localeCompare(b.createdAt),
+      );
+  }, [sessions, selected, paneOrder]);
+
+  // Drag-to-reorder: grip in a pane header → drop on another pane's slot
+  const [dragId, setDragId] = useState<string | null>(null);
+  const [dragOverId, setDragOverId] = useState<string | null>(null);
+  const dropPane = (targetId: string) => {
+    if (!dragId || !orderKey || dragId === targetId) return;
+    const ids = panes.map((p) => p.id);
+    const from = ids.indexOf(dragId);
+    const to = ids.indexOf(targetId);
+    if (from === -1 || to === -1) return;
+    ids.splice(from, 1);
+    ids.splice(to, 0, dragId); // dragged pane takes the target's slot
+    setPaneOrder(ids);
+    localStorage.setItem(orderKey, JSON.stringify(ids));
+  };
 
   // Every running pane across all workspaces — broadcast can target any of them
   const wsName = useCallback(
@@ -403,8 +435,20 @@ export function App() {
                 {panes.map((s) => (
                   <div
                     key={s.id}
-                    className="pane-slot"
+                    className={`pane-slot ${dragOverId === s.id && dragId && dragId !== s.id ? 'drag-over' : ''}`}
                     style={maximizedId && maximizedId !== s.id ? { display: 'none' } : undefined}
+                    onDragOver={(e) => {
+                      if (!dragId) return;
+                      e.preventDefault();
+                      setDragOverId(s.id);
+                    }}
+                    onDragLeave={() => setDragOverId((d) => (d === s.id ? null : d))}
+                    onDrop={(e) => {
+                      e.preventDefault();
+                      dropPane(s.id);
+                      setDragOverId(null);
+                      setDragId(null);
+                    }}
                   >
                     <TerminalPane
                       session={s}
@@ -412,6 +456,8 @@ export function App() {
                       onChanged={refresh}
                       isMaximized={maximizedId === s.id}
                       onToggleMax={() => setMaximizedId((m) => (m === s.id ? null : s.id))}
+                      onGripDragStart={() => setDragId(s.id)}
+                      onGripDragEnd={() => { setDragId(null); setDragOverId(null); }}
                     />
                   </div>
                 ))}

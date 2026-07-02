@@ -13,9 +13,10 @@ see their working at a glance instead of juggling terminal windows.
 - **Live terminal grid** — every pane is a real Claude Code CLI session
   (node-pty + xterm.js), grouped by workspace (project folder). No API keys and
   no custom agent loop: these are your normal `claude` subscription sessions.
-- **Status at a glance** — working / waiting-for-input / idle badges driven by
-  Claude Code hooks (not output scraping), desktop notifications when a pane
-  needs you, and a "(N waiting)" tab title.
+- **Status at a glance** — working / waiting-for-input / idle badges with
+  elapsed time (spot a stuck agent at "working 45m"), driven by Claude Code
+  hooks (not output scraping), desktop notifications when a pane needs you,
+  and a "(N waiting)" tab title.
 - **Sessions survive refreshes** — a browser reload never kills a session;
   panes repaint instantly from a replay buffer. After a *server* restart, panes
   come back as revivable and one click resumes the same conversation
@@ -28,13 +29,17 @@ see their working at a glance instead of juggling terminal windows.
 - **Usage tracking** — tokens per pane and a per-account roll-up (rolling
   windows from 1 h to 30 d plus all time, broken down by model).
 - **Pane identity & comfort** — names and accent colors (random, editable),
-  maximize a pane (Esc restores the grid), copy-on-select, clickable links,
-  and a live server debug drawer.
+  drag panes to reorder the grid, maximize (Ctrl+Shift+M; Esc restores),
+  find-in-scrollback (Ctrl+Shift+F), copy-on-select, clickable links, and a
+  live server debug drawer.
+- **Install as an app** — a PWA manifest lets Chrome/Edge install Helm as a
+  desktop app, no Electron involved.
 
 ## Requirements
 
-- **Windows** (for now — the PTY spawn and data paths are Windows-specific;
-  macOS/Linux support is on the radar, contributions welcome)
+- **Windows** is the tested platform. macOS/Linux are supported in code
+  (plain `claude` spawn, `~/.helm` data dir) but not yet tested on real
+  hardware — reports and fixes welcome.
 - **Node.js 22+**
 - **[Claude Code](https://claude.com/claude-code)** installed and logged in —
   `claude` must work in a terminal on its own
