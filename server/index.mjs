@@ -397,6 +397,45 @@ function broadcast(session, msg) {
   }
 }
 
+// A short, human-readable title for a pane derived from its conversation: the
+// first real user prompt in the transcript. Gives the command palette / search
+// something meaningful to match instead of the random star-name. The opening
+// prompt is immutable once written, so we cache it and never re-read after it's
+// found; before then we stat-gate re-reads of the growing file.
+const summaryCache = new Map(); // transcript path → {mtimeMs, size, summary}
+function firstPromptSummary(file) {
+  if (!file) return null;
+  let stat;
+  try { stat = fs.statSync(file); } catch { return null; }
+  const c = summaryCache.get(file);
+  if (c && c.summary) return c.summary;                       // first prompt never changes
+  if (c && c.mtimeMs === stat.mtimeMs && c.size === stat.size) return null; // unchanged, still none
+  let text;
+  try { text = fs.readFileSync(file, 'utf8'); } catch { return null; }
+  let summary = null;
+  for (const line of text.split('\n')) {
+    if (!line) continue;
+    let e;
+    try { e = JSON.parse(line); } catch { continue; }
+    if (e?.type !== 'user' || e.isMeta) continue;
+    const content = e.message?.content;
+    let str = typeof content === 'string'
+      ? content
+      : Array.isArray(content)
+        ? content.filter((b) => b?.type === 'text' && typeof b.text === 'string').map((b) => b.text).join(' ')
+        : '';
+    str = str.replace(/\s+/g, ' ').trim();
+    // Skip tool results (no text), slash-command wrappers, and system-reminder
+    // injections — we want the human's actual opening ask.
+    if (!str || str.startsWith('<command-') || str.startsWith('<local-command') ||
+        str.startsWith('<system-reminder') || str.startsWith('Caveat:')) continue;
+    summary = str.slice(0, 100);
+    break;
+  }
+  summaryCache.set(file, { mtimeMs: stat.mtimeMs, size: stat.size, summary });
+  return summary;
+}
+
 function sessionInfo(s) {
   return {
     id: s.id,
@@ -409,6 +448,8 @@ function sessionInfo(s) {
     activity: s.activity,
     activitySince: s.activitySince,
     activityNote: s.activityNote ?? null,
+    // auto-title from the conversation's opening prompt (search/palette label)
+    summary: firstPromptSummary(s.transcriptPath),
     // resumable = we have claude's session id AND its transcript actually
     // exists on disk (team-mode claude can report a path it never writes)
     canResume: Boolean(s.claudeSessionId &&

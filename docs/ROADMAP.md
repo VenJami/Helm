@@ -163,11 +163,37 @@ real server on an OS-assigned port + isolated data dir against a keep-alive
 lifecycle, activityNote set/clear, git status, profile-delete pin cleanup); a
 windows-latest CI job runs it (node-pty native, matches prod).
 
+Error toasts (2026-07-04) — themed bottom-right toast stack
+(`components/Toaster.tsx`) with a module-level `toast.error/success/info` event
+bus (like `helm:focus-pane`, no prop-drilling); above modals so an action's
+failure shows even with a dialog open. Replaced the toolbar's jammed inline red
+text and pane revive-error overlay; in-modal field validation stays inline.
+
+Command palette + font size + persisted layout + build hygiene (2026-07-04) —
+Ctrl/Cmd+K opens a quick switcher (`components/CommandPalette.tsx`): filters
+panes (by pane + workspace name) and workspaces across everything, arrow/enter
+nav, reuses `focusPane` to jump (selects workspace, un-minimizes, scrolls +
+pulses). Workspace-add is now a themed modal (dir/name/pinned-profile/port),
+replacing the inline sidebar form. Global terminal font size (toolbar A−/A+,
+`helm.fontSize`, 11–20 px) applied live to every xterm with a refit + WS resize.
+Maximize/minimize layout persists across reloads (`helm.maximized` /
+`helm.minimized`, stale ids pruned once sessions load). Bundle code-split via
+Vite `manualChunks` (xterm/react/motion/gsap split out; main chunk 835 KB → ~69
+KB, size warning gone). Smoke test grown to 8 (workspace dir-change, port
+set/clear, console shape/toggle).
+
+Content-based pane titles + search discoverability (2026-07-04) — each pane gets
+an auto-title from its conversation's first real user prompt (server
+`firstPromptSummary` off the transcript, skips meta/command/system lines, cached;
+`summary` on `sessionInfo`), shown in the pane header and matched by Ctrl+K
+search so you can find a pane by what it's doing, not just its star-name. A
+visible toolbar search pill (🔍 "Search panes…" + ⌘/Ctrl K hint) makes the
+palette discoverable instead of a hidden shortcut. Smoke test covers the
+summary derivation (now 9 tests).
+
 ## Short-term backlog (rough priority order, owner-approved direction)
-1. Last un-themed UI bits: workspace-add as a modal, error toasts instead of
-   inline red text.
-2. Font-size / theme settings.
-3. Drag-resize pane sizes (reorder is done; resize = grid column/row weights).
+1. Theme settings (light theme / accent choice) — font-size is done.
+2. Drag-resize pane sizes (reorder is done; resize = grid column/row weights).
 
 ## Bigger ideas discussed with owner (not committed)
 - Remote access from phone/laptop via Tailscale (origin/token checks already

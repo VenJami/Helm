@@ -289,15 +289,6 @@ html, body {
   justify-content: flex-start;
 }
 
-.ws-add-form {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  padding: 10px 8px;
-  border-top: 1px solid var(--border);
-}
-.ws-add-actions { display: flex; gap: 6px; }
-
 /* ------------------------------------------------------------------ main */
 
 .main {
@@ -323,6 +314,38 @@ html, body {
   font-weight: 500;
   color: var(--muted);
   user-select: none;
+}
+
+/* Search pill in the toolbar — looks like an input, opens the Ctrl+K palette.
+   Makes the command palette discoverable instead of a hidden shortcut. */
+.omni-search {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 28px;
+  padding: 0 8px 0 9px;
+  min-width: 200px;
+  background: var(--bg);
+  border: 1px solid var(--border-strong);
+  border-radius: 7px;
+  color: var(--faint);
+  cursor: text;
+  font: inherit;
+}
+.omni-search:hover { border-color: var(--muted); color: var(--muted); }
+.omni-search svg { flex-shrink: 0; color: var(--faint); }
+.omni-search-text { flex: 1; text-align: left; font-size: 12.5px; }
+.omni-kbd {
+  flex-shrink: 0;
+  padding: 1px 6px;
+  border: 1px solid var(--border-strong);
+  border-radius: 5px;
+  background: var(--raised);
+  color: var(--muted);
+  font-size: 10.5px;
+  font-family: inherit;
+  line-height: 1.5;
+  white-space: nowrap;
 }
 
 .main-empty {
@@ -441,12 +464,24 @@ html, body {
   font-size: 12px;
 }
 
+/* Auto-title from the pane's first prompt — what this agent is working on. */
+.pane-summary {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 55%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text);
+  opacity: 0.82;
+}
 .pane-title {
   flex: 1;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   color: var(--muted);
+  font-size: 11px;
 }
 
 .pane-body {
@@ -653,6 +688,26 @@ html, body {
   align-items: center;
   gap: 2px;
   margin-left: auto;
+}
+
+/* Terminal font-size stepper: A− [13px] A+ */
+.font-stepper {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  margin-right: 4px;
+  padding: 1px 4px;
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+}
+.font-stepper .ibtn:disabled { opacity: 0.4; cursor: default; }
+.font-stepper-val {
+  min-width: 30px;
+  text-align: center;
+  font-size: 11.5px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  user-select: none;
 }
 
 input, select {
@@ -1070,6 +1125,16 @@ input::placeholder { color: var(--faint); }
   margin-bottom: 8px;
 }
 
+/* Field label above a modal input (add-workspace form) */
+.field-label {
+  display: block;
+  margin: 4px 0 4px;
+  font-size: 11.5px;
+  font-weight: 500;
+  color: var(--muted);
+}
+.field-hint { color: var(--faint); font-weight: 400; }
+
 /* manage profiles modal: list with rename/delete actions */
 .manage-list {
   display: flex;
@@ -1223,6 +1288,124 @@ input::placeholder { color: var(--faint); }
 .tag-hook { color: #4fc3f7; }
 .tag-error { color: #f0655a; }
 .tag-server { color: #ffd54f; }
+
+/* ---------------------------------------------------- command palette (⌘K) */
+/* Sits above modals (100) and below toasts (200) so an error still shows. */
+.cmdk-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 150;
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  padding-top: 12vh;
+  background: rgba(0, 0, 0, 0.5);
+  backdrop-filter: blur(3px);
+  animation: fade-in 120ms ease-out;
+}
+
+.cmdk-card {
+  width: min(560px, calc(100vw - 32px));
+  max-height: 66vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--panel);
+  border: 1px solid var(--border-strong);
+  border-radius: 12px;
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.7);
+  overflow: hidden;
+  animation: pop-in 140ms ease-out;
+}
+
+.cmdk-search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border);
+}
+.cmdk-search > svg { color: var(--faint); flex-shrink: 0; }
+.cmdk-input {
+  flex: 1;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  padding: 2px 0;
+  font-size: 14px;
+  color: var(--text);
+}
+.cmdk-input:focus { outline: none; border: 0; }
+
+.cmdk-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 6px;
+}
+.cmdk-empty { padding: 18px; text-align: center; color: var(--muted); }
+
+.cmdk-section {
+  padding: 8px 8px 4px;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--faint);
+  user-select: none;
+}
+
+.cmdk-item {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  padding: 7px 9px;
+  background: none;
+  border: 0;
+  border-radius: 7px;
+  color: var(--text);
+  font-family: inherit;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+.cmdk-item.active { background: var(--raised); }
+.cmdk-glyph { display: inline-flex; color: var(--faint); flex-shrink: 0; }
+.cmdk-name {
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex-shrink: 0;
+  max-width: 28%;
+}
+/* Auto-title (first prompt) — the descriptive part, takes the free space. */
+.cmdk-summary {
+  flex: 1;
+  min-width: 0;
+  color: var(--text);
+  font-size: 12.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cmdk-summary em { color: var(--faint); font-style: normal; }
+.cmdk-where {
+  color: var(--muted);
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 0 1 auto;
+  max-width: 30%;
+  min-width: 0;
+}
+.cmdk-status {
+  margin-left: auto;
+  flex-shrink: 0;
+  color: var(--faint);
+  font-size: 11px;
+  text-transform: lowercase;
+}
 
 /* ------------------------------------------------------------ responsive */
 

@@ -108,11 +108,21 @@ A `Notification` event also carries its `message` into `session.activityNote`
 (cleared when the pane starts working or goes idle), surfaced on `sessionInfo`
 so the badge and desktop alert can say *why* a pane is blocked.
 
+`sessionInfo` also exposes `summary` — an auto-title derived server-side from the
+conversation's first real user prompt (`firstPromptSummary` reads the transcript,
+skips meta/command/system-reminder lines, truncates to 100 chars; cached, and
+never re-read once found since the opening prompt is immutable). Shown in each
+pane header and used by the Ctrl+K command palette so search matches on what a
+pane is actually working on, not just its random star-name.
+
 Frontend notifications are edge-triggered off the 3 s session poll: flip to
 `waiting` → the hook's message (or "needs your input"); `working→idle` →
 "finished". Suppressed while the tab is focused. Tab title shows "(N waiting)";
 a toolbar "N waiting" pill jumps to the next blocked pane (rotates on repeat),
-and Ctrl+Shift+←/→ cycles focus through a workspace's visible panes.
+and Ctrl+Shift+←/→ cycles focus through a workspace's visible panes. Ctrl/Cmd+K
+opens a command palette (`components/CommandPalette.tsx`) to filter and jump to
+any pane or workspace. Transient action errors surface as toasts
+(`components/Toaster.tsx`, `toast.error(...)`), not inline red text.
 
 ## Data locations (all local-only, NEVER in the repo — repo syncs to OneDrive!)
 ```

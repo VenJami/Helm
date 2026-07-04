@@ -8,9 +8,10 @@ import { Modal } from './components/Modal';
 import { ProfileSelect } from './components/ProfileSelect';
 import { TargetCursor } from './components/TargetCursor';
 import { Toaster, toast } from './components/Toaster';
-import { IconBug, IconPanelLeftOpen, IconPencil, IconPlus, IconTrash } from './components/Icons';
+import { CommandPalette } from './components/CommandPalette';
+import { IconBug, IconMinus, IconPanelLeftOpen, IconPencil, IconPlus, IconTrash } from './components/Icons';
 import {
-  AnimateIcon, IconBellOff, IconBellRing, IconChart, IconNfc, IconRefreshCcw, IconTerminal,
+  AnimateIcon, IconBellOff, IconBellRing, IconChart, IconNfc, IconRefreshCcw, IconSearch, IconTerminal,
 } from './components/AnimatedIcons';
 
 type Dialog =
@@ -20,7 +21,11 @@ type Dialog =
   | { kind: 'delete-profile'; profile: Profile }
   | { kind: 'usage' }
   | { kind: 'broadcast' }
+  | { kind: 'add-workspace' }
   | null;
+
+// ⌘K on Mac, Ctrl K elsewhere — for the command-palette hint.
+const IS_MAC = typeof navigator !== 'undefined' && /Mac/i.test(navigator.platform);
 
 const fmt = (n: number) =>
   n >= 1e6 ? (n / 1e6).toFixed(1) + 'M' : n >= 1e3 ? (n / 1e3).toFixed(1) + 'k' : String(n);
@@ -78,8 +83,57 @@ export function App() {
   const [globalUsage, setGlobalUsage] = useState<AccountUsage[] | null>(null);
   // 5h ≈ the subscription session window — the slice that matters most
   const [usageWindow, setUsageWindow] = useState('d7');
-  const [maximizedId, setMaximizedId] = useState<string | null>(null);
-  const [minimizedIds, setMinimizedIds] = useState<Set<string>>(new Set());
+  // Maximize/minimize layout survives a reload — restored from localStorage,
+  // pruned against the live session list once it loads (stale ids dropped).
+  const [maximizedId, setMaximizedId] = useState<string | null>(
+    () => localStorage.getItem('helm.maximized'),
+  );
+  const [minimizedIds, setMinimizedIds] = useState<Set<string>>(() => {
+    try {
+      return new Set(JSON.parse(localStorage.getItem('helm.minimized') || '[]') as string[]);
+    } catch {
+      return new Set();
+    }
+  });
+  useEffect(() => {
+    localStorage.setItem('helm.minimized', JSON.stringify([...minimizedIds]));
+  }, [minimizedIds]);
+  useEffect(() => {
+    if (maximizedId) localStorage.setItem('helm.maximized', maximizedId);
+    else localStorage.removeItem('helm.maximized');
+  }, [maximizedId]);
+  // Drop restored ids that point at sessions which no longer exist (killed while
+  // Helm was closed). Guarded on a loaded list so pre-fetch emptiness is ignored.
+  useEffect(() => {
+    if (!sessions.length) return;
+    const live = new Set(sessions.map((s) => s.id));
+    setMinimizedIds((prev) => {
+      let changed = false;
+      const next = new Set<string>();
+      for (const id of prev) (live.has(id) ? next.add(id) : (changed = true));
+      return changed ? next : prev;
+    });
+    setMaximizedId((prev) => (prev && !live.has(prev) ? null : prev));
+  }, [sessions]);
+  // Global terminal font size (px), shared by every pane and user-adjustable.
+  const [fontSize, setFontSize] = useState<number>(() => {
+    const n = Number(localStorage.getItem('helm.fontSize'));
+    return Number.isFinite(n) && n >= 11 && n <= 20 ? n : 13;
+  });
+  const changeFont = (delta: number) =>
+    setFontSize((f) => {
+      const next = Math.min(20, Math.max(11, f + delta));
+      localStorage.setItem('helm.fontSize', String(next));
+      return next;
+    });
+  // Ctrl+K command palette / quick pane switcher.
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  // Add-workspace modal fields.
+  const [wsDir, setWsDir] = useState('');
+  const [wsName2, setWsName2] = useState('');
+  const [wsProfile, setWsProfile] = useState('');
+  const [wsPort, setWsPort] = useState('');
+  const [wsAddError, setWsAddError] = useState('');
   // Pane that briefly pulses after a jump/cycle so the eye can find it.
   const [flashId, setFlashId] = useState<string | null>(null);
   // Which pane's terminal last held focus — the anchor for Ctrl+Shift+←/→ cycling.
@@ -171,6 +225,18 @@ export function App() {
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [maximizedId]);
+
+  // Ctrl+K / Cmd+K toggles the command palette (quick pane/workspace switcher).
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && (e.key === 'k' || e.key === 'K')) {
+        e.preventDefault();
+        setPaletteOpen((o) => !o);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
 
   // Previous activity per session, for edge-triggered notifications.
   // undefined entry = first sighting (never notify on first sighting).
@@ -324,6 +390,9 @@ export function App() {
     () => panes.filter((p) => !minimizedIds.has(p.id)),
     [panes, minimizedIds],
   );
+  // A restored maximizedId can point at a pane in another workspace; only honor
+  // it for display when that pane is actually on screen, else the grid blanks.
+  const viewMax = maximizedId && panes.some((p) => p.id === maximizedId) ? maximizedId : null;
 
   // Drag-to-reorder: grip in a pane header → drop on another pane's slot
   const [dragId, setDragId] = useState<string | null>(null);
@@ -392,10 +461,32 @@ export function App() {
     localStorage.setItem('helm.workspaceId', id);
   };
 
-  const addWorkspace = async (name: string, dir: string) => {
-    const ws = await api.addWorkspace(name, dir);
-    setWorkspaces((prev) => [...prev, ws]);
-    select(ws.id);
+  const submitAddWorkspace = async () => {
+    const dir = wsDir.trim();
+    if (!dir) {
+      setWsAddError('A directory path is required.');
+      return;
+    }
+    let port: number | null = null;
+    if (wsPort.trim()) {
+      const p = Number(wsPort);
+      if (!Number.isInteger(p) || p < 1 || p > 65535) {
+        setWsAddError('Port must be a whole number between 1 and 65535.');
+        return;
+      }
+      port = p;
+    }
+    const name = wsName2.trim() || dir.split(/[\\/]/).filter(Boolean).pop() || dir;
+    try {
+      const created = await api.addWorkspace(name, dir, wsProfile || undefined);
+      // Port isn't part of the create payload — set it in a follow-up patch.
+      const ws = port !== null ? await api.updateWorkspace(created.id, { port }) : created;
+      setWorkspaces((prev) => [...prev, ws]);
+      select(ws.id);
+      closeDialog();
+    } catch (err) {
+      setWsAddError((err as Error).message);
+    }
   };
 
   const renameWorkspace = async (id: string, name: string) => {
@@ -487,6 +578,16 @@ export function App() {
     flashTimer.current = setTimeout(() => setFlashId((f) => (f === id ? null : f)), 1600);
   };
 
+  // Command-palette jump: switch to the pane's workspace, pull it out of the
+  // tray/maximize, and focus it. Reuses the same path as the "N waiting" hop.
+  const jumpToPane = (s: SessionInfo) => {
+    const ws = workspaces.find((w) => w.dir === s.workspace);
+    if (ws && ws.id !== selected?.id) select(ws.id);
+    setMaximizedId((m) => (m && m !== s.id ? null : m));
+    restorePane(s.id);
+    focusPane(s.id);
+  };
+
   // Click "N waiting" → hop to the next pane blocked on you, across workspaces,
   // rotating through them on repeated clicks.
   const waitingRotor = useRef(0);
@@ -540,6 +641,11 @@ export function App() {
     setDraftName('');
     setDraftError('');
     setBcError('');
+    setWsDir('');
+    setWsName2('');
+    setWsProfile('');
+    setWsPort('');
+    setWsAddError('');
   };
 
   const confirmDeleteProfile = async (name: string) => {
@@ -607,7 +713,7 @@ export function App() {
           defaultEmail={defaultEmail}
           profiles={profiles}
           onSelect={select}
-          onAdd={addWorkspace}
+          onAddClick={() => setDialog({ kind: 'add-workspace' })}
           onRename={renameWorkspace}
           onChangeDir={changeWorkspaceDir}
           onSetPort={setWorkspacePort}
@@ -624,6 +730,17 @@ export function App() {
                   <IconPanelLeftOpen />
                 </button>
               )}
+              <AnimateIcon asChild>
+                <button
+                  className="omni-search"
+                  onClick={() => setPaletteOpen(true)}
+                  title="Search & jump to any pane or workspace"
+                >
+                  <IconSearch size={13} />
+                  <span className="omni-search-text">Search panes…</span>
+                  <kbd className="omni-kbd">{IS_MAC ? '⌘' : 'Ctrl'} K</kbd>
+                </button>
+              </AnimateIcon>
               <span className="main-label">Profile</span>
               <ProfileSelect
                 profiles={profiles}
@@ -648,6 +765,27 @@ export function App() {
                 </button>
               </AnimateIcon>
               <div className="toolbar-right">
+                <div className="font-stepper" title="Terminal font size">
+                  <button
+                    className="ibtn"
+                    onClick={() => changeFont(-1)}
+                    disabled={fontSize <= 11}
+                    title="Smaller terminal text"
+                    aria-label="Smaller terminal text"
+                  >
+                    <IconMinus size={14} />
+                  </button>
+                  <span className="font-stepper-val">{fontSize}px</span>
+                  <button
+                    className="ibtn"
+                    onClick={() => changeFont(1)}
+                    disabled={fontSize >= 20}
+                    title="Larger terminal text"
+                    aria-label="Larger terminal text"
+                  >
+                    <IconPlus size={14} />
+                  </button>
+                </div>
                 {waiting > 0 && (
                   <button
                     className="tbtn waiting-jump"
@@ -733,7 +871,7 @@ export function App() {
               </div>
             )}
             {panes.length ? (
-              <div className={maximizedId ? 'grid cols-1' : `grid cols-${Math.min(Math.max(shownPanes.length, 1), 3)}`}>
+              <div className={viewMax ? 'grid cols-1' : `grid cols-${Math.min(Math.max(shownPanes.length, 1), 3)}`}>
                 {panes.map((s) => (
                   <div
                     key={s.id}
@@ -741,7 +879,7 @@ export function App() {
                     className={`pane-slot ${dragOverId === s.id && dragId && dragId !== s.id ? 'drag-over' : ''}${flashId === s.id ? ' pane-flash' : ''}`}
                     onFocusCapture={() => { activePaneRef.current = s.id; }}
                     style={
-                      (maximizedId && maximizedId !== s.id) || (!maximizedId && minimizedIds.has(s.id))
+                      (viewMax && viewMax !== s.id) || (!viewMax && minimizedIds.has(s.id))
                         ? { display: 'none' }
                         : undefined
                     }
@@ -762,7 +900,7 @@ export function App() {
                       session={s}
                       onKilled={onKilled}
                       onChanged={refresh}
-                      isMaximized={maximizedId === s.id}
+                      isMaximized={viewMax === s.id}
                       onToggleMax={() => {
                         restorePane(s.id);
                         setMaximizedId((m) => (m === s.id ? null : s.id));
@@ -770,10 +908,11 @@ export function App() {
                       onMinimize={() => minimizePane(s.id)}
                       onGripDragStart={() => setDragId(s.id)}
                       onGripDragEnd={() => { setDragId(null); setDragOverId(null); }}
-                      isPasteFallback={maximizedId === s.id || (!maximizedId && panes.length === 1)}
+                      isPasteFallback={viewMax === s.id || (!viewMax && panes.length === 1)}
                       profiles={profiles}
                       defaultEmail={defaultEmail}
                       mappedDefault={defaultMapped}
+                      fontSize={fontSize}
                     />
                   </div>
                 ))}
@@ -844,6 +983,61 @@ export function App() {
             <button className="btn btn-ghost" onClick={closeDialog}>Cancel</button>
             <button className="btn" onClick={submitNewProfile} disabled={!draftName.trim()}>
               Create &amp; open login pane
+            </button>
+          </div>
+        </Modal>
+      )}
+
+      {dialog?.kind === 'add-workspace' && (
+        <Modal title="Add workspace" onClose={closeDialog}>
+          <p className="modal-desc">
+            Point Helm at a project folder. Panes you open here launch Claude in
+            this directory.
+          </p>
+          <label className="field-label">Directory path</label>
+          <input
+            className="modal-input"
+            placeholder="e.g. C:\Users\you\Projects\my-app"
+            value={wsDir}
+            autoFocus
+            onChange={(e) => { setWsDir(e.target.value); setWsAddError(''); }}
+            onKeyDown={(e) => { if (e.key === 'Enter') void submitAddWorkspace(); }}
+          />
+          <label className="field-label">Name <span className="field-hint">(optional — defaults to the folder name)</span></label>
+          <input
+            className="modal-input"
+            placeholder="workspace name"
+            value={wsName2}
+            onChange={(e) => setWsName2(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter') void submitAddWorkspace(); }}
+          />
+          <label className="field-label">Pinned account <span className="field-hint">(optional)</span></label>
+          <select
+            className="modal-input"
+            value={wsProfile}
+            onChange={(e) => setWsProfile(e.target.value)}
+          >
+            <option value="">Default account</option>
+            {profiles.map((p) => (
+              <option key={p.name} value={p.name}>
+                {p.name}{p.email ? ` — ${p.email}` : ''}
+              </option>
+            ))}
+          </select>
+          <label className="field-label">Dev-server port <span className="field-hint">(optional — enables the up/down check)</span></label>
+          <input
+            className="modal-input"
+            placeholder="e.g. 3000"
+            inputMode="numeric"
+            value={wsPort}
+            onChange={(e) => { setWsPort(e.target.value); setWsAddError(''); }}
+            onKeyDown={(e) => { if (e.key === 'Enter') void submitAddWorkspace(); }}
+          />
+          {wsAddError && <div className="form-error">{wsAddError}</div>}
+          <div className="modal-actions">
+            <button className="btn btn-ghost" onClick={closeDialog}>Cancel</button>
+            <button className="btn" onClick={() => void submitAddWorkspace()} disabled={!wsDir.trim()}>
+              Add workspace
             </button>
           </div>
         </Modal>
@@ -1119,6 +1313,18 @@ export function App() {
             </button>
           </div>
         </Modal>
+      )}
+      {paletteOpen && (
+        <CommandPalette
+          onClose={() => setPaletteOpen(false)}
+          sessions={sessions}
+          workspaces={workspaces}
+          onJumpToPane={jumpToPane}
+          onSelectWorkspace={select}
+          onNewPane={selected ? newPane : undefined}
+          onBroadcast={runningPanes.length ? openBroadcast : undefined}
+          onUsage={openUsage}
+        />
       )}
       <Toaster />
     </div>

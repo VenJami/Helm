@@ -33,6 +33,7 @@ interface Props {
   profiles: Profile[];
   defaultEmail: string | null;
   mappedDefault?: string | null; // named profile the default collapses onto
+  fontSize: number; // global terminal font size (px), user-adjustable
 }
 
 const fmt = (n: number) =>
@@ -71,8 +72,11 @@ const clipFiles = (e: ClipboardEvent): File[] => {
 
 export function TerminalPane({
   session, onKilled, onChanged, isMaximized, onToggleMax, onMinimize, onGripDragStart, onGripDragEnd,
-  isPasteFallback, profiles, defaultEmail, mappedDefault,
+  isPasteFallback, profiles, defaultEmail, mappedDefault, fontSize,
 }: Props) {
+  // Read at terminal-creation time only; live changes go through the effect below.
+  const fontSizeRef = useRef(fontSize);
+  fontSizeRef.current = fontSize;
   const holderRef = useRef<HTMLDivElement>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const termRef = useRef<Terminal | null>(null);
@@ -124,7 +128,7 @@ export function TerminalPane({
     const holder = holderRef.current!;
     const term = new Terminal({
       fontFamily: '"Cascadia Mono", Consolas, monospace',
-      fontSize: 13,
+      fontSize: fontSizeRef.current,
       cursorBlink: true,
       scrollback: 5000,
       theme: { background: '#0a0a0b' },
@@ -235,6 +239,23 @@ export function TerminalPane({
       searchRef.current = null;
     };
   }, [session.id]);
+
+  // Live font-size changes: resize the glyph grid, re-fit, and tell the PTY the
+  // new col/row count so wrapping stays correct. Skips the initial mount (the
+  // terminal was built at this size already).
+  const fontMounted = useRef(false);
+  useEffect(() => {
+    if (!fontMounted.current) { fontMounted.current = true; return; }
+    const term = termRef.current;
+    const fit = fitRef.current;
+    if (!term || !fit) return;
+    term.options.fontSize = fontSize;
+    fit.fit();
+    const ws = wsRef.current;
+    if (ws?.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: 'resize', cols: term.cols, rows: term.rows }));
+    }
+  }, [fontSize]);
 
   // Attach a WebSocket; detaching (unmount/drop) never kills the session.
   // Dead sessions have no PTY to attach to — the revive overlay handles them.
@@ -460,6 +481,9 @@ export function TerminalPane({
           >
             {session.name}
           </span>
+        )}
+        {session.summary && (
+          <span className="pane-summary" title={session.summary}>{session.summary}</span>
         )}
         <span className="pane-title" title={session.workspace}>
           {label}

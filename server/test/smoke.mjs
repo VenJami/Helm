@@ -158,6 +158,25 @@ test('session lifecycle + hook status/activityNote + WS replay', async () => {
   assert.ok(!(await (await authed('/sessions')).json()).some((x) => x.id === id));
 });
 
+test('pane summary is derived from the first real user prompt', async () => {
+  const ws = mkdir(path.join(tmp, 'sumproj'));
+  const created = await (await authed('/sessions', { method: 'POST', body: JSON.stringify({ workspace: ws }) })).json();
+  const id = created.id;
+  // A transcript whose first user line is a meta/command wrapper (should be
+  // skipped) followed by the real opening prompt.
+  const tpath = path.join(tmp, 'summary.jsonl');
+  fs.writeFileSync(tpath, [
+    JSON.stringify({ type: 'user', isMeta: true, message: { content: '<command-name>/clear</command-name>' } }),
+    JSON.stringify({ type: 'user', message: { content: 'Fix the OAuth token refresh bug in the API' } }),
+    JSON.stringify({ type: 'assistant', message: { content: 'ok' } }),
+  ].join('\n'));
+  // A hook is how a real pane reports its transcript path to the server.
+  await hook(id, { hook_event_name: 'UserPromptSubmit', session_id: 'sum-1', transcript_path: tpath });
+  const s = (await (await authed('/sessions')).json()).find((x) => x.id === id);
+  assert.equal(s.summary, 'Fix the OAuth token refresh bug in the API');
+  await authed(`/sessions/${id}`, { method: 'DELETE' });
+});
+
 test('workspace git status reports branch + dirty', async () => {
   const repo = mkdir(path.join(tmp, 'repo'));
   const git = (...args) => execFileSync('git', ['-C', repo, ...args], { stdio: 'ignore' });
@@ -207,6 +226,68 @@ test('workspace dev-server check reports up/down by port', async () => {
   assert.equal(list2.some((x) => x.id === wsUp.id), false);
 
   await new Promise((r) => listener.close(r));
+});
+
+test('PATCH workspace dir moves the root (and rejects a non-dir)', async () => {
+  const dirA = mkdir(path.join(tmp, 'root-a'));
+  const dirB = mkdir(path.join(tmp, 'root-b'));
+  const ws = await (await authed('/workspaces', {
+    method: 'POST', body: JSON.stringify({ name: 'movable', dir: dirA }),
+  })).json();
+  assert.equal(ws.dir, path.resolve(dirA));
+
+  // Re-root onto a second real dir → the change sticks.
+  const patched = await authed(`/workspaces/${ws.id}`, {
+    method: 'PATCH', body: JSON.stringify({ dir: dirB }),
+  });
+  assert.equal(patched.status, 200);
+  const after = (await (await authed('/workspaces')).json()).find((w) => w.id === ws.id);
+  assert.equal(after.dir, path.resolve(dirB));
+
+  // A path that isn't a real directory is refused (dir unchanged).
+  const bad = await authed(`/workspaces/${ws.id}`, {
+    method: 'PATCH', body: JSON.stringify({ dir: path.join(tmp, 'does-not-exist') }),
+  });
+  assert.equal(bad.status, 400);
+  const still = (await (await authed('/workspaces')).json()).find((w) => w.id === ws.id);
+  assert.equal(still.dir, path.resolve(dirB));
+});
+
+test('PATCH workspace port sets then clears', async () => {
+  const dir = mkdir(path.join(tmp, 'ported'));
+  const ws = await (await authed('/workspaces', {
+    method: 'POST', body: JSON.stringify({ name: 'ported', dir }),
+  })).json();
+  assert.equal(ws.port, undefined); // created without a port
+
+  const set = await authed(`/workspaces/${ws.id}`, { method: 'PATCH', body: JSON.stringify({ port: 4321 }) });
+  assert.equal(set.status, 200);
+  assert.equal((await set.json()).port, 4321);
+
+  const cleared = await authed(`/workspaces/${ws.id}`, { method: 'PATCH', body: JSON.stringify({ port: null }) });
+  assert.equal(cleared.status, 200);
+  assert.equal((await cleared.json()).port, undefined);
+});
+
+test('GET/POST /api/console reports shape and (Windows) toggles visibility', async (t) => {
+  const q = await authed('/console');
+  assert.equal(q.status, 200);
+  const state = await q.json();
+  assert.equal(typeof state.supported, 'boolean');
+  assert.equal(typeof state.visible, 'boolean');
+
+  if (!state.supported) { t.skip('console control unsupported off-Windows / detached'); return; }
+
+  // Non-boolean body is rejected.
+  const bad = await authed('/console', { method: 'POST', body: JSON.stringify({ visible: 'yes' }) });
+  assert.equal(bad.status, 400);
+
+  // Hide then show — the returned `visible` tracks the request. Ends visible so
+  // the developer's server console is left restored.
+  const hidden = await (await authed('/console', { method: 'POST', body: JSON.stringify({ visible: false }) })).json();
+  assert.equal(hidden.visible, false);
+  const shown = await (await authed('/console', { method: 'POST', body: JSON.stringify({ visible: true }) })).json();
+  assert.equal(shown.visible, true);
 });
 
 test('deleting a profile clears its workspace pins', async () => {

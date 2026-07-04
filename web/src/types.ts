@@ -9,6 +9,7 @@ export interface SessionInfo {
   activity: 'working' | 'waiting' | 'idle' | null; // from Claude Code hooks
   activitySince: string | null; // ISO — when activity last changed ("working 7m")
   activityNote: string | null; // latest Notification message while waiting (why it's blocked)
+  summary: string | null; // auto-title from the conversation's first prompt (search/palette)
   canResume: boolean;    // claude session id captured → revive resumes it
   hasTranscript: boolean;
   attached: number;

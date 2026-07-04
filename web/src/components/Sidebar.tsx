@@ -12,7 +12,7 @@ interface Props {
   defaultEmail: string | null; // used to label workspaces on the default account
   profiles: Profile[];         // to reuse a matching profile's name for the default
   onSelect: (id: string) => void;
-  onAdd: (name: string, dir: string) => Promise<void>;
+  onAddClick: () => void;
   onRename: (id: string, name: string) => Promise<void>;
   onChangeDir: (id: string, dir: string) => Promise<void>;
   onSetPort: (id: string, port: number | null) => Promise<void>;
@@ -20,12 +20,7 @@ interface Props {
   onHide: () => void;
 }
 
-export function Sidebar({ workspaces, sessions, git, servers, selectedId, defaultEmail, profiles, onSelect, onAdd, onRename, onChangeDir, onSetPort, onRemove, onHide }: Props) {
-  const [adding, setAdding] = useState(false);
-  const [name, setName] = useState('');
-  const [dir, setDir] = useState('');
-  const [error, setError] = useState('');
-
+export function Sidebar({ workspaces, sessions, git, servers, selectedId, defaultEmail, profiles, onSelect, onAddClick, onRename, onChangeDir, onSetPort, onRemove, onHide }: Props) {
   // Right-click menu (rename / change root dir / remove) + the inline editor it opens.
   const [menu, setMenu] = useState<{ id: string; x: number; y: number } | null>(null);
   const [edit, setEdit] = useState<{ id: string; field: 'name' | 'dir' | 'port'; value: string } | null>(null);
@@ -56,19 +51,6 @@ export function Sidebar({ workspaces, sessions, git, servers, selectedId, defaul
       working: running.filter((s) => s.activity === 'working').length,
       waiting: running.filter((s) => s.activity === 'waiting').length,
     };
-  };
-
-  const submit = async () => {
-    if (!dir.trim()) return;
-    try {
-      await onAdd(name.trim() || dir.trim().split(/[\\/]/).filter(Boolean).pop()!, dir.trim());
-      setName('');
-      setDir('');
-      setError('');
-      setAdding(false);
-    } catch (err) {
-      setError((err as Error).message);
-    }
   };
 
   const openMenu = (e: React.MouseEvent, id: string) => {
@@ -208,32 +190,13 @@ export function Sidebar({ workspaces, sessions, git, servers, selectedId, defaul
             </div>
           ),
         )}
-        {workspaces.length === 0 && !adding && (
+        {workspaces.length === 0 && (
           <div className="sidebar-empty">No workspaces yet — add a project folder.</div>
         )}
       </div>
-      {adding ? (
-        <div className="ws-add-form">
-          <input
-            placeholder="directory path"
-            value={dir}
-            onChange={(e) => setDir(e.target.value)}
-            autoFocus
-          />
-          <input placeholder="name (optional)" value={name} onChange={(e) => setName(e.target.value)} />
-          {error && <div className="form-error">{error}</div>}
-          <div className="ws-add-actions">
-            <button className="btn" onClick={submit}>Add</button>
-            <button className="btn btn-ghost" onClick={() => { setAdding(false); setError(''); }}>
-              Cancel
-            </button>
-          </div>
-        </div>
-      ) : (
-        <button className="btn btn-secondary sidebar-add" onClick={() => setAdding(true)}>
-          <IconPlus size={13} /> Add workspace
-        </button>
-      )}
+      <button className="btn btn-secondary sidebar-add" onClick={onAddClick}>
+        <IconPlus size={13} /> Add workspace
+      </button>
 
       {menu && menuWs && (
         <div
