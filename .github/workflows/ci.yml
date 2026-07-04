@@ -1,5 +1,6 @@
-# Minimal health check: the server files parse and the frontend
-# typechecks + builds. No test suite yet — Helm is verified end-to-end
+# Health check: the server files parse, the frontend typechecks + builds, and
+# a smoke test drives a real server (REST + WS + hook relay) against a
+# keep-alive claude stand-in. Deeper features are still verified by hand
 # against real claude panes (see docs/GOTCHAS.md "Testing pattern").
 name: CI
 
@@ -27,3 +28,19 @@ jobs:
       - name: Build frontend
         working-directory: web
         run: npm run build
+
+  # Smoke test on Windows — matches production (node-pty runs natively) and
+  # exercises the PTY / hook / lifecycle paths a build can't catch.
+  smoke:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install server deps
+        working-directory: server
+        run: npm install
+      - name: Smoke test
+        working-directory: server
+        run: npm test

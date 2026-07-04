@@ -1,0 +1,225 @@
+// Helm smoke test — boots a real server on a throwaway port + isolated data
+// dir, driving it end-to-end through REST + WS + the hook relay. Uses a
+// keep-alive stand-in for `claude` (fake-claude) so it never needs a login,
+// a network, or the real CLI. Codifies the manual "throwaway script" pattern
+// from docs/GOTCHAS.md so the PTY / hook / usage / lifecycle paths a build
+// can't catch stay covered.
+//
+// Run: cd server && npm test
+import { test, before, after } from 'node:test';
+import assert from 'node:assert/strict';
+import { spawn, execFileSync } from 'node:child_process';
+import fs from 'node:fs';
+import os from 'node:os';
+import net from 'node:net';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { WebSocket } from 'ws';
+
+const IS_WIN = process.platform === 'win32';
+const testDir = path.dirname(fileURLToPath(import.meta.url));
+const serverDir = path.join(testDir, '..');
+// Isolated HOME so the server's data dir (~/.helm or %LOCALAPPDATA%\Helm) lands
+// in a temp folder we own — never the developer's real Helm store.
+const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'helm-smoke-'));
+const helmDir = IS_WIN ? path.join(tmp, 'Helm') : path.join(tmp, '.helm');
+const wrapper = path.join(testDir, IS_WIN ? 'fake-claude.cmd' : 'fake-claude.sh');
+
+let child;
+let PORT = 0;
+let TOKEN = '';
+let HOOK_TOKEN = '';
+
+const U = (p) => `http://127.0.0.1:${PORT}${p}`; // absolute URL for a given path
+const authed = (p, opts = {}) =>
+  fetch(U('/api' + p), {
+    ...opts,
+    headers: { Authorization: `Bearer ${TOKEN}`, 'Content-Type': 'application/json', ...opts.headers },
+  });
+// Hook relay POST — authed by the separate hook token, not the UI bearer token.
+const hook = (sessionId, event) =>
+  fetch(U('/api/hook'), {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'x-helm-hook': HOOK_TOKEN },
+    body: JSON.stringify({ sessionId, event }),
+  });
+const mkdir = (p) => { fs.mkdirSync(p, { recursive: true }); return p; };
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// Let the OS assign a free ephemeral port — dodges Windows' scattered reserved
+// port ranges (which reject fixed guesses with EACCES).
+const freePort = () => new Promise((resolve, reject) => {
+  const srv = net.createServer();
+  srv.on('error', reject);
+  srv.listen(0, '127.0.0.1', () => {
+    const { port } = srv.address();
+    srv.close(() => resolve(port));
+  });
+});
+
+// Boot the server on one port; resolve true once it answers an authed request.
+// Windows reserves scattered high-port ranges (EACCES) and ports can be busy,
+// so the caller retries across several candidate ports.
+async function tryBoot(port) {
+  PORT = port;
+  TOKEN = '';
+  const env = {
+    ...process.env,
+    PORT: String(port),
+    HOME: tmp,
+    USERPROFILE: tmp,
+    LOCALAPPDATA: tmp,
+    HELM_CLAUDE_CMD: wrapper,
+  };
+  delete env.CLAUDE_CONFIG_DIR; // don't inherit a real default account
+  child = spawn(process.execPath, ['index.mjs'], { cwd: serverDir, env, stdio: ['ignore', 'pipe', 'pipe'] });
+  let stderr = '';
+  let exited = false;
+  child.stdout.on('data', () => {});          // drain so the child never blocks on a full pipe
+  child.stderr.on('data', (d) => { stderr += d; });
+  child.on('exit', () => { exited = true; });
+
+  const deadline = Date.now() + 6000;
+  while (Date.now() < deadline && !exited) {
+    try {
+      if (!TOKEN) TOKEN = fs.readFileSync(path.join(helmDir, 'token'), 'utf8').trim();
+      const res = await authed('/sessions');
+      if (res.ok) { HOOK_TOKEN = fs.readFileSync(path.join(helmDir, 'hook-token'), 'utf8').trim(); return true; }
+    } catch { /* not up yet */ }
+    await sleep(150);
+  }
+  child.kill();
+  if (stderr && !/EACCES|EADDRINUSE/.test(stderr)) console.error(`server stderr on ${port}:\n${stderr}`);
+  return false;
+}
+
+before(async () => {
+  if (!IS_WIN) fs.chmodSync(wrapper, 0o755);
+  for (let i = 0; i < 6; i++) {
+    if (await tryBoot(await freePort())) return; // retry only guards the tiny bind race
+    await sleep(100);
+  }
+  throw new Error('server did not come up on any candidate port');
+});
+
+after(async () => {
+  // Kill every live session's PTY, then the server, then the temp dir.
+  try {
+    const list = await (await authed('/sessions')).json();
+    for (const s of list) await authed(`/sessions/${s.id}`, { method: 'DELETE' }).catch(() => {});
+  } catch { /* server may already be gone */ }
+  child?.kill();
+  await new Promise((r) => setTimeout(r, 300));
+  fs.rmSync(tmp, { recursive: true, force: true });
+});
+
+test('REST requires the bearer token', async () => {
+  const noAuth = await fetch(U('/api/sessions'));
+  assert.equal(noAuth.status, 401);
+  const ok = await authed('/sessions');
+  assert.equal(ok.status, 200);
+  assert.ok(Array.isArray(await ok.json()));
+});
+
+test('session lifecycle + hook status/activityNote + WS replay', async () => {
+  const ws = mkdir(path.join(tmp, 'proj'));
+  await authed('/workspaces', { method: 'POST', body: JSON.stringify({ name: 'proj', dir: ws }) });
+
+  const created = await (await authed('/sessions', { method: 'POST', body: JSON.stringify({ workspace: ws }) })).json();
+  assert.equal(created.status, 'running');
+  const id = created.id;
+
+  // A Notification hook → waiting + the message carried into activityNote.
+  const msg = 'Claude needs your permission to use Bash';
+  await hook(id, { hook_event_name: 'Notification', message: msg, session_id: 'c-abc' });
+  let s = (await (await authed('/sessions')).json()).find((x) => x.id === id);
+  assert.equal(s.activity, 'waiting');
+  assert.equal(s.activityNote, msg);
+
+  // Back to work → activity flips and the note clears.
+  await hook(id, { hook_event_name: 'UserPromptSubmit' });
+  s = (await (await authed('/sessions')).json()).find((x) => x.id === id);
+  assert.equal(s.activity, 'working');
+  assert.equal(s.activityNote, null);
+
+  // WS attach replays the ring buffer (the stand-in printed a ready line).
+  const replay = await new Promise((resolve, reject) => {
+    const sock = new WebSocket(`ws://127.0.0.1:${PORT}/ws?session=${id}&token=${TOKEN}`);
+    const timer = setTimeout(() => { sock.close(); reject(new Error('no replay within 3s')); }, 3000);
+    sock.on('message', (raw) => {
+      const m = JSON.parse(raw);
+      if (m.type === 'replay') { clearTimeout(timer); sock.close(); resolve(m); }
+    });
+    sock.on('error', reject);
+  });
+  assert.equal(replay.type, 'replay');
+
+  await authed(`/sessions/${id}`, { method: 'DELETE' });
+  assert.ok(!(await (await authed('/sessions')).json()).some((x) => x.id === id));
+});
+
+test('workspace git status reports branch + dirty', async () => {
+  const repo = mkdir(path.join(tmp, 'repo'));
+  const git = (...args) => execFileSync('git', ['-C', repo, ...args], { stdio: 'ignore' });
+  git('init', '-b', 'trunk');
+  fs.writeFileSync(path.join(repo, 'file.txt'), 'hi'); // untracked → dirty
+  const ws = await (await authed('/workspaces', {
+    method: 'POST', body: JSON.stringify({ name: 'repo', dir: repo }),
+  })).json();
+
+  const g = (await (await authed('/workspaces/git')).json()).find((x) => x.id === ws.id);
+  assert.equal(g.branch, 'trunk');
+  assert.equal(g.dirty, true);
+});
+
+test('workspace dev-server check reports up/down by port', async () => {
+  // Stand-in "dev server": a bare TCP listener on a free port → should read up.
+  const upPort = await freePort();
+  const listener = net.createServer();
+  await new Promise((r) => listener.listen(upPort, '127.0.0.1', r));
+  const downPort = await freePort(); // nothing listening here → down
+
+  const upDir = mkdir(path.join(tmp, 'srv-up'));
+  const downDir = mkdir(path.join(tmp, 'srv-down'));
+  const noneDir = mkdir(path.join(tmp, 'srv-none'));
+  const wsUp = await (await authed('/workspaces', {
+    method: 'POST', body: JSON.stringify({ name: 'up', dir: upDir, port: upPort }),
+  })).json();
+  const wsDown = await (await authed('/workspaces', {
+    method: 'POST', body: JSON.stringify({ name: 'down', dir: downDir, port: downPort }),
+  })).json();
+  const wsNone = await (await authed('/workspaces', {
+    method: 'POST', body: JSON.stringify({ name: 'none', dir: noneDir }),
+  })).json();
+  assert.equal(wsUp.port, upPort);
+
+  const list = await (await authed('/workspaces/servers')).json();
+  assert.equal(list.find((x) => x.id === wsUp.id)?.up, true);
+  assert.equal(list.find((x) => x.id === wsDown.id)?.up, false);
+  // Workspaces without a port aren't reported at all.
+  assert.equal(list.some((x) => x.id === wsNone.id), false);
+
+  // Bad port is rejected; clearing the port (null) drops it from the report.
+  const bad = await authed(`/workspaces/${wsUp.id}`, { method: 'PATCH', body: JSON.stringify({ port: 99999 }) });
+  assert.equal(bad.status, 400);
+  await authed(`/workspaces/${wsUp.id}`, { method: 'PATCH', body: JSON.stringify({ port: null }) });
+  const list2 = await (await authed('/workspaces/servers')).json();
+  assert.equal(list2.some((x) => x.id === wsUp.id), false);
+
+  await new Promise((r) => listener.close(r));
+});
+
+test('deleting a profile clears its workspace pins', async () => {
+  mkdir(path.join(helmDir, 'accounts', 'acct1')); // pretend a profile exists
+  const dir = mkdir(path.join(tmp, 'pinned'));
+  const ws = await (await authed('/workspaces', {
+    method: 'POST', body: JSON.stringify({ name: 'pinned', dir, profile: 'acct1' }),
+  })).json();
+  assert.equal(ws.profile, 'acct1');
+
+  const del = await authed('/profiles/acct1', { method: 'DELETE' });
+  assert.equal(del.status, 200);
+
+  const after = (await (await authed('/workspaces')).json()).find((w) => w.id === ws.id);
+  assert.equal(after.profile, undefined); // pin gone, not dangling
+});

@@ -4,8 +4,10 @@
 
 import crypto from 'node:crypto';
 import fs from 'node:fs';
+import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
+import { execFile } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import express from 'express';
 import { WebSocketServer } from 'ws';
@@ -152,7 +154,26 @@ function spawnPty(session, extraArgs, { cols, rows }) {
     HELM_SESSION_ID: session.id,
     HELM_HOOK_TOKEN: HOOK_TOKEN,
     HELM_PORT: String(PORT),
+    // Agent teams (claude ≥2.1.198) silently stop writing assistant lines to
+    // the transcript JSONL the moment a team forms — which kills usage
+    // tracking AND --resume revive. Classic subagents are unaffected and keep
+    // working with teams off. Overrides the user-level settings.json env.
+    // Verified end-to-end 2026-07-02 (docs/GOTCHAS.md).
+    CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS: '0',
   };
+  // If this server was started from inside a Claude Code session (a pane, the
+  // VS Code extension, an agent), the shell carries session-identity vars —
+  // and CLAUDE_CODE_CHILD_SESSION makes claude skip writing the transcript
+  // JSONL entirely (no usage, no revive). Panes are fresh top-level sessions:
+  // scrub the inherited identity. (docs/GOTCHAS.md, verified 2026-07-02)
+  for (const k of [
+    'CLAUDECODE',
+    'CLAUDE_CODE_CHILD_SESSION',
+    'CLAUDE_CODE_ENTRYPOINT',
+    'CLAUDE_CODE_SESSION_ID',
+    'CLAUDE_CODE_SSE_PORT',
+    'CLAUDE_AGENT_SDK_VERSION',
+  ]) delete env[k];
   if (session.profile) {
     const profileDir = path.join(ACCOUNTS_DIR, session.profile);
     fs.mkdirSync(profileDir, { recursive: true });
@@ -174,7 +195,12 @@ function spawnPty(session, extraArgs, { cols, rows }) {
   dbg('spawn', `${session.name} (${session.id.slice(0, 8)}) pid=${pty.pid} cwd=${session.workspace}` +
     `${session.profile ? ` profile=${session.profile}` : ''}${extraArgs.length ? ` args=${extraArgs.join(' ')}` : ''}`);
 
+  // Both callbacks check `session.pty === pty`: an account switch kills this
+  // process and respawns a new one on the same session, and the old process's
+  // stragglers (final ConPTY output, its exit event) must not pollute the new
+  // one's ring buffer or mark the freshly respawned session as exited.
   pty.onData((data) => {
+    if (session.pty !== pty) return;
     session.buffer.push(data);
     session.bufLen += data.length;
     while (session.bufLen > RING_BUFFER_MAX && session.buffer.length > 1) {
@@ -185,15 +211,18 @@ function spawnPty(session, extraArgs, { cols, rows }) {
   });
 
   pty.onExit(({ exitCode }) => {
+    if (session.pty !== pty) return; // replaced by a newer spawn — stay silent
     session.status = 'exited';
     session.exitCode = exitCode;
     session.activity = null;
     session.activitySince = null;
+    session.activityNote = null;
     dbg('exit', `${session.name} (${session.id.slice(0, 8)}) exited code=${exitCode}`);
     persistSessions();
     // Small delay lets any final ConPTY output land in onData before we
     // announce the exit and close the attached sockets.
     setTimeout(() => {
+      if (session.pty !== pty) return; // respawned within the delay window
       broadcast(session, { type: 'exit', code: exitCode });
       for (const ws of session.sockets) ws.close(1000, 'process exited');
       session.sockets.clear();
@@ -202,6 +231,12 @@ function spawnPty(session, extraArgs, { cols, rows }) {
 }
 
 function createSession({ workspace, profile, cols, rows }) {
+  // Auto-map the bare default account onto the named profile signed into the
+  // same email, when one exists — so a "default" pane runs in that profile's
+  // isolated config dir and its usage is tracked there, instead of the
+  // duplicate ~/.claude account. (Owner had default + a profile on the same
+  // login; see docs/ACCOUNTS.md.)
+  if (!profile) profile = mappedDefaultProfile() || profile;
   // Profile finished onboarding but has no credentials (logged out / login
   // skipped) → boot the pane straight into the login screen (`claude /login`).
   // Fresh or mid-onboarding profiles are left alone: claude's own first-run
@@ -232,6 +267,7 @@ function createSession({ workspace, profile, cols, rows }) {
     exitCode: null,
     activity: null,          // 'working' | 'waiting' | 'idle' (from hooks)
     activitySince: null,     // when activity last changed — powers "working 7m"
+    activityNote: null,      // latest Notification message while waiting (why it's blocked)
     claudeSessionId: null,   // claude's internal session id (from hooks)
     transcriptPath: null,    // conversation JSONL (from hooks) — usage source
     createdAt: new Date().toISOString(),
@@ -286,6 +322,7 @@ function loadPersistedSessions() {
       exitCode: null,
       activity: null,
       activitySince: null,
+      activityNote: null,
       claudeSessionId: s.claudeSessionId ?? null,
       transcriptPath: s.transcriptPath ?? null,
       createdAt: s.createdAt ?? new Date().toISOString(),
@@ -371,6 +408,7 @@ function sessionInfo(s) {
     exitCode: s.exitCode,
     activity: s.activity,
     activitySince: s.activitySince,
+    activityNote: s.activityNote ?? null,
     // resumable = we have claude's session id AND its transcript actually
     // exists on disk (team-mode claude can report a path it never writes)
     canResume: Boolean(s.claudeSessionId &&
@@ -425,6 +463,14 @@ app.post('/api/hook', (req, res) => {
   if (activity && session.status === 'running' && session.activity !== activity) {
     session.activity = activity;
     session.activitySince = new Date().toISOString();
+  }
+  // Carry the Notification's own message (e.g. "Claude needs permission to run
+  // X") so the pane badge / desktop alert can say *why* it's blocked, not just
+  // "needs input". Cleared the moment it starts working or goes idle again.
+  if (event.hook_event_name === 'Notification' && typeof event.message === 'string') {
+    session.activityNote = event.message;
+  } else if (activity && activity !== 'waiting') {
+    session.activityNote = null;
   }
   schedulePersist();
   res.json({ ok: true });
@@ -560,6 +606,79 @@ app.post('/api/sessions/:id/revive', (req, res) => {
   res.json(sessionInfo(session));
 });
 
+// The config dir whose credentials a session on this profile uses
+// ('' / null = the default account).
+function configRoot(profile) {
+  return profile
+    ? path.join(ACCOUNTS_DIR, profile)
+    : process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude');
+}
+
+// Move a pane to another account. A running claude can't change accounts in
+// place (CLAUDE_CONFIG_DIR is read once, at spawn), but the conversation is
+// just a transcript file — so: copy it into the target account's store, kill
+// the old process, and respawn claude in the same pane with --resume. Same
+// pane, same chat, new account. Attached sockets stay open through the swap.
+app.post('/api/sessions/:id/switch-profile', (req, res) => {
+  const session = sessions.get(req.params.id);
+  if (!session) return res.status(404).json({ error: 'no such session' });
+  const { profile, cols = 80, rows = 24 } = req.body || {};
+  const next = typeof profile === 'string' && profile ? profile : null;
+  if (next && !/^[\w-]+$/.test(next)) {
+    return res.status(400).json({ error: 'profile must be alphanumeric/dash/underscore' });
+  }
+  if (next === session.profile) {
+    return res.status(409).json({ error: 'session is already on that account' });
+  }
+  // The target must be able to work without an interactive login — a login
+  // screen and --resume at once is a mess. (The default account is assumed
+  // usable; profiles need credentials from a previous sign-in.)
+  if (next && !fs.existsSync(path.join(configRoot(next), '.credentials.json'))) {
+    return res.status(409).json({
+      error: `profile "${next}" has no stored login — open a pane on it and sign in first`,
+    });
+  }
+
+  // Carry the conversation when there is one to carry: --resume resolves the
+  // id against the NEW config dir, so the transcript must exist there. The
+  // copy (not move) leaves the old account's history intact for its usage.
+  if (session.claudeSessionId && session.transcriptPath && fs.existsSync(session.transcriptPath)) {
+    const destDir = path.join(
+      configRoot(next), 'projects', path.basename(path.dirname(session.transcriptPath)),
+    );
+    const dest = path.join(destDir, path.basename(session.transcriptPath));
+    try {
+      fs.mkdirSync(destDir, { recursive: true });
+      fs.copyFileSync(session.transcriptPath, dest); // overwrite: newest history wins
+    } catch (err) {
+      return res.status(500).json({ error: `failed to copy the conversation: ${err.message}` });
+    }
+    markImported(dest);
+    session.transcriptPath = dest;
+  } else {
+    // nothing resumable — the pane still switches, it just starts fresh
+    session.claudeSessionId = null;
+    session.transcriptPath = null;
+  }
+
+  const from = session.profile || 'default';
+  if (session.status === 'running' && session.pty) {
+    try { session.pty.kill(); } catch { /* already dead */ }
+  }
+  session.profile = next;
+  try {
+    reviveSession(session, { cols: Number(cols) || 80, rows: Number(rows) || 24 });
+  } catch (err) {
+    session.status = 'exited'; // old process is gone — leave the pane revivable
+    persistSessions();
+    return res.status(500).json({ error: `failed to respawn: ${err.message}` });
+  }
+  dbg('switch', `${session.name} (${session.id.slice(0, 8)}) ${from} → ${next || 'default'}` +
+    (session.claudeSessionId ? ' (conversation carried over)' : ' (fresh start)'));
+  persistSessions();
+  res.json(sessionInfo(session));
+});
+
 // Broadcast one instruction to several running panes at once. The text is
 // written to each PTY in one chunk (claude's input treats a fast burst as a
 // paste), then Enter follows as a separate keypress a moment later — sending
@@ -622,6 +741,51 @@ app.get('/api/logs', (req, res) => {
   });
 });
 
+// ------------------------------------------------------ console window toggle
+// Show/hide the OS console window this server is running in (the "Helm server"
+// terminal from start-helm.cmd) so the UI can offer a button for it. Windows
+// only: we shell out to PowerShell to call GetConsoleWindow + ShowWindow via a
+// tiny inline P/Invoke — Node can't touch Win32 window APIs without a native
+// dep, and this is a rare, click-driven action so a ~half-second spawn is fine.
+// A server launched detached (no console) reports supported:false and the UI
+// hides the button. IsWindowVisible tells us the current state for the toggle.
+const SW = { hide: 0, show: 9 }; // 9 = SW_RESTORE (un-minimise + activate)
+
+function controlConsole(action) {
+  return new Promise((resolve) => {
+    if (process.platform !== 'win32') return resolve({ supported: false, visible: false });
+    const set = action === 'show' || action === 'hide'
+      ? `if ($h -ne [IntPtr]::Zero) { [W.N]::ShowWindow($h, ${SW[action]}) | Out-Null }`
+      : '';
+    const script = `
+$s = @'
+[DllImport("kernel32.dll")] public static extern System.IntPtr GetConsoleWindow();
+[DllImport("user32.dll")] public static extern bool ShowWindow(System.IntPtr h, int n);
+[DllImport("user32.dll")] public static extern bool IsWindowVisible(System.IntPtr h);
+'@
+Add-Type -MemberDefinition $s -Name N -Namespace W | Out-Null
+$h = [W.N]::GetConsoleWindow()
+${set}
+$vis = if ($h -ne [IntPtr]::Zero) { [W.N]::IsWindowVisible($h) } else { $false }
+Write-Output ("{0}|{1}" -f ($h -ne [IntPtr]::Zero), $vis)`;
+    execFile('powershell', ['-NoProfile', '-NonInteractive', '-Command', script],
+      { timeout: 5000, windowsHide: false }, // inherit this console so the handle is ours
+      (err, stdout) => {
+        if (err) return resolve({ supported: false, visible: false });
+        const [sup, vis] = String(stdout).trim().split('|');
+        resolve({ supported: sup === 'True', visible: vis === 'True' });
+      });
+  });
+}
+
+app.get('/api/console', async (_req, res) => res.json(await controlConsole('query')));
+
+app.post('/api/console', async (req, res) => {
+  const visible = req.body?.visible;
+  if (typeof visible !== 'boolean') return res.status(400).json({ error: 'visible must be a boolean' });
+  res.json(await controlConsole(visible ? 'show' : 'hide'));
+});
+
 // ------------------------------------------------------------ usage roll-up
 // Parses transcript JSONL files (assistant messages carry a usage block).
 // Per-file cache keyed by mtime+size; events keep timestamps so rolling
@@ -629,6 +793,25 @@ app.get('/api/logs', (req, res) => {
 
 const fileUsageCache = new Map(); // file path → parsed (insertion order ≈ recency)
 const FILE_USAGE_CACHE_MAX = 512; // bound memory — oldest-touched entries drop first
+
+// Transcript copies made by account switches: dest path → import time (ms).
+// The account roll-up skips a copied file's events from before its import so
+// moved history keeps counting against the account it actually ran on.
+const IMPORTED_FILE = path.join(HELM_DIR, 'imported-transcripts.json');
+let importedTranscripts = {};
+try {
+  importedTranscripts = JSON.parse(fs.readFileSync(IMPORTED_FILE, 'utf8')) || {};
+} catch { /* no switches yet */ }
+
+function markImported(file) {
+  // prune entries whose file is gone so the ledger can't grow forever
+  for (const f of Object.keys(importedTranscripts)) {
+    if (!fs.existsSync(f)) delete importedTranscripts[f];
+  }
+  importedTranscripts[file] = Date.now();
+  fs.mkdirSync(HELM_DIR, { recursive: true });
+  fs.writeFileSync(IMPORTED_FILE, JSON.stringify(importedTranscripts, null, 2));
+}
 
 function parseTranscriptFile(file) {
   let stat;
@@ -661,7 +844,7 @@ function parseTranscriptFile(file) {
     }
   }
   const models = {};
-  const events = []; // [timestampMs, model, inTokens(+cacheWrite), outTokens, cacheRead]
+  const events = []; // [timestampMs, model, input, output, cacheRead, cacheWrite]
   for (const { model, usage, t } of byMessage.values()) {
     const m = (models[model] ??= { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, turns: 0 });
     const input = usage.input_tokens || 0;
@@ -673,7 +856,7 @@ function parseTranscriptFile(file) {
     m.cacheRead += cacheRead;
     m.cacheWrite += cacheWrite;
     m.turns += 1;
-    events.push([t, model, input + cacheWrite, output, cacheRead]);
+    events.push([t, model, input, output, cacheRead, cacheWrite]);
   }
   const parsed = { mtimeMs: stat.mtimeMs, size: stat.size, models, events };
   fileUsageCache.set(file, parsed);
@@ -683,21 +866,16 @@ function parseTranscriptFile(file) {
   return parsed;
 }
 
-// All transcripts under a config dir's projects/ store (one subdir per cwd)
+// All transcripts under a config dir's projects/ store (one subdir per cwd).
+// Recursive: newer claude nests subagent transcripts in
+// projects/<cwd>/<sessionId>/subagents/*.jsonl.
 function transcriptFiles(configDir) {
-  const out = [];
   const root = path.join(configDir, 'projects');
-  let projectDirs = [];
-  try { projectDirs = fs.readdirSync(root, { withFileTypes: true }); } catch { return out; }
-  for (const d of projectDirs) {
-    if (!d.isDirectory()) continue;
-    try {
-      for (const f of fs.readdirSync(path.join(root, d.name))) {
-        if (f.endsWith('.jsonl')) out.push(path.join(root, d.name, f));
-      }
-    } catch { /* skip unreadable */ }
-  }
-  return out;
+  let entries = [];
+  try { entries = fs.readdirSync(root, { recursive: true }); } catch { return []; }
+  return entries
+    .filter((f) => f.endsWith('.jsonl'))
+    .map((f) => path.join(root, f));
 }
 
 // Rolling windows, newest → oldest. Keys are stable API; the UI labels them.
@@ -710,42 +888,79 @@ const USAGE_WINDOWS = [
   ['d30', 30 * 24 * 3600_000],
 ];
 
+// Rough published per-model prices ($ per 1M tokens): input + output. Cache is
+// derived (read = 0.1x input, write = 1.25x input). Keyed by name prefix so
+// dated ids (claude-haiku-4-5-20251001) and future point releases still match.
+// Deliberately approximate — ignores Sonnet intro pricing/tiers; UI labels "est".
+const MODEL_PRICING = [
+  [/^claude-(fable|mythos)/, { in: 10, out: 50 }],
+  [/^claude-opus/, { in: 5, out: 25 }],
+  [/^claude-sonnet/, { in: 3, out: 15 }],
+  [/^claude-haiku/, { in: 1, out: 5 }],
+];
+// Dollar estimate for one model's token bundle. Unknown model → 0 (no guess),
+// so it simply doesn't contribute to the total rather than inventing a number.
+function tokenCost(model, { input = 0, output = 0, cacheRead = 0, cacheWrite = 0 }) {
+  const p = MODEL_PRICING.find(([re]) => re.test(model))?.[1];
+  if (!p) return 0;
+  return (input * p.in + output * p.out
+    + cacheRead * p.in * 0.1 + cacheWrite * p.in * 1.25) / 1e6;
+}
+
 function accountUsage(configDir) {
   const now = Date.now();
   // Every window (incl. 'all') carries totals + its own per-model breakdown,
   // so the UI's window selector re-slices the whole card, not just one number.
-  const windows = { all: { in: 0, out: 0, models: {} } };
-  for (const [key] of USAGE_WINDOWS) windows[key] = { in: 0, out: 0, models: {} };
+  const blank = () => ({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0, turns: 0, cost: 0, models: {} });
+  const windows = { all: blank() };
+  for (const [key] of USAGE_WINDOWS) windows[key] = blank();
 
-  const add = (w, model, inTok, outTok, cacheRead) => {
-    w.in += inTok;
-    w.out += outTok;
-    const m = (w.models[model] ??= { input: 0, output: 0, cacheRead: 0, turns: 0 });
-    m.input += inTok;
-    m.output += outTok;
+  const add = (w, model, input, output, cacheRead, cacheWrite) => {
+    w.input += input;
+    w.output += output;
+    w.cacheRead += cacheRead;
+    w.cacheWrite += cacheWrite;
+    w.turns += 1;
+    const m = (w.models[model] ??= { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, turns: 0 });
+    m.input += input;
+    m.output += output;
     m.cacheRead += cacheRead;
+    m.cacheWrite += cacheWrite;
     m.turns += 1;
   };
 
+  let lastActive = 0; // most recent counted usage → "used 2h ago" in the UI
   for (const file of transcriptFiles(configDir)) {
     const parsed = parseTranscriptFile(file);
     if (!parsed) continue;
-    for (const [t, model, inTok, outTok, cacheRead] of parsed.events) {
-      add(windows.all, model, inTok, outTok, cacheRead);
+    // for transcript copies made by an account switch, only count what
+    // happened after the switch — the rest ran on the source account
+    const importedAt = importedTranscripts[file] || 0;
+    for (const [t, model, input, output, cacheRead, cacheWrite] of parsed.events) {
+      if (t < importedAt) continue;
+      if (t > lastActive) lastActive = t;
+      add(windows.all, model, input, output, cacheRead, cacheWrite);
       const age = now - t;
       for (const [key, span] of USAGE_WINDOWS) {
-        if (age < span) add(windows[key], model, inTok, outTok, cacheRead);
+        if (age < span) add(windows[key], model, input, output, cacheRead, cacheWrite);
       }
     }
   }
-  return { windows };
+  // fold in dollar estimates once token totals are settled (per model + window)
+  for (const w of Object.values(windows)) {
+    for (const [model, m] of Object.entries(w.models)) {
+      m.cost = tokenCost(model, m);
+      w.cost += m.cost;
+    }
+  }
+  return { windows, lastActive: lastActive || null };
 }
 
 // Roll-up across every account: the default one + each Helm profile
 app.get('/api/usage', (_req, res) => {
   const accounts = [];
   // default account: config file is ~/.claude.json, data lives in ~/.claude
-  const defaultRoot = process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude');
+  const defaultRoot = configRoot(null);
   accounts.push({
     account: 'default',
     email: accountEmail(process.env.CLAUDE_CONFIG_DIR || os.homedir()),
@@ -761,13 +976,43 @@ app.get('/api/usage', (_req, res) => {
   res.json(accounts);
 });
 
-// Token usage per model for one pane's conversation transcript
+// Token usage per model for one pane's conversation transcript, including
+// any subagent transcripts nested in <transcript dir>/<sessionId>/subagents/
 app.get('/api/sessions/:id/usage', (req, res) => {
   const session = sessions.get(req.params.id);
   if (!session) return res.status(404).json({ error: 'no such session' });
-  const parsed = session.transcriptPath ? parseTranscriptFile(session.transcriptPath) : null;
-  if (!parsed) return res.json({ available: false });
-  res.json({ available: true, models: parsed.models });
+  if (!session.transcriptPath) return res.json({ available: false });
+
+  const files = [session.transcriptPath];
+  const subagentsDir = path.join(
+    path.dirname(session.transcriptPath),
+    path.basename(session.transcriptPath, '.jsonl'),
+    'subagents',
+  );
+  try {
+    for (const f of fs.readdirSync(subagentsDir)) {
+      if (f.endsWith('.jsonl')) files.push(path.join(subagentsDir, f));
+    }
+  } catch { /* no subagents */ }
+
+  const models = {};
+  let available = false;
+  for (const file of files) {
+    const parsed = parseTranscriptFile(file);
+    if (!parsed) continue;
+    available = true;
+    for (const [name, m] of Object.entries(parsed.models)) {
+      const t = (models[name] ??= { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, turns: 0 });
+      t.input += m.input;
+      t.output += m.output;
+      t.cacheRead += m.cacheRead;
+      t.cacheWrite += m.cacheWrite;
+      t.turns += m.turns;
+    }
+  }
+  if (!available) return res.json({ available: false });
+  for (const [name, m] of Object.entries(models)) m.cost = tokenCost(name, m);
+  res.json({ available: true, models });
 });
 
 // ------------------------------------------------------------- workspaces
@@ -793,8 +1038,81 @@ app.get('/api/workspaces', (_req, res) => {
   res.json(workspaces);
 });
 
+// Best-effort git status per workspace (branch + dirty flag + ahead/behind),
+// for the sidebar's at-a-glance indicator. A non-repo, or a box without git,
+// reports branch:null. Each call is capped at 2 s so a slow/huge repo can't
+// stall the sidebar. Registered before any /api/workspaces/:id route so the
+// literal 'git' segment isn't swallowed as an :id.
+function workspaceGit(dir) {
+  return new Promise((resolve) => {
+    execFile('git', ['-C', dir, 'status', '--porcelain=v1', '--branch'],
+      { timeout: 2000, windowsHide: true },
+      (err, stdout) => {
+        if (err) return resolve({ branch: null, dirty: false, ahead: 0, behind: 0 });
+        const lines = String(stdout).split('\n');
+        const head = lines[0] || '';
+        // "## main...origin/main [ahead 1, behind 2]" | "## main" |
+        // "## No commits yet on main" | "## HEAD (no branch)" (detached)
+        const m = head.match(/^## (?:No commits yet on )?(.+?)(?:\.\.\.|\s\[|$)/);
+        let branch = m ? m[1] : null;
+        if (branch === 'HEAD (no branch)') branch = 'detached';
+        const ahead = Number(head.match(/ahead (\d+)/)?.[1]) || 0;
+        const behind = Number(head.match(/behind (\d+)/)?.[1]) || 0;
+        const dirty = lines.slice(1).some((l) => l.trim() !== '');
+        resolve({ branch, dirty, ahead, behind });
+      });
+  });
+}
+
+app.get('/api/workspaces/git', async (_req, res) => {
+  const out = await Promise.all(
+    workspaces.map(async (w) => ({ id: w.id, ...(await workspaceGit(w.dir)) })),
+  );
+  res.json(out);
+});
+
+// Best-effort liveness of each workspace's own dev server: a bare TCP connect
+// to 127.0.0.1:<port>. `up` means something accepted the connection (server is
+// listening); refused/timeout = down. Capped at 1 s so a black-holed port can't
+// stall the poll. Only workspaces with a configured port are reported.
+// Registered before /api/workspaces/:id so 'servers' isn't read as an :id.
+function portListening(port) {
+  return new Promise((resolve) => {
+    const socket = new net.Socket();
+    let done = false;
+    const finish = (up) => {
+      if (done) return;
+      done = true;
+      socket.destroy();
+      resolve(up);
+    };
+    socket.setTimeout(1000);
+    socket.once('connect', () => finish(true));
+    socket.once('timeout', () => finish(false));
+    socket.once('error', () => finish(false));
+    socket.connect(port, '127.0.0.1');
+  });
+}
+
+app.get('/api/workspaces/servers', async (_req, res) => {
+  const withPort = workspaces.filter((w) => Number.isInteger(w.port));
+  const out = await Promise.all(
+    withPort.map(async (w) => ({ id: w.id, port: w.port, up: await portListening(w.port) })),
+  );
+  res.json(out);
+});
+
+// Coerce a request `port` field to a valid TCP port (1–65535) or null.
+// Returns undefined when the value is unusable (caller reports a 400).
+function parsePort(v) {
+  if (v === null || v === '' || v === undefined) return null;
+  const n = Number(v);
+  if (!Number.isInteger(n) || n < 1 || n > 65535) return undefined;
+  return n;
+}
+
 app.post('/api/workspaces', (req, res) => {
-  const { name, dir } = req.body || {};
+  const { name, dir, profile, port } = req.body || {};
   if (!name || typeof name !== 'string' || !dir || typeof dir !== 'string') {
     return res.status(400).json({ error: 'name and dir are required' });
   }
@@ -807,9 +1125,47 @@ app.post('/api/workspaces', (req, res) => {
   const existing = workspaces.find((w) => path.resolve(w.dir) === normalized);
   if (existing) return res.status(409).json({ error: `already added as "${existing.name}"` });
   const workspace = { id: crypto.randomUUID(), name, dir: normalized };
+  // Optional pinned account — panes made in this workspace default to it.
+  if (typeof profile === 'string' && profile) workspace.profile = profile;
+  // Optional dev-server port for the sidebar's up/down check.
+  const wsPort = parsePort(port);
+  if (wsPort === undefined) return res.status(400).json({ error: 'port must be 1–65535' });
+  if (wsPort !== null) workspace.port = wsPort;
   workspaces.push(workspace);
   saveWorkspaces();
   res.status(201).json(workspace);
+});
+
+// Pin (or re-pin) a workspace's default account, or rename it. profile '' / null
+// clears the pin → new panes there use the default account again.
+app.patch('/api/workspaces/:id', (req, res) => {
+  const ws = workspaces.find((w) => w.id === req.params.id);
+  if (!ws) return res.status(404).json({ error: 'no such workspace' });
+  const { name, dir, profile, port } = req.body || {};
+  if (typeof name === 'string' && name.trim()) ws.name = name.trim();
+  if (typeof dir === 'string' && dir.trim()) {
+    let stat;
+    try { stat = fs.statSync(dir); } catch { /* handled below */ }
+    if (!stat?.isDirectory()) return res.status(400).json({ error: `not a directory: ${dir}` });
+    const normalized = path.resolve(dir);
+    const clash = workspaces.find((w) => w.id !== ws.id && path.resolve(w.dir) === normalized);
+    if (clash) return res.status(409).json({ error: `already added as "${clash.name}"` });
+    // Running panes were spawned in the old cwd and stay tied to it; only new
+    // panes here use the new root.
+    ws.dir = normalized;
+  }
+  if (profile !== undefined) {
+    if (typeof profile === 'string' && profile) ws.profile = profile;
+    else delete ws.profile;
+  }
+  if (port !== undefined) {
+    const wsPort = parsePort(port);
+    if (wsPort === undefined) return res.status(400).json({ error: 'port must be 1–65535' });
+    if (wsPort !== null) ws.port = wsPort;
+    else delete ws.port;
+  }
+  saveWorkspaces();
+  res.json(ws);
 });
 
 app.delete('/api/workspaces/:id', (req, res) => {
@@ -831,6 +1187,27 @@ function accountEmail(configDir) {
   }
 }
 
+// The named profile signed into the same account as the bare default, if any:
+// same oauth email AND a stored login (so a pane can spawn there without a
+// login screen). null when default is unique or the twin isn't signed in.
+// Panes that ask for "default" get routed here (createSession) so the account's
+// usage lands in one place instead of a duplicate ~/.claude row.
+function mappedDefaultProfile() {
+  const defaultEmail = accountEmail(process.env.CLAUDE_CONFIG_DIR || os.homedir());
+  if (!defaultEmail) return null; // default never logged in — nothing to map
+  try {
+    for (const d of fs.readdirSync(ACCOUNTS_DIR, { withFileTypes: true })) {
+      if (!d.isDirectory()) continue;
+      const dir = path.join(ACCOUNTS_DIR, d.name);
+      if (accountEmail(dir) === defaultEmail
+        && fs.existsSync(path.join(dir, '.credentials.json'))) {
+        return d.name;
+      }
+    }
+  } catch { /* accounts dir doesn't exist yet */ }
+  return null;
+}
+
 app.get('/api/profiles', (_req, res) => {
   let profiles = [];
   try {
@@ -840,8 +1217,12 @@ app.get('/api/profiles', (_req, res) => {
   } catch { /* accounts dir doesn't exist yet */ }
   res.json({
     // default = whatever config dir spawned sessions inherit (~/.claude.json
-    // unless the server itself was started with CLAUDE_CONFIG_DIR set)
-    default: { email: accountEmail(process.env.CLAUDE_CONFIG_DIR || os.homedir()) },
+    // unless the server itself was started with CLAUDE_CONFIG_DIR set).
+    // `mapped` = the named profile it collapses onto (see mappedDefaultProfile).
+    default: {
+      email: accountEmail(process.env.CLAUDE_CONFIG_DIR || os.homedir()),
+      mapped: mappedDefaultProfile(),
+    },
     profiles,
   });
 });
@@ -864,6 +1245,48 @@ app.delete('/api/profiles/:name', (req, res) => {
   } catch (err) {
     return res.status(500).json({ error: `failed to delete: ${err.message}` });
   }
+  // Cut every dangling reference to the now-gone profile (mirrors the rename
+  // handler). Non-running sessions fall back to the default account on revive;
+  // workspaces lose the pin so new panes there don't re-create an empty,
+  // logged-out account dir under the old name.
+  sessions.forEach((s) => { if (s.profile === name) s.profile = null; });
+  persistSessions();
+  workspaces.forEach((w) => { if (w.profile === name) delete w.profile; });
+  saveWorkspaces();
+  res.json({ ok: true });
+});
+
+// Renames a profile: renames its account dir and repoints any session or
+// workspace that referenced the old name. Refused while any live session is
+// using the profile (its spawned process still has the old CLAUDE_CONFIG_DIR
+// open).
+app.patch('/api/profiles/:name', (req, res) => {
+  const name = req.params.name;
+  const nextName = (req.body || {}).name;
+  if (!/^[\w-]+$/.test(name)) {
+    return res.status(400).json({ error: 'bad profile name' });
+  }
+  if (typeof nextName !== 'string' || !/^[\w-]+$/.test(nextName)) {
+    return res.status(400).json({ error: 'new name must be letters, numbers, dashes or underscores' });
+  }
+  if (nextName === name) return res.json({ ok: true });
+  const dir = path.join(ACCOUNTS_DIR, name);
+  const nextDir = path.join(ACCOUNTS_DIR, nextName);
+  if (!fs.existsSync(dir)) return res.status(404).json({ error: 'no such profile' });
+  if (fs.existsSync(nextDir)) return res.status(409).json({ error: 'a profile with that name already exists' });
+  const inUse = [...sessions.values()].some((s) => s.profile === name && s.status === 'running');
+  if (inUse) {
+    return res.status(409).json({ error: 'profile is in use by a running session — kill it first' });
+  }
+  try {
+    fs.renameSync(dir, nextDir);
+  } catch (err) {
+    return res.status(500).json({ error: `failed to rename: ${err.message}` });
+  }
+  sessions.forEach((s) => { if (s.profile === name) s.profile = nextName; });
+  persistSessions();
+  workspaces.forEach((w) => { if (w.profile === name) w.profile = nextName; });
+  saveWorkspaces();
   res.json({ ok: true });
 });
 

@@ -39,6 +39,15 @@ export const IconHelm = (p: IconProps) => (
   </Icon>
 );
 
+export const IconGitBranch = (p: IconProps) => (
+  <Icon {...p}>
+    <line x1="6" y1="3" x2="6" y2="15" />
+    <circle cx="18" cy="6" r="3" />
+    <circle cx="6" cy="18" r="3" />
+    <path d="M18 9a9 9 0 0 1-9 9" />
+  </Icon>
+);
+
 export const IconPlus = (p: IconProps) => (
   <Icon {...p}>
     <path d="M5 12h14" />
@@ -66,6 +75,17 @@ export const IconSearch = (p: IconProps) => (
   </Icon>
 );
 
+export const IconUserSwitch = (p: IconProps) => (
+  <Icon {...p}>
+    <circle cx="9" cy="8" r="3.5" />
+    <path d="M3 20a6 6 0 0 1 12 0" />
+    <path d="M16 5h6" />
+    <path d="m19.5 2.5 2.5 2.5-2.5 2.5" />
+    <path d="M22 11h-6" />
+    <path d="m18.5 8.5-2.5 2.5 2.5 2.5" />
+  </Icon>
+);
+
 export const IconChevronUp = (p: IconProps) => (
   <Icon {...p}>
     <path d="m18 15-6-6-6 6" />
@@ -75,6 +95,19 @@ export const IconChevronUp = (p: IconProps) => (
 export const IconChevronDown = (p: IconProps) => (
   <Icon {...p}>
     <path d="m6 9 6 6 6-6" />
+  </Icon>
+);
+
+export const IconUserRound = (p: IconProps) => (
+  <Icon {...p}>
+    <circle cx="12" cy="8" r="5" />
+    <path d="M20 21a8 8 0 0 0-16 0" />
+  </Icon>
+);
+
+export const IconCheck = (p: IconProps) => (
+  <Icon {...p}>
+    <path d="M20 6 9 17l-5-5" />
   </Icon>
 );
 
@@ -93,6 +126,12 @@ export const IconMinimize = (p: IconProps) => (
     <path d="M20 10h-6V4" />
     <path d="m14 10 7-7" />
     <path d="m3 21 7-7" />
+  </Icon>
+);
+
+export const IconMinus = (p: IconProps) => (
+  <Icon {...p}>
+    <path d="M5 12h14" />
   </Icon>
 );
 
@@ -170,10 +209,59 @@ export const IconFolder = (p: IconProps) => (
   </Icon>
 );
 
+export const IconTerminal = (p: IconProps) => (
+  <Icon {...p}>
+    <rect x="2" y="4" width="20" height="16" rx="2" />
+    <path d="m7 9 3 3-3 3" />
+    <line x1="13" y1="15" x2="17" y2="15" />
+  </Icon>
+);
+
+export const IconServer = (p: IconProps) => (
+  <Icon {...p}>
+    <rect x="2" y="3" width="20" height="8" rx="2" />
+    <rect x="2" y="13" width="20" height="8" rx="2" />
+    <line x1="6" y1="7" x2="6.01" y2="7" />
+    <line x1="6" y1="17" x2="6.01" y2="17" />
+  </Icon>
+);
+
 export const IconTrash = (p: IconProps) => (
   <Icon {...p}>
     <path d="M3 6h18" />
     <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6" />
     <path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+  </Icon>
+);
+
+export const IconPanelLeftClose = (p: IconProps) => (
+  <Icon {...p}>
+    <rect width="18" height="18" x="3" y="3" rx="2" />
+    <path d="M9 3v18" />
+    <path d="m16 15-3-3 3-3" />
+  </Icon>
+);
+
+export const IconPanelLeftOpen = (p: IconProps) => (
+  <Icon {...p}>
+    <rect width="18" height="18" x="3" y="3" rx="2" />
+    <path d="M9 3v18" />
+    <path d="m14 9 3 3-3 3" />
+  </Icon>
+);
+
+export const IconPencil = (p: IconProps) => (
+  <Icon {...p}>
+    <path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z" />
+    <path d="m15 5 4 4" />
+  </Icon>
+);
+
+export const IconUsersGear = (p: IconProps) => (
+  <Icon {...p}>
+    <circle cx="9" cy="7" r="4" />
+    <path d="M2 21v-2a5 5 0 0 1 5-5h1" />
+    <circle cx="18" cy="17" r="3" />
+    <path d="M18 12.5v1M18 20.5v1M21.5 17h-1M15.5 17h-1M20.4 14.6l-.7.7M15.9 18.7l-.7.7M20.4 19.4l-.7-.7M15.9 15.3l-.7-.7" />
   </Icon>
 );

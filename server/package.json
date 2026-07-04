@@ -11,7 +11,8 @@
   "main": "index.mjs",
   "scripts": {
     "dev": "node --watch index.mjs",
-    "start": "node index.mjs"
+    "start": "node index.mjs",
+    "test": "node --test test/smoke.mjs"
   },
   "dependencies": {
     "express": "^4.21.2",

@@ -30,6 +30,14 @@ Browser (React + xterm.js grid) <--WS/REST--> Node server <--PTY--> claude.cmd
   conversation), else a fresh claude in the same workspace/profile. If the
   recorded transcript was never written (claude team-mode sessions — see
   GOTCHAS) it falls back to fresh instead of a doomed --resume.
+- `POST /api/sessions/:id/switch-profile {profile, cols?, rows?}` — move a
+  pane to another account (`profile` ''/null = default). Copies the
+  conversation transcript into the target account's store, kills the old
+  claude, respawns in the same pane with `--resume` — same chat under the new
+  login; attached sockets stay open through the swap. 409 if the target
+  profile has no stored login. Copies are recorded in
+  `imported-transcripts.json` so the usage roll-up doesn't double-count moved
+  history (details in ACCOUNTS.md).
 - `GET /api/sessions/:id/usage` — per-model tokens for that pane's transcript.
 - `GET /api/usage` — roll-up per account (default + each profile) from each
   account's whole transcript store; rolling windows 1 h / 5 h / 10 h / 24 h /
@@ -47,7 +55,24 @@ Browser (React + xterm.js grid) <--WS/REST--> Node server <--PTY--> claude.cmd
 - `GET/PATCH /api/settings` — server toggles, currently `{autoRevive}`.
 - `GET /api/logs?after=<seq>` — in-memory server event log for the UI's 🐞
   drawer; `startedAt`/`pid` identify the process (stale-server check).
-- `GET/POST /api/workspaces`, `DELETE /api/workspaces/:id`.
+- `GET/POST /api/console` → `{supported, visible}` — show/hide the server's own
+  console window (the `start-helm.cmd` terminal). Windows-only, via a PowerShell
+  `GetConsoleWindow`+`ShowWindow` P/Invoke; `supported:false` when non-Windows or
+  launched detached (UI hides the button). POST body `{visible:boolean}`.
+- `GET /api/workspaces/git` → `[{id, branch, dirty, ahead, behind}]` — best-effort
+  `git status` per workspace for the sidebar indicator (branch null = not a repo;
+  each call capped at 2 s). Registered before the `:id` routes so 'git' isn't
+  read as an id. Polled ~6 s by the UI.
+- `GET /api/workspaces/servers` → `[{id, port, up}]` — dev-server liveness for
+  workspaces with a configured `port`: a bare TCP connect to `127.0.0.1:port`
+  (`up` = accepted, capped at 1 s). Also registered before `:id`. Polled ~4 s.
+- `GET/POST /api/workspaces`, `DELETE /api/workspaces/:id`. Workspace =
+  `{id, name, dir, profile?, port?}` — `profile` pins a default account to that
+  project (panes made there run on it → per-project usage); `port` is the
+  project's dev-server port for the liveness check above. `PATCH
+  /api/workspaces/:id {name?, dir?, profile?, port?}` re-pins/renames/re-roots or
+  sets the port; `profile: null|''` clears the pin, `port: null` clears the
+  check, and a `port` outside 1–65535 is a 400.
 - `GET /api/profiles` → `{default:{email}, profiles:[{name,email}]}`;
   `DELETE /api/profiles/:name` (refused while a running session uses it).
 - `POST /api/hook` — hook relay (own token via `x-helm-hook` header).
@@ -79,9 +104,15 @@ which POSTs to Helm. This yields per-pane `activity` (working=blue pulsing,
 waiting=amber, idle=green), plus `claudeSessionId` + `transcriptPath` — which
 power revive and usage. Never scrape ANSI output for status; hooks are the way.
 
+A `Notification` event also carries its `message` into `session.activityNote`
+(cleared when the pane starts working or goes idle), surfaced on `sessionInfo`
+so the badge and desktop alert can say *why* a pane is blocked.
+
 Frontend notifications are edge-triggered off the 3 s session poll: flip to
-`waiting` → "needs your input"; `working→idle` → "finished". Suppressed while
-the tab is focused. Tab title shows "(N waiting)".
+`waiting` → the hook's message (or "needs your input"); `working→idle` →
+"finished". Suppressed while the tab is focused. Tab title shows "(N waiting)";
+a toolbar "N waiting" pill jumps to the next blocked pane (rotates on repeat),
+and Ctrl+Shift+←/→ cycles focus through a workspace's visible panes.
 
 ## Data locations (all local-only, NEVER in the repo — repo syncs to OneDrive!)
 ```
@@ -91,6 +122,8 @@ the tab is focused. Tab title shows "(N waiting)".
   sessions.json          running sessions → revivable as 'dead' after restart
   settings.json          server toggles (currently autoRevive)
   hook-settings.json     generated hook config passed via --settings
+  imported-transcripts.json  transcript copies made by account switches
+                         (path → import time; usage roll-up skips older events)
   attachments\<session>\ files pasted/dropped onto a pane (path typed into it)
   accounts\<profile>\    per-account CLAUDE_CONFIG_DIR (credentials, config,
                          projects\ = transcripts)

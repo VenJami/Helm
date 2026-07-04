@@ -6,12 +6,14 @@ import { WebLinksAddon } from '@xterm/addon-web-links';
 import { SearchAddon } from '@xterm/addon-search';
 import '@xterm/xterm/css/xterm.css';
 import { api, wsUrl } from '../api';
+import { accountLabel } from '../accounts';
 import { Modal } from './Modal';
+import { toast } from './Toaster';
+import { IconGrip, IconMinimize, IconMinus, IconUserSwitch, IconX } from './Icons';
 import {
-  IconChart, IconChevronDown, IconChevronUp, IconGrip, IconMaximize, IconMinimize, IconPaperclip,
-  IconSearch, IconX,
-} from './Icons';
-import type { SessionInfo, UsageInfo } from '../types';
+  AnimateIcon, IconChart, IconChevronDown, IconChevronUp, IconMaximize, IconPaperclip, IconSearch,
+} from './AnimatedIcons';
+import type { Profile, SessionInfo, UsageInfo } from '../types';
 
 type Conn = 'connecting' | 'live' | 'disconnected' | 'exited' | 'dead';
 
@@ -21,11 +23,16 @@ interface Props {
   onChanged: () => void; // parent re-fetches sessions (e.g. after revive)
   isMaximized: boolean;
   onToggleMax: () => void;
+  onMinimize: () => void; // pull this pane out of the grid into the tray
   onGripDragStart: () => void; // drag-to-reorder, handled by the grid
   onGripDragEnd: () => void;
   // This pane receives Ctrl+V file-pastes even when its terminal isn't
   // focused (the maximized pane, or the only pane in the workspace).
   isPasteFallback: boolean;
+  // accounts for the "move to another account" picker
+  profiles: Profile[];
+  defaultEmail: string | null;
+  mappedDefault?: string | null; // named profile the default collapses onto
 }
 
 const fmt = (n: number) =>
@@ -63,8 +70,8 @@ const clipFiles = (e: ClipboardEvent): File[] => {
 };
 
 export function TerminalPane({
-  session, onKilled, onChanged, isMaximized, onToggleMax, onGripDragStart, onGripDragEnd,
-  isPasteFallback,
+  session, onKilled, onChanged, isMaximized, onToggleMax, onMinimize, onGripDragStart, onGripDragEnd,
+  isPasteFallback, profiles, defaultEmail, mappedDefault,
 }: Props) {
   const holderRef = useRef<HTMLDivElement>(null);
   const wsRef = useRef<WebSocket | null>(null);
@@ -77,8 +84,13 @@ export function TerminalPane({
   const [usageOpen, setUsageOpen] = useState(false);
   const [editName, setEditName] = useState<string | null>(null); // null = not editing
   const [colorOpen, setColorOpen] = useState(false);
-  const [reviveError, setReviveError] = useState('');
   const [confirmKill, setConfirmKill] = useState(false);
+  const [switchOpen, setSwitchOpen] = useState(false);
+  // account picked while the pane is mid-task, awaiting confirmation
+  // ('' = default account; null = nothing pending)
+  const [switchTarget, setSwitchTarget] = useState<string | null>(null);
+  const [switching, setSwitching] = useState(false);
+  const [switchError, setSwitchError] = useState('');
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchText, setSearchText] = useState('');
   const [dropActive, setDropActive] = useState(false); // file dragged over the pane
@@ -280,18 +292,40 @@ export function TerminalPane({
 
   const revive = async () => {
     setReviving(true);
-    setReviveError('');
     try {
       const term = termRef.current;
       await api.reviveSession(session.id, term?.cols ?? 80, term?.rows ?? 24);
       onChanged(); // parent poll flips status to running → connect effect fires
     } catch (err) {
       const msg = (err as Error).message;
-      setReviveError(msg); // dead panes show it in the overlay …
-      // … exited panes have no overlay, so surface it in the terminal itself
+      toast.error(`revive failed: ${msg}`);
+      // exited panes have no overlay, so also surface it in the terminal itself
       termRef.current?.write(`\r\n\x1b[31m[revive failed: ${msg}]\x1b[0m\r\n`);
     } finally {
       setReviving(false);
+    }
+  };
+
+  // '' = default account. If the pane is mid-task, ask first (pick → confirm).
+  const pickAccount = (target: string) => {
+    if (conn === 'live' && session.activity === 'working') setSwitchTarget(target);
+    else void switchAccount(target);
+  };
+
+  const switchAccount = async (target: string) => {
+    setSwitching(true);
+    setSwitchError('');
+    try {
+      const term = termRef.current;
+      await api.switchProfile(session.id, target || null, term?.cols ?? 80, term?.rows ?? 24);
+      setSwitchOpen(false);
+      setSwitchTarget(null);
+      onChanged(); // parent poll refreshes the profile shown on the badge
+    } catch (err) {
+      setSwitchError((err as Error).message);
+      setSwitchTarget(null);
+    } finally {
+      setSwitching(false);
     }
   };
 
@@ -336,6 +370,25 @@ export function TerminalPane({
     termRef.current?.focus();
   };
 
+  // Always show which account this pane runs on — including the default
+  // account, which has no `session.profile` name of its own. When default
+  // collapses onto a named profile (same login), show that profile.
+  const effectiveProfile = session.profile || mappedDefault || '';
+  const profileEmail = effectiveProfile
+    ? profiles.find((p) => p.name === effectiveProfile)?.email ?? null
+    : defaultEmail;
+  const profileText = accountLabel(effectiveProfile, profileEmail, profiles);
+
+  // App fires this when the user jumps to (waiting) or cycles to this pane —
+  // focus our terminal so keystrokes land here.
+  useEffect(() => {
+    const onFocusReq = (e: Event) => {
+      if ((e as CustomEvent).detail === session.id) termRef.current?.focus();
+    };
+    window.addEventListener('helm:focus-pane', onFocusReq);
+    return () => window.removeEventListener('helm:focus-pane', onFocusReq);
+  }, [session.id]);
+
   const activity = conn === 'live' ? session.activity : null;
   const dotClass =
     conn === 'live'
@@ -350,7 +403,11 @@ export function TerminalPane({
       : '';
   const label = {
     connecting: 'connecting…',
-    live: `${activity ?? 'live'}${since}${session.profile ? ` · ${session.profile}` : ''}`,
+    // When blocked, show the hook's reason ("Claude needs permission to…") in
+    // place of the profile so you can see why without opening the pane.
+    live: activity === 'waiting' && session.activityNote
+      ? `${activity}${since} · ${session.activityNote}`
+      : `${activity ?? 'live'}${since} · ${profileText}`,
     disconnected: 'disconnected',
     exited: `exited (${exitCode ?? session.exitCode})`,
     dead: 'dead — server restarted',
@@ -407,33 +464,59 @@ export function TerminalPane({
         <span className="pane-title" title={session.workspace}>
           {label}
         </span>
-        <button
-          className="ibtn"
-          disabled={conn !== 'live'}
-          onClick={() => fileInputRef.current?.click()}
-          title="Attach a file — or paste/drop one onto the pane"
-        >
-          <IconPaperclip size={14} />
-        </button>
-        <button
-          className="ibtn"
-          onClick={() => (searchOpen ? closeSearch() : setSearchOpen(true))}
-          title="Find in scrollback (Ctrl+Shift+F)"
-        >
-          <IconSearch size={14} />
-        </button>
-        {session.hasTranscript && (
-          <button className="ibtn" onClick={toggleUsage} title="Token usage by model">
-            <IconChart size={14} />
+        <AnimateIcon asChild>
+          <button
+            className="ibtn"
+            disabled={conn !== 'live'}
+            onClick={() => fileInputRef.current?.click()}
+            title="Attach a file — or paste/drop one onto the pane"
+          >
+            <IconPaperclip size={14} />
           </button>
+        </AnimateIcon>
+        <AnimateIcon asChild>
+          <button
+            className="ibtn"
+            onClick={() => (searchOpen ? closeSearch() : setSearchOpen(true))}
+            title="Find in scrollback (Ctrl+Shift+F)"
+          >
+            <IconSearch size={14} />
+          </button>
+        </AnimateIcon>
+        {session.hasTranscript && (
+          <AnimateIcon asChild>
+            <button className="ibtn" onClick={toggleUsage} title="Token usage by model">
+              <IconChart size={14} />
+            </button>
+          </AnimateIcon>
         )}
         <button
           className="ibtn"
-          onClick={onToggleMax}
-          title={isMaximized ? 'Back to grid (Esc)' : 'Maximize this pane (Ctrl+Shift+M)'}
+          onClick={() => {
+            setSwitchError('');
+            setSwitchTarget(null);
+            setSwitchOpen(true);
+          }}
+          title="Move this pane to another account"
         >
-          {isMaximized ? <IconMinimize size={14} /> : <IconMaximize size={14} />}
+          <IconUserSwitch size={14} />
         </button>
+        {!isMaximized && (
+          <AnimateIcon asChild>
+            <button className="ibtn" onClick={onMinimize} title="Minimize this pane to the tray">
+              <IconMinus size={14} />
+            </button>
+          </AnimateIcon>
+        )}
+        <AnimateIcon asChild>
+          <button
+            className="ibtn"
+            onClick={onToggleMax}
+            title={isMaximized ? 'Back to grid (Esc)' : 'Maximize this pane (Ctrl+Shift+M)'}
+          >
+            {isMaximized ? <IconMinimize size={14} /> : <IconMaximize size={14} />}
+          </button>
+        </AnimateIcon>
         {conn === 'disconnected' && (
           <button className="btn btn-small" onClick={() => setConnectNonce((n) => n + 1)}>
             Reconnect
@@ -506,20 +589,24 @@ export function TerminalPane({
                 }
               }}
             />
-            <button
-              className="ibtn"
-              title="Previous match (Shift+Enter)"
-              onClick={() => searchRef.current?.findPrevious(searchText)}
-            >
-              <IconChevronUp size={14} />
-            </button>
-            <button
-              className="ibtn"
-              title="Next match (Enter)"
-              onClick={() => searchRef.current?.findNext(searchText)}
-            >
-              <IconChevronDown size={14} />
-            </button>
+            <AnimateIcon asChild>
+              <button
+                className="ibtn"
+                title="Previous match (Shift+Enter)"
+                onClick={() => searchRef.current?.findPrevious(searchText)}
+              >
+                <IconChevronUp size={14} />
+              </button>
+            </AnimateIcon>
+            <AnimateIcon asChild>
+              <button
+                className="ibtn"
+                title="Next match (Enter)"
+                onClick={() => searchRef.current?.findNext(searchText)}
+              >
+                <IconChevronDown size={14} />
+              </button>
+            </AnimateIcon>
             <button className="ibtn" title="Close (Esc)" onClick={closeSearch}>
               <IconX size={14} />
             </button>
@@ -574,7 +661,6 @@ export function TerminalPane({
             <button className="btn" onClick={revive} disabled={reviving}>
               {reviving ? 'reviving…' : session.canResume ? 'Revive (resume conversation)' : 'Restart (fresh session)'}
             </button>
-            {reviveError && <div className="form-error">revive failed: {reviveError}</div>}
           </div>
         )}
       </div>
@@ -588,6 +674,65 @@ export function TerminalPane({
           e.target.value = ''; // allow re-picking the same file later
         }}
       />
+      {switchOpen && (
+        <Modal
+          title={`Move "${session.name}" to another account`}
+          onClose={() => { setSwitchOpen(false); setSwitchTarget(null); }}
+        >
+          {switchTarget === null ? (
+            <>
+              <p className="modal-desc">
+                {session.canResume
+                  ? 'Claude restarts inside this pane on the account you pick and resumes this conversation there.'
+                  : 'No resumable conversation was captured for this pane — it restarts fresh on the account you pick.'}
+              </p>
+              <div className="manage-list">
+                {(mappedDefault ? profiles : [{ name: '', email: defaultEmail }, ...profiles]).map((p) => {
+                  const current = (effectiveProfile || '') === p.name;
+                  const signedOut = p.name !== '' && !p.email;
+                  return (
+                    <button
+                      key={p.name || '(default)'}
+                      className="account-row"
+                      disabled={current || signedOut || switching}
+                      onClick={() => pickAccount(p.name)}
+                      title={signedOut ? 'Not signed in — open a pane on this profile and sign in first' : undefined}
+                    >
+                      <span className="manage-row-info">
+                        <span className="manage-row-name">{accountLabel(p.name, p.email, profiles)}</span>
+                        <span className="manage-row-email">{p.email ?? 'not signed in'}</span>
+                      </span>
+                      {current && <span className="account-current">current</span>}
+                    </button>
+                  );
+                })}
+              </div>
+              {switchError && <div className="form-error">{switchError}</div>}
+              <div className="modal-actions">
+                <button className="btn btn-ghost" onClick={() => setSwitchOpen(false)}>Cancel</button>
+              </div>
+            </>
+          ) : (
+            <>
+              <p className="modal-desc">
+                This pane is still working — switching restarts Claude and interrupts the
+                task in progress. The conversation itself moves along with the pane.
+              </p>
+              {switchError && <div className="form-error">{switchError}</div>}
+              <div className="modal-actions">
+                <button className="btn btn-ghost" onClick={() => setSwitchTarget(null)}>Back</button>
+                <button
+                  className="btn btn-danger"
+                  disabled={switching}
+                  onClick={() => void switchAccount(switchTarget)}
+                >
+                  {switching ? 'Switching…' : 'Switch anyway'}
+                </button>
+              </div>
+            </>
+          )}
+        </Modal>
+      )}
       {confirmKill && (
         <Modal title={`Kill "${session.name}" mid-task?`} onClose={() => setConfirmKill(false)}>
           <p className="modal-desc">

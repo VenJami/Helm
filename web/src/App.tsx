@@ -1,17 +1,22 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { api } from './api';
-import type { AccountUsage, LogEntry, Profile, SessionInfo, Workspace } from './types';
+import { accountLabel } from './accounts';
+import type { AccountUsage, GitInfo, LogEntry, Profile, ServerInfo, SessionInfo, Workspace } from './types';
 import { Sidebar } from './components/Sidebar';
 import { TerminalPane } from './components/TerminalPane';
 import { Modal } from './components/Modal';
+import { ProfileSelect } from './components/ProfileSelect';
+import { TargetCursor } from './components/TargetCursor';
+import { Toaster, toast } from './components/Toaster';
+import { IconBug, IconPanelLeftOpen, IconPencil, IconPlus, IconTrash } from './components/Icons';
 import {
-  IconBell, IconBellOff, IconBug, IconChart, IconMegaphone, IconPlus, IconRefresh, IconTrash,
-} from './components/Icons';
-
-const NEW_PROFILE = '__new__';
+  AnimateIcon, IconBellOff, IconBellRing, IconChart, IconNfc, IconRefreshCcw, IconTerminal,
+} from './components/AnimatedIcons';
 
 type Dialog =
   | { kind: 'new-profile' }
+  | { kind: 'manage-profiles' }
+  | { kind: 'edit-profile'; profile: Profile }
   | { kind: 'delete-profile'; profile: Profile }
   | { kind: 'usage' }
   | { kind: 'broadcast' }
@@ -19,6 +24,28 @@ type Dialog =
 
 const fmt = (n: number) =>
   n >= 1e6 ? (n / 1e6).toFixed(1) + 'M' : n >= 1e3 ? (n / 1e3).toFixed(1) + 'k' : String(n);
+
+// Rough dollar figure — cents matter at the low end, so surface <$0.01 rather
+// than a flat $0.00 that reads as "free".
+const fmtCost = (n: number) =>
+  n <= 0 ? '$0'
+    : n < 0.01 ? '<$0.01'
+    : n < 100 ? '$' + n.toFixed(2)
+    : '$' + Math.round(n).toLocaleString();
+
+// "just now" / "2h ago" / "3d ago" from an epoch-ms timestamp (null = never).
+const relTime = (ms: number | null): string => {
+  if (!ms) return 'never used';
+  const s = Math.max(0, (Date.now() - ms) / 1000);
+  if (s < 90) return 'used just now';
+  const m = s / 60;
+  if (m < 60) return `used ${Math.round(m)}m ago`;
+  const h = m / 60;
+  if (h < 24) return `used ${Math.round(h)}h ago`;
+  const d = h / 24;
+  if (d < 7) return `used ${Math.round(d)}d ago`;
+  return `used ${Math.round(d / 7)}w ago`;
+};
 
 const USAGE_WINDOWS = [
   ['h1', '1 h'],
@@ -32,14 +59,16 @@ const USAGE_WINDOWS = [
 
 export function App() {
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
+  const [gitInfo, setGitInfo] = useState<Record<string, GitInfo>>({});
+  const [serverInfo, setServerInfo] = useState<Record<string, ServerInfo>>({});
   const [sessions, setSessions] = useState<SessionInfo[]>([]);
   const [profiles, setProfiles] = useState<Profile[]>([]);
   const [defaultEmail, setDefaultEmail] = useState<string | null>(null);
+  const [defaultMapped, setDefaultMapped] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(
     localStorage.getItem('helm.workspaceId'),
   );
   const [profileChoice, setProfileChoice] = useState('');
-  const [error, setError] = useState('');
   const [dialog, setDialog] = useState<Dialog>(null);
   const [draftName, setDraftName] = useState('');
   const [draftError, setDraftError] = useState('');
@@ -48,14 +77,44 @@ export function App() {
   );
   const [globalUsage, setGlobalUsage] = useState<AccountUsage[] | null>(null);
   // 5h ≈ the subscription session window — the slice that matters most
-  const [usageWindow, setUsageWindow] = useState('h5');
+  const [usageWindow, setUsageWindow] = useState('d7');
   const [maximizedId, setMaximizedId] = useState<string | null>(null);
+  const [minimizedIds, setMinimizedIds] = useState<Set<string>>(new Set());
+  // Pane that briefly pulses after a jump/cycle so the eye can find it.
+  const [flashId, setFlashId] = useState<string | null>(null);
+  // Which pane's terminal last held focus — the anchor for Ctrl+Shift+←/→ cycling.
+  const activePaneRef = useRef<string | null>(null);
+  const flashTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [sidebarHidden, setSidebarHidden] = useState(
+    () => localStorage.getItem('helm.sidebarHidden') === '1',
+  );
+  const toggleSidebar = () =>
+    setSidebarHidden((h) => {
+      const next = !h;
+      localStorage.setItem('helm.sidebarHidden', next ? '1' : '0');
+      return next;
+    });
   const [autoRevive, setAutoRevive] = useState(false); // mirrors server settings
   // Broadcast dialog: one instruction typed into several panes at once
   const [bcText, setBcText] = useState('');
   const [bcIds, setBcIds] = useState<Set<string>>(new Set());
   const [bcBusy, setBcBusy] = useState(false);
   const [bcError, setBcError] = useState('');
+
+  // Server console window (start-helm.cmd terminal) show/hide toggle.
+  const [consoleState, setConsoleState] = useState<{ supported: boolean; visible: boolean }>(
+    { supported: false, visible: true },
+  );
+  useEffect(() => {
+    api.getConsole().then(setConsoleState).catch(() => {});
+  }, []);
+  const toggleConsole = async () => {
+    try {
+      setConsoleState(await api.setConsole(!consoleState.visible));
+    } catch (err) {
+      toast.error((err as Error).message);
+    }
+  };
 
   // Debug drawer: tails the server's event log while open
   const [debugOpen, setDebugOpen] = useState(false);
@@ -81,6 +140,21 @@ export function App() {
   useEffect(() => {
     logEndRef.current?.scrollIntoView({ block: 'end' });
   }, [logs]);
+
+  // Suppress the browser's default right-click menu app-wide — the owner finds
+  // it distracting. Real form fields (the add-workspace inputs, broadcast box)
+  // keep their native menu so paste still works; the terminal's hidden textarea
+  // does NOT, so right-clicking a pane no longer pops the browser menu. The
+  // sidebar's own workspace menu (Sidebar.tsx) opens on top of this.
+  useEffect(() => {
+    const onCtx = (e: MouseEvent) => {
+      const t = e.target as HTMLElement | null;
+      if (t?.closest('input, textarea') && !t.closest('.xterm')) return;
+      e.preventDefault();
+    };
+    document.addEventListener('contextmenu', onCtx);
+    return () => document.removeEventListener('contextmenu', onCtx);
+  }, []);
 
   const openUsage = () => {
     setDialog({ kind: 'usage' });
@@ -119,12 +193,14 @@ export function App() {
         const where = s.workspace.split(/[\\/]/).filter(Boolean).pop();
         let text: string | null = null;
         if (s.activity === 'waiting' && was !== 'waiting') {
-          text = `needs your input · ${where}`;
+          // Prefer the hook's own message ("Claude needs permission to…") so
+          // the alert says why it's blocked, not just the generic phrase.
+          text = `${s.activityNote || 'needs your input'} · ${where}`;
         } else if (s.activity === 'idle' && was === 'working') {
           text = `finished · ${where}`;
         }
         if (text) {
-          const n = new Notification(`${s.name} ${text}`, { tag: s.id });
+          const n = new Notification(`${s.name} · ${text}`, { tag: s.id });
           n.onclick = () => window.focus();
         }
       }
@@ -141,6 +217,7 @@ export function App() {
     api.listProfiles().then((info) => {
       setProfiles(info.profiles);
       setDefaultEmail(info.default.email);
+      setDefaultMapped(info.default.mapped);
     }).catch(() => {});
   }, [maybeNotify]);
 
@@ -152,7 +229,7 @@ export function App() {
     }
     const perm = await Notification.requestPermission();
     if (perm !== 'granted') {
-      setError('notifications are blocked for this site in the browser');
+      toast.error('notifications are blocked for this site in the browser');
       return;
     }
     setNotify(true);
@@ -173,16 +250,46 @@ export function App() {
     return () => clearInterval(timer);
   }, [refresh]);
 
+  // Git branch/dirty per workspace — slower poll than sessions (6 s); branches
+  // and working-tree state change on a human timescale, and it spawns git.
+  useEffect(() => {
+    const pull = () =>
+      api.getWorkspacesGit()
+        .then((list) => setGitInfo(Object.fromEntries(list.map((g) => [g.id, g]))))
+        .catch(() => {});
+    pull();
+    const timer = setInterval(pull, 6000);
+    return () => clearInterval(timer);
+  }, []);
+
+  // Dev-server up/down per workspace — polled a touch faster than git (4 s), so
+  // starting/stopping a project server reflects quickly. Just a TCP connect.
+  useEffect(() => {
+    const pull = () =>
+      api.getWorkspacesServers()
+        .then((list) => setServerInfo(Object.fromEntries(list.map((s) => [s.id, s]))))
+        .catch(() => {});
+    pull();
+    const timer = setInterval(pull, 4000);
+    return () => clearInterval(timer);
+  }, []);
+
   const toggleAutoRevive = async () => {
     try {
       const s = await api.updateSettings({ autoRevive: !autoRevive });
       setAutoRevive(s.autoRevive);
     } catch (err) {
-      setError((err as Error).message);
+      toast.error((err as Error).message);
     }
   };
 
   const selected = workspaces.find((w) => w.id === selectedId) ?? workspaces[0] ?? null;
+
+  // The profile picker is per-workspace: selecting a workspace loads its pinned
+  // account into the picker so new panes there run on it (→ separate usage).
+  useEffect(() => {
+    setProfileChoice(selected?.profile ?? '');
+  }, [selected?.id, selected?.profile]);
 
   // Pane order per workspace — presentational, kept in localStorage.
   // Unlisted panes (new ones) fall to the end in creation order.
@@ -207,6 +314,16 @@ export function App() {
           a.createdAt.localeCompare(b.createdAt),
       );
   }, [sessions, selected, paneOrder]);
+
+  // Panes minimized to the tray are excluded from the grid's column count.
+  const minimizedPanes = useMemo(
+    () => panes.filter((p) => minimizedIds.has(p.id)),
+    [panes, minimizedIds],
+  );
+  const shownPanes = useMemo(
+    () => panes.filter((p) => !minimizedIds.has(p.id)),
+    [panes, minimizedIds],
+  );
 
   // Drag-to-reorder: grip in a pane header → drop on another pane's slot
   const [dragId, setDragId] = useState<string | null>(null);
@@ -281,6 +398,26 @@ export function App() {
     select(ws.id);
   };
 
+  const renameWorkspace = async (id: string, name: string) => {
+    const ws = await api.updateWorkspace(id, { name });
+    setWorkspaces((prev) => prev.map((w) => (w.id === id ? ws : w)));
+  };
+
+  const changeWorkspaceDir = async (id: string, dir: string) => {
+    const ws = await api.updateWorkspace(id, { dir });
+    setWorkspaces((prev) => prev.map((w) => (w.id === id ? ws : w)));
+  };
+
+  // port null clears the dev-server check; a new value refreshes the poll below.
+  const setWorkspacePort = async (id: string, port: number | null) => {
+    const ws = await api.updateWorkspace(id, { port });
+    setWorkspaces((prev) => prev.map((w) => (w.id === id ? ws : w)));
+    if (port === null) setServerInfo((prev) => { const next = { ...prev }; delete next[id]; return next; });
+    api.getWorkspacesServers()
+      .then((list) => setServerInfo(Object.fromEntries(list.map((s) => [s.id, s]))))
+      .catch(() => {});
+  };
+
   const removeWorkspace = async (id: string) => {
     await api.removeWorkspace(id).catch(() => {});
     setWorkspaces((prev) => prev.filter((w) => w.id !== id));
@@ -289,7 +426,6 @@ export function App() {
 
   const createPane = async (profile: string) => {
     if (!selected) return;
-    setError('');
     try {
       // Panes start ~80x24; the pane itself sends the real size on attach.
       const s = await api.createSession(selected.dir, profile || undefined, 80, 24);
@@ -298,22 +434,89 @@ export function App() {
         setProfiles((prev) => [...prev, { name: profile, email: null }]);
       }
     } catch (err) {
-      setError((err as Error).message);
+      toast.error((err as Error).message);
     }
   };
 
-  const newPane = () => {
-    if (profileChoice === NEW_PROFILE) {
-      setDialog({ kind: 'new-profile' });
-      return;
-    }
-    void createPane(profileChoice);
+  const newPane = () => void createPane(profileChoice);
+
+  // Picking an account pins it to the current workspace (persisted), so the
+  // choice sticks per project rather than being a transient global toggle.
+  const chooseProfile = (name: string) => {
+    setProfileChoice(name);
+    if (!selected) return;
+    setWorkspaces((prev) =>
+      prev.map((w) => (w.id === selected.id ? { ...w, profile: name || undefined } : w)),
+    );
+    api.updateWorkspace(selected.id, { profile: name || null }).catch(() => {});
   };
 
   const onKilled = (id: string) => {
     setSessions((prev) => prev.filter((s) => s.id !== id));
     setMaximizedId((m) => (m === id ? null : m));
+    setMinimizedIds((prev) => {
+      if (!prev.has(id)) return prev;
+      const next = new Set(prev);
+      next.delete(id);
+      return next;
+    });
   };
+
+  const minimizePane = (id: string) => {
+    setMinimizedIds((prev) => new Set(prev).add(id));
+  };
+
+  const restorePane = (id: string) => {
+    setMinimizedIds((prev) => {
+      const next = new Set(prev);
+      next.delete(id);
+      return next;
+    });
+  };
+
+  // Bring a pane front-and-center: scroll it into view, focus its terminal
+  // (the pane listens for this event), and pulse it so the eye lands on it.
+  const focusPane = (id: string) => {
+    activePaneRef.current = id;
+    setFlashId(id);
+    setTimeout(() => {
+      document.getElementById(`pane-${id}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      window.dispatchEvent(new CustomEvent('helm:focus-pane', { detail: id }));
+    }, 60);
+    if (flashTimer.current) clearTimeout(flashTimer.current);
+    flashTimer.current = setTimeout(() => setFlashId((f) => (f === id ? null : f)), 1600);
+  };
+
+  // Click "N waiting" → hop to the next pane blocked on you, across workspaces,
+  // rotating through them on repeated clicks.
+  const waitingRotor = useRef(0);
+  const jumpToWaiting = () => {
+    const blocked = sessions.filter((s) => s.status === 'running' && s.activity === 'waiting');
+    if (!blocked.length) return;
+    const target = blocked[waitingRotor.current % blocked.length];
+    waitingRotor.current += 1;
+    const ws = workspaces.find((w) => w.dir === target.workspace);
+    if (ws && ws.id !== selected?.id) select(ws.id);
+    setMaximizedId(null);
+    restorePane(target.id);
+    focusPane(target.id);
+  };
+
+  // Ctrl+Shift+←/→ cycles focus through the visible panes of this workspace.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!(e.ctrlKey && e.shiftKey) || (e.key !== 'ArrowRight' && e.key !== 'ArrowLeft')) return;
+      if (!shownPanes.length) return;
+      e.preventDefault();
+      const cur = activePaneRef.current;
+      const at = shownPanes.findIndex((p) => p.id === cur);
+      const step = e.key === 'ArrowRight' ? 1 : shownPanes.length - 1;
+      const next = at === -1 ? shownPanes[0] : shownPanes[(at + step) % shownPanes.length];
+      focusPane(next.id);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [shownPanes]);
 
   const submitNewProfile = () => {
     const name = draftName.trim();
@@ -328,7 +531,7 @@ export function App() {
     setDialog(null);
     setDraftName('');
     setDraftError('');
-    setProfileChoice(name);
+    chooseProfile(name); // pin the new account to this workspace
     void createPane(name);
   };
 
@@ -341,83 +544,152 @@ export function App() {
 
   const confirmDeleteProfile = async (name: string) => {
     setDialog(null);
-    setError('');
     try {
       await api.deleteProfile(name);
       setProfiles((prev) => prev.filter((p) => p.name !== name));
       setProfileChoice('');
+      // Unpin the deleted account from any workspace that had it pinned.
+      workspaces.forEach((w) => {
+        if (w.profile === name) api.updateWorkspace(w.id, { profile: null }).catch(() => {});
+      });
+      setWorkspaces((prev) =>
+        prev.map((w) => (w.profile === name ? { ...w, profile: undefined } : w)),
+      );
     } catch (err) {
-      setError((err as Error).message);
+      toast.error((err as Error).message);
+    }
+  };
+
+  const submitRenameProfile = async (oldName: string) => {
+    const nextName = draftName.trim();
+    if (!/^[\w-]+$/.test(nextName)) {
+      setDraftError('Use letters, numbers, dashes or underscores only.');
+      return;
+    }
+    if (nextName !== oldName && profiles.some((p) => p.name === nextName)) {
+      setDraftError('That profile already exists.');
+      return;
+    }
+    try {
+      await api.renameProfile(oldName, nextName);
+      setProfiles((prev) => prev.map((p) => (p.name === oldName ? { ...p, name: nextName } : p)));
+      if (profileChoice === oldName) setProfileChoice(nextName);
+      setWorkspaces((prev) =>
+        prev.map((w) => (w.profile === oldName ? { ...w, profile: nextName } : w)),
+      );
+      setDialog({ kind: 'manage-profiles' });
+      setDraftName('');
+      setDraftError('');
+    } catch (err) {
+      setDraftError((err as Error).message);
     }
   };
 
   return (
     <div className="app">
-      <Sidebar
-        workspaces={workspaces}
-        sessions={sessions}
-        selectedId={selected?.id ?? null}
-        onSelect={select}
-        onAdd={addWorkspace}
-        onRemove={removeWorkspace}
+      {/* Custom cursor lives in the sidebar only — everywhere else the
+          normal cursor is untouched. Targets matched by selector, no
+          .cursor-target classes needed. */}
+      <TargetCursor
+        scopeSelector=".sidebar"
+        targetSelector=".ws-item, .sidebar button, .sidebar input"
+        spinDuration={3}
+        hideDefaultCursor={true}
+        parallaxOn={true}
       />
+      {!sidebarHidden && (
+        <Sidebar
+          workspaces={workspaces}
+          sessions={sessions}
+          git={gitInfo}
+          servers={serverInfo}
+          selectedId={selected?.id ?? null}
+          defaultEmail={defaultEmail}
+          profiles={profiles}
+          onSelect={select}
+          onAdd={addWorkspace}
+          onRename={renameWorkspace}
+          onChangeDir={changeWorkspaceDir}
+          onSetPort={setWorkspacePort}
+          onRemove={removeWorkspace}
+          onHide={toggleSidebar}
+        />
+      )}
       <main className="main">
         {selected ? (
           <>
             <div className="main-bar">
-              <span className="main-title" title={selected.dir}>{selected.name}</span>
-              <select value={profileChoice} onChange={(e) => setProfileChoice(e.target.value)}>
-                <option value="">
-                  default{defaultEmail ? ` — ${defaultEmail}` : ''}
-                </option>
-                {profiles.map((p) => (
-                  <option key={p.name} value={p.name}>
-                    {p.name} — {p.email ?? 'not logged in'}
-                  </option>
-                ))}
-                <option value={NEW_PROFILE}>+ new profile…</option>
-              </select>
+              {sidebarHidden && (
+                <button className="tbtn tbtn-icon" title="Show sidebar" onClick={toggleSidebar}>
+                  <IconPanelLeftOpen />
+                </button>
+              )}
+              <span className="main-label">Profile</span>
+              <ProfileSelect
+                profiles={profiles}
+                defaultEmail={defaultEmail}
+                mappedDefault={defaultMapped}
+                value={profileChoice}
+                onChange={chooseProfile}
+                onNewProfile={() => setDialog({ kind: 'new-profile' })}
+                onManageProfiles={() => setDialog({ kind: 'manage-profiles' })}
+              />
               <button className="btn" onClick={newPane}>
                 <IconPlus size={13} /> New pane
               </button>
-              <button
-                className="btn btn-secondary"
-                onClick={openBroadcast}
-                disabled={!runningPanes.length}
-                title="Send one instruction to several panes at once"
-              >
-                <IconMegaphone size={13} /> Broadcast
-              </button>
-              {profileChoice && profileChoice !== NEW_PROFILE && (
+              <AnimateIcon asChild>
                 <button
-                  className="btn btn-small btn-danger"
-                  onClick={() => {
-                    const p = profiles.find((x) => x.name === profileChoice);
-                    if (p) setDialog({ kind: 'delete-profile', profile: p });
-                  }}
-                  title="Delete this profile (removes its stored login)"
+                  className="btn btn-secondary"
+                  onClick={openBroadcast}
+                  disabled={!runningPanes.length}
+                  title="Send one instruction to several panes at once"
                 >
-                  <IconTrash size={12} /> Delete profile
+                  <IconNfc size={13} /> Broadcast
                 </button>
-              )}
-              {error && <span className="form-error">{error}</span>}
+              </AnimateIcon>
               <div className="toolbar-right">
-                <button
-                  className="tbtn"
-                  onClick={openUsage}
-                  title="Token usage per account — rolling windows from 1 h to 30 d, plus all time"
-                >
-                  <IconChart /> Usage
-                </button>
-                <button
-                  className={`tbtn ${autoRevive ? 'on' : ''}`}
-                  onClick={toggleAutoRevive}
-                  title={autoRevive
-                    ? 'Auto-revive on: dead panes come back automatically when the server starts'
-                    : 'Auto-revive off — after a server restart, each dead pane needs a revive click'}
-                >
-                  <IconRefresh /> Auto-revive
-                </button>
+                {waiting > 0 && (
+                  <button
+                    className="tbtn waiting-jump"
+                    onClick={jumpToWaiting}
+                    title="Jump to a pane waiting on you (repeat to cycle through them)"
+                  >
+                    <span className="dot dot-waiting" /> {waiting} waiting
+                  </button>
+                )}
+                <AnimateIcon asChild>
+                  <button
+                    className="tbtn"
+                    onClick={openUsage}
+                    title="Token usage per account — rolling windows from 1 h to 30 d, plus all time"
+                  >
+                    <IconChart /> Usage
+                  </button>
+                </AnimateIcon>
+                <AnimateIcon asChild>
+                  <button
+                    className={`tbtn ${autoRevive ? 'on' : ''}`}
+                    onClick={toggleAutoRevive}
+                    title={autoRevive
+                      ? 'Auto-revive on: dead panes come back automatically when the server starts'
+                      : 'Auto-revive off — after a server restart, each dead pane needs a revive click'}
+                  >
+                    <IconRefreshCcw /> Auto-revive
+                  </button>
+                </AnimateIcon>
+                {consoleState.supported && (
+                  <AnimateIcon asChild>
+                    <button
+                      className={`tbtn ${consoleState.visible ? 'on' : ''}`}
+                      onClick={toggleConsole}
+                      title={consoleState.visible
+                        ? 'Hide the Helm server console window'
+                        : 'Show the Helm server console window'}
+                    >
+                      <IconTerminal /> Console
+                    </button>
+                  </AnimateIcon>
+                )}
                 <button
                   className={`tbtn ${debugOpen ? 'on' : ''}`}
                   onClick={() => setDebugOpen((o) => !o)}
@@ -425,24 +697,54 @@ export function App() {
                 >
                   <IconBug /> Debug
                 </button>
-                <button
-                  className={`tbtn ${notify ? 'on' : ''}`}
-                  onClick={toggleNotify}
-                  title={notify
-                    ? 'Alerts on: you get a desktop notification when a pane needs input or finishes (while this tab is unfocused)'
-                    : 'Alerts off — click to get desktop notifications when a pane needs input or finishes'}
-                >
-                  {notify ? <IconBell /> : <IconBellOff />} Alerts
-                </button>
+                <AnimateIcon asChild>
+                  <button
+                    className={`tbtn ${notify ? 'on' : ''}`}
+                    onClick={toggleNotify}
+                    title={notify
+                      ? 'Alerts on: you get a desktop notification when a pane needs input or finishes (while this tab is unfocused)'
+                      : 'Alerts off — click to get desktop notifications when a pane needs input or finishes'}
+                  >
+                    {notify ? <IconBellRing /> : <IconBellOff />} Alerts
+                  </button>
+                </AnimateIcon>
               </div>
             </div>
+            {minimizedPanes.length > 0 && (
+              <div className="pane-tray">
+                {minimizedPanes.map((s) => (
+                  <button
+                    key={s.id}
+                    className="tray-chip"
+                    style={{ borderColor: s.color }}
+                    title={`Restore "${s.name}"`}
+                    onClick={() => restorePane(s.id)}
+                  >
+                    <span
+                      className={`dot ${
+                        { working: 'dot-working', waiting: 'dot-waiting', idle: 'dot-live' }[
+                          s.activity ?? 'idle'
+                        ]
+                      }`}
+                    />
+                    <span style={{ color: s.color }}>{s.name}</span>
+                  </button>
+                ))}
+              </div>
+            )}
             {panes.length ? (
-              <div className={maximizedId ? 'grid cols-1' : `grid cols-${Math.min(panes.length, 3)}`}>
+              <div className={maximizedId ? 'grid cols-1' : `grid cols-${Math.min(Math.max(shownPanes.length, 1), 3)}`}>
                 {panes.map((s) => (
                   <div
                     key={s.id}
-                    className={`pane-slot ${dragOverId === s.id && dragId && dragId !== s.id ? 'drag-over' : ''}`}
-                    style={maximizedId && maximizedId !== s.id ? { display: 'none' } : undefined}
+                    id={`pane-${s.id}`}
+                    className={`pane-slot ${dragOverId === s.id && dragId && dragId !== s.id ? 'drag-over' : ''}${flashId === s.id ? ' pane-flash' : ''}`}
+                    onFocusCapture={() => { activePaneRef.current = s.id; }}
+                    style={
+                      (maximizedId && maximizedId !== s.id) || (!maximizedId && minimizedIds.has(s.id))
+                        ? { display: 'none' }
+                        : undefined
+                    }
                     onDragOver={(e) => {
                       if (!dragId) return;
                       e.preventDefault();
@@ -461,10 +763,17 @@ export function App() {
                       onKilled={onKilled}
                       onChanged={refresh}
                       isMaximized={maximizedId === s.id}
-                      onToggleMax={() => setMaximizedId((m) => (m === s.id ? null : s.id))}
+                      onToggleMax={() => {
+                        restorePane(s.id);
+                        setMaximizedId((m) => (m === s.id ? null : s.id));
+                      }}
+                      onMinimize={() => minimizePane(s.id)}
                       onGripDragStart={() => setDragId(s.id)}
                       onGripDragEnd={() => { setDragId(null); setDragOverId(null); }}
                       isPasteFallback={maximizedId === s.id || (!maximizedId && panes.length === 1)}
+                      profiles={profiles}
+                      defaultEmail={defaultEmail}
+                      mappedDefault={defaultMapped}
                     />
                   </div>
                 ))}
@@ -476,7 +785,14 @@ export function App() {
             )}
           </>
         ) : (
-          <div className="main-empty">Add a workspace to get started.</div>
+          <div className="main-empty">
+            {sidebarHidden && (
+              <button className="btn btn-secondary" onClick={toggleSidebar}>
+                <IconPanelLeftOpen size={13} /> Show sidebar
+              </button>
+            )}
+            <div>Add a workspace to get started.</div>
+          </div>
         )}
         {debugOpen && (
           <div className="debug-drawer">
@@ -533,6 +849,87 @@ export function App() {
         </Modal>
       )}
 
+      {dialog?.kind === 'manage-profiles' && (
+        <Modal title="Manage profiles" onClose={closeDialog}>
+          {profiles.length === 0 ? (
+            <p className="modal-desc">No profiles yet — create one from the profile picker.</p>
+          ) : (
+            <div className="manage-list">
+              {profiles.map((p) => (
+                <div className="manage-row" key={p.name}>
+                  <div className="manage-row-info">
+                    <span className="manage-row-name">{p.name}</span>
+                    <span className="manage-row-email">{p.email ?? 'not logged in'}</span>
+                  </div>
+                  <button
+                    className="btn btn-small btn-ghost"
+                    title="Rename profile"
+                    onClick={() => {
+                      setDraftName(p.name);
+                      setDraftError('');
+                      setDialog({ kind: 'edit-profile', profile: p });
+                    }}
+                  >
+                    <IconPencil size={12} />
+                  </button>
+                  <button
+                    className="btn btn-small btn-danger"
+                    title="Delete this profile (removes its stored login)"
+                    onClick={() => setDialog({ kind: 'delete-profile', profile: p })}
+                  >
+                    <IconTrash size={12} />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+          <div className="modal-actions">
+            <button className="btn btn-ghost" onClick={closeDialog}>Close</button>
+          </div>
+        </Modal>
+      )}
+
+      {dialog?.kind === 'edit-profile' && (
+        <Modal title={`Rename profile "${dialog.profile.name}"`} onClose={closeDialog}>
+          <p className="modal-desc">
+            Renaming updates any panes or workspaces pinned to this profile.
+          </p>
+          <input
+            className="modal-input"
+            placeholder="profile name — e.g. work, personal-max"
+            value={draftName}
+            autoFocus
+            onChange={(e) => {
+              setDraftName(e.target.value);
+              setDraftError('');
+            }}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') void submitRenameProfile(dialog.profile.name);
+            }}
+          />
+          {draftError && <div className="form-error">{draftError}</div>}
+          <div className="modal-actions">
+            <button
+              className="btn btn-ghost"
+              onClick={() => {
+                setDraftName('');
+                setDraftError('');
+                setDialog({ kind: 'manage-profiles' });
+              }}
+            >
+              Back
+            </button>
+            <button
+              className="btn"
+              onClick={() => void submitRenameProfile(dialog.profile.name)}
+              disabled={!draftName.trim()}
+            >
+              Save
+            </button>
+          </div>
+        </Modal>
+      )}
+
       {dialog?.kind === 'usage' && (
         <Modal title="Usage by account" onClose={closeDialog}>
           <div className="chip-row">
@@ -550,51 +947,94 @@ export function App() {
             <p className="modal-desc">crunching transcripts…</p>
           ) : !globalUsage.length ? (
             <p className="modal-desc">No usage data found.</p>
-          ) : (
-            globalUsage.map((a) => {
-              const w = a.windows[usageWindow] ?? { in: 0, out: 0, models: {} };
-              const models = Object.entries(w.models).sort(([, x], [, y]) => y.output - x.output);
-              const maxOut = Math.max(...models.map(([, m]) => m.output), 1);
-              return (
-                <div key={a.account} className="usage-account">
-                  <div className="usage-account-head">
-                    <b>{a.account}</b>
-                    <span className="usage-email">{a.email ?? 'not logged in'}</span>
-                    <span className="usage-headline">
-                      <b>{fmt(w.out)}</b> out · {fmt(w.in)} in
-                    </span>
-                  </div>
-                  {models.length > 0 && w.out > 0 ? (
-                    <div className="usage-bars">
-                      {models.map(([model, m]) => (
-                        <div key={model} className="usage-bar-row">
-                          <span className="usage-bar-label" title={model}>
-                            {model.replace(/^claude-/, '')}
-                          </span>
-                          <span className="usage-bar-track">
-                            <span className="usage-bar-plot">
-                              <span
-                                className="usage-bar-fill"
-                                style={{ width: `${Math.max((m.output / maxOut) * 100, 1)}%` }}
-                              />
-                            </span>
-                            <span className="usage-bar-val">{fmt(m.output)}</span>
-                          </span>
-                          <span className="usage-tip">
-                            <b>{model}</b><br />
-                            {fmt(m.output)} out · {fmt(m.input)} in ·{' '}
-                            {fmt(m.cacheRead)} cache · {m.turns} turns
-                          </span>
-                        </div>
-                      ))}
-                    </div>
-                  ) : (
-                    <div className="usage-empty">no usage in this window</div>
-                  )}
+          ) : (() => {
+            const windowLabel = USAGE_WINDOWS.find(([k]) => k === usageWindow)?.[1] ?? '';
+            const phrase = usageWindow === 'all' ? 'all time' : `last ${windowLabel}`;
+            const keyName = (a: AccountUsage) => (a.account === 'default' ? 'default' : a.account);
+            const total = globalUsage.reduce(
+              (acc, a) => {
+                const w = a.windows[usageWindow];
+                if (w) { acc.tokens += w.input + w.output + w.cacheRead + w.cacheWrite; acc.cost += w.cost; }
+                return acc;
+              },
+              { tokens: 0, cost: 0 },
+            );
+            return (
+              <>
+                <div className="usage-total">
+                  <span>All accounts · {phrase}</span>
+                  <span className="usage-total-nums">
+                    <b>{fmt(total.tokens)}</b> tokens · {fmtCost(total.cost)} est
+                  </span>
                 </div>
-              );
-            })
-          )}
+                {globalUsage.map((a, i) => {
+                  const label = accountLabel(a.account === 'default' ? '' : a.account, a.email, profiles);
+                  const tag = a.account === 'default' ? 'default' : label !== a.account ? a.account : null;
+                  const dupOf = a.email
+                    ? globalUsage.slice(0, i).find((o) => o.email === a.email)
+                    : undefined;
+                  const w = a.windows[usageWindow];
+                  const all = a.windows.all;
+                  const allTokens = all ? all.input + all.output + all.cacheRead + all.cacheWrite : 0;
+                  const winTokens = w ? w.input + w.output + w.cacheRead + w.cacheWrite : 0;
+                  const models = w ? Object.entries(w.models).sort(([, x], [, y]) => y.output - x.output) : [];
+                  const maxOut = Math.max(...models.map(([, m]) => m.output), 1);
+                  return (
+                    <div key={a.account} className="usage-account">
+                      <div className="usage-account-head">
+                        <b>{label}</b>
+                        {tag && <span className="usage-tag">{tag}</span>}
+                        <span className="usage-email">{a.email ?? 'not logged in'}</span>
+                      </div>
+                      <div className="usage-account-meta">
+                        {relTime(a.lastActive)}
+                        {allTokens > 0 && <> · {fmt(allTokens)} tokens · {fmtCost(all.cost)} all-time</>}
+                        {dupOf && <span className="usage-dup"> · same login as “{keyName(dupOf)}”</span>}
+                      </div>
+                      {models.length > 0 ? (
+                        <>
+                          <div className="usage-stats">
+                            <span><b>{fmt(winTokens)}</b> tokens</span>
+                            <span>{fmt(w.output)} out · {fmt(w.input)} in · {fmt(w.cacheRead + w.cacheWrite)} cache</span>
+                            <span>{w.turns} turns</span>
+                            <span className="usage-cost">{fmtCost(w.cost)} est</span>
+                          </div>
+                          <div className="usage-bars">
+                            {models.map(([model, m]) => (
+                              <div key={model} className="usage-bar-row">
+                                <span className="usage-bar-label" title={model}>
+                                  {model.replace(/^claude-/, '')}
+                                </span>
+                                <span className="usage-bar-track">
+                                  <span className="usage-bar-plot">
+                                    <span
+                                      className="usage-bar-fill"
+                                      style={{ width: `${Math.max((m.output / maxOut) * 100, 1)}%` }}
+                                    />
+                                  </span>
+                                  <span className="usage-bar-val">{fmt(m.output)}</span>
+                                </span>
+                                <span className="usage-tip">
+                                  <b>{model}</b><br />
+                                  {fmt(m.output)} out · {fmt(m.input)} in ·{' '}
+                                  {fmt(m.cacheRead)} cache · {m.turns} turns<br />
+                                  {fmtCost(m.cost ?? 0)} est
+                                </span>
+                              </div>
+                            ))}
+                          </div>
+                        </>
+                      ) : (
+                        <div className="usage-empty">
+                          {usageWindow === 'all' ? 'no usage recorded' : `no usage in the ${phrase}`}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </>
+            );
+          })()}
           <div className="modal-actions">
             <button className="btn" onClick={closeDialog}>Close</button>
           </div>
@@ -680,6 +1120,7 @@ export function App() {
           </div>
         </Modal>
       )}
+      <Toaster />
     </div>
   );
 }

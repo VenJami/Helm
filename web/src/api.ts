@@ -1,4 +1,4 @@
-import type { AccountUsage, HelmSettings, LogsResponse, ProfilesInfo, SessionInfo, UsageInfo, Workspace } from './types';
+import type { AccountUsage, ConsoleState, GitInfo, HelmSettings, LogsResponse, ProfilesInfo, ServerInfo, SessionInfo, UsageInfo, Workspace } from './types';
 
 const TOKEN = (window as unknown as { __HELM_TOKEN__: string }).__HELM_TOKEN__;
 
@@ -41,6 +41,13 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ cols, rows }),
     }),
+  // Move a pane to another account: claude restarts inside the same pane and
+  // resumes the same conversation there. profile null = the default account.
+  switchProfile: (id: string, profile: string | null, cols: number, rows: number) =>
+    req<SessionInfo>(`/sessions/${id}/switch-profile`, {
+      method: 'POST',
+      body: JSON.stringify({ profile, cols, rows }),
+    }),
   getUsage: (id: string) => req<UsageInfo>(`/sessions/${id}/usage`),
   // Raw-body upload (not the JSON helper): the server saves the file locally
   // and types its path into the pane, like native-terminal drag-drop.
@@ -69,14 +76,30 @@ export const api = {
   updateSettings: (patch: Partial<HelmSettings>) =>
     req<HelmSettings>('/settings', { method: 'PATCH', body: JSON.stringify(patch) }),
 
+  getConsole: () => req<ConsoleState>('/console'),
+  setConsole: (visible: boolean) =>
+    req<ConsoleState>('/console', { method: 'POST', body: JSON.stringify({ visible }) }),
+
   listWorkspaces: () => req<Workspace[]>('/workspaces'),
-  addWorkspace: (name: string, dir: string) =>
-    req<Workspace>('/workspaces', { method: 'POST', body: JSON.stringify({ name, dir }) }),
+  getWorkspacesGit: () => req<GitInfo[]>('/workspaces/git'),
+  getWorkspacesServers: () => req<ServerInfo[]>('/workspaces/servers'),
+  addWorkspace: (name: string, dir: string, profile?: string) =>
+    req<Workspace>('/workspaces', { method: 'POST', body: JSON.stringify({ name, dir, profile }) }),
+  updateWorkspace: (
+    id: string,
+    patch: { name?: string; dir?: string; profile?: string | null; port?: number | null },
+  ) =>
+    req<Workspace>(`/workspaces/${id}`, { method: 'PATCH', body: JSON.stringify(patch) }),
   removeWorkspace: (id: string) => req<{ ok: boolean }>(`/workspaces/${id}`, { method: 'DELETE' }),
 
   listProfiles: () => req<ProfilesInfo>('/profiles'),
   deleteProfile: (name: string) =>
     req<{ ok: boolean }>(`/profiles/${encodeURIComponent(name)}`, { method: 'DELETE' }),
+  renameProfile: (name: string, nextName: string) =>
+    req<{ ok: boolean }>(`/profiles/${encodeURIComponent(name)}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ name: nextName }),
+    }),
 };
 
 export const wsUrl = (sessionId: string) =>

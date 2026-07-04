@@ -28,9 +28,32 @@ simultaneously.
 - `CLAUDE_CONFIG_DIR` isolates *everything*, not just creds: settings, history,
   MCP config, folder-trust. Per-profile hooks are why Helm's hook relay uses
   `--settings` instead of touching profile settings.
+- Conversations are **portable across profiles**: transcripts live in
+  `<dir>/projects/<munged-cwd>/<session-id>.jsonl`, and copying one into
+  another profile's matching folder lets `claude --resume <id>` continue that
+  chat under the other account (verified 2026-07-03: resume keeps the same
+  session id, no fork). This powers each pane's **"move to another account"**
+  button — the server copies the transcript over and respawns claude in the
+  same pane with `--resume`. A running claude can never change accounts in
+  place (`CLAUDE_CONFIG_DIR` is read once, at spawn).
+- Usage attribution across a move: the copy would double-count its history in
+  the target account's roll-up, so the server records copies in
+  `%LOCALAPPDATA%\Helm\imported-transcripts.json` and the roll-up skips a
+  copied file's events from before the import. Known small gap: moving a pane
+  A→B→A overwrites A's file and re-marks it imported, so A's roll-up loses the
+  pre-move history (rolling windows age it out anyway). Per-pane usage is
+  deliberately unfiltered — it shows the pane's whole story.
+- Only the main transcript moves — nested subagent transcripts stay with the
+  source account (their usage already happened there; resume doesn't need them).
 - **A profile logged into the same account as default gains nothing** — the
   owner has done this twice by accident; the usage modal exposes it (same
-  email on two rows).
+  email on two rows). Helm now *auto-collapses* this case: when a named profile
+  shares the default's login (and has stored creds), the account pickers hide
+  the separate "default" row and panes that request default spawn under that
+  profile's dir instead (server `mappedDefaultProfile()` /
+  `/api/profiles → default.mapped`), so new usage lands on the profile, not the
+  duplicate `~/.claude` row. The historical default row in the usage modal is
+  left as-is (it holds real past tokens).
 - Legit: separately paid accounts owned by the same person (owner confirmed);
   don't share one subscription across people. Re-verify Anthropic's consumer
   terms if usage patterns change.

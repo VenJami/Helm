@@ -28,14 +28,29 @@
 - **Frontend changes need `npm run build`** (or `watch`) — the server serves
   `web/dist` from disk per request, so a running server picks up new builds
   without restart; server-code changes DO need a restart.
-- **claude ≥2.1.198 "team" sessions may never write a transcript.** New
-  interactive sessions can start in team/agents mode: hooks still fire and
-  report a `transcript_path`, but no `projects\<cwd>\<id>.jsonl` is written —
-  ever, even on exit. Consequences: per-pane usage shows "no usage recorded",
-  the account roll-up undercounts new sessions, and `claude --resume <id>`
-  dies with "No conversation found". Helm degrades gracefully: `canResume`
-  checks the transcript actually exists, and revive falls back to a fresh
-  session when it doesn't (verified against a real pane 2026-07-02).
+- **Two ways claude ≥2.1.198 silently stops writing transcript JSONLs**
+  (symptoms: per-pane usage "no usage recorded", account roll-up missing new
+  sessions, `claude --resume <id>` dies with "No conversation found"). Hooks
+  still fire and report a `transcript_path` in both cases, so Helm looks fine
+  until you check the disk. Root causes, isolated 2026-07-02:
+  1. **Inherited `CLAUDE_CODE_CHILD_SESSION=1`.** Claude Code injects it into
+     every shell/process it spawns. A Helm server started from *inside* any
+     claude session (a Helm pane, the VS Code extension, an agent) passes it
+     on to every pane, and those panes skip session persistence entirely — no
+     JSONL is ever written, not even user lines. Fix: `spawnPty` scrubs the
+     inherited claude session-identity env vars.
+  2. **Agent teams.** With `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS` enabled
+     (the owner's user settings.json sets it globally), the moment a session
+     spawns a teammate the lead stops logging assistant lines (user lines keep
+     appearing — the "user-lines-only transcript" signature) and teammate
+     conversations are never written anywhere. Fix: `spawnPty` forces
+     `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=0` in panes; asking for a teammate
+     then falls back to a classic subagent, whose transcript lands in
+     `projects\<cwd>\<sessionId>\subagents\` (usage scans include it).
+  Both fixes verified end-to-end (isolated server on :7791 → real pane →
+  teammate prompt → usage API returns tokens). Helm still degrades gracefully
+  when a transcript is missing: `canResume` checks existence, revive falls
+  back to fresh.
 - **Session persistence must be immediate for lifecycle changes**
   (create/delete/exit/revive call `persistSessions()` directly; only chatty
   hook updates use the debounced `schedulePersist()`). A hard-killed server

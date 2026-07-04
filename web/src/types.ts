@@ -8,6 +8,7 @@ export interface SessionInfo {
   exitCode: number | null;
   activity: 'working' | 'waiting' | 'idle' | null; // from Claude Code hooks
   activitySince: string | null; // ISO — when activity last changed ("working 7m")
+  activityNote: string | null; // latest Notification message while waiting (why it's blocked)
   canResume: boolean;    // claude session id captured → revive resumes it
   hasTranscript: boolean;
   attached: number;
@@ -20,6 +21,7 @@ export interface ModelUsage {
   cacheRead: number;
   cacheWrite: number;
   turns: number;
+  cost?: number; // rough $ estimate from published per-model prices
 }
 
 export interface UsageInfo {
@@ -27,22 +29,23 @@ export interface UsageInfo {
   models?: Record<string, ModelUsage>;
 }
 
-export interface WindowModelUsage {
-  input: number; // incl. cache writes
-  output: number;
-  cacheRead: number;
-  turns: number;
-}
+// Per-window totals + per-model breakdown share the same shape now.
+export type WindowModelUsage = ModelUsage;
 
 export interface UsageWindow {
-  in: number;
-  out: number;
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+  turns: number;
+  cost: number; // sum of per-model estimates in this window
   models: Record<string, WindowModelUsage>;
 }
 
 export interface AccountUsage {
   account: string; // 'default' or profile name
   email: string | null;
+  lastActive: number | null; // ms epoch of the most recent counted usage
   // rolling slices: h1, h5, h10, h24, d7, d30 + 'all' — each with its own
   // per-model breakdown so the UI selector re-slices the whole card
   windows: Record<string, UsageWindow>;
@@ -52,6 +55,26 @@ export interface Workspace {
   id: string;
   name: string;
   dir: string;
+  profile?: string; // pinned account name; absent = default account
+  port?: number;    // project's dev-server port; absent = no server check
+}
+
+// Per-workspace dev-server liveness for the sidebar. Only workspaces with a
+// configured port appear; `up` = 127.0.0.1:port accepted a connection.
+export interface ServerInfo {
+  id: string;
+  port: number;
+  up: boolean;
+}
+
+// Per-workspace git status for the sidebar. branch null = not a git repo
+// (or git unavailable). Best-effort, refreshed on a slow poll.
+export interface GitInfo {
+  id: string;
+  branch: string | null;
+  dirty: boolean;   // uncommitted changes present
+  ahead: number;    // commits ahead of upstream
+  behind: number;   // commits behind upstream
 }
 
 export interface LogEntry {
@@ -72,12 +95,22 @@ export interface HelmSettings {
   autoRevive: boolean; // respawn dead panes automatically at server start
 }
 
+// State of the server's own console window (start-helm.cmd terminal).
+// supported:false = non-Windows or launched detached with no console → hide the
+// toggle button entirely.
+export interface ConsoleState {
+  supported: boolean;
+  visible: boolean;
+}
+
 export interface Profile {
   name: string;
   email: string | null; // null = profile exists but /login not run yet
 }
 
 export interface ProfilesInfo {
-  default: { email: string | null };
+  // `mapped` = named profile the default account collapses onto (same login),
+  // or null when default is its own distinct account.
+  default: { email: string | null; mapped: string | null };
   profiles: Profile[];
 }

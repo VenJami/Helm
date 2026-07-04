@@ -15,7 +15,10 @@ notifications, all script-verified). Current backlog: see docs/ROADMAP.md.
   aspirational commands/features as if they exist. When state changes, update
   the relevant doc (ROADMAP "Done" list included).
 - **Test end-to-end against a real `claude.cmd` pane** before declaring a
-  feature done (pattern in docs/GOTCHAS.md). Build passing ≠ working.
+  feature done (pattern in docs/GOTCHAS.md). Build passing ≠ working. There's
+  also a fast automated smoke test (`cd server && npm test`) that drives a real
+  server against a keep-alive stand-in — run it after server changes, but it's
+  no substitute for a real-pane check on user-facing behavior.
 - **Simplicity first.** Lowest-effort thing that solves the request.
   *Decision ladder:* Does this need to exist? → Already in this codebase? →
   Stdlib/runtime does it? → A claude CLI flag/hook already does it? → An
@@ -39,7 +42,7 @@ notifications, all script-verified). Current backlog: see docs/ROADMAP.md.
 helm/
 ├── CLAUDE.md               # this file
 ├── README.md · LICENSE     # public-facing (repo is on GitHub, MIT)
-├── .github/workflows/ci.yml # CI: server syntax-check + web typecheck/build
+├── .github/workflows/ci.yml # CI: server syntax-check + web typecheck/build + smoke test
 ├── docs/
 │   ├── ARCHITECTURE.md     # files, REST/WS API, spawn specifics, hook relay, data dirs
 │   ├── GOTCHAS.md          # hard-won traps — READ BEFORE TOUCHING SERVER CODE
@@ -56,6 +59,7 @@ helm/
 ```bash
 cd server && npm start     # USE this when just using Helm → http://127.0.0.1:7777
 cd server && npm run dev   # DEV only: --watch restarts on edits and KILLS live panes
+cd server && npm test      # fast smoke test (real server + keep-alive claude stand-in)
 cd web && npm run build    # after frontend changes (or `npm run watch` while developing)
 # npm install once in server/ and web/. NO vite dev server — the Node server
 # must serve web/dist to inject the auth token.

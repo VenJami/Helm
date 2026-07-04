@@ -1,4 +1,6 @@
 # Normalize line endings so Windows/macOS/Linux contributors don't fight over CRLF
 * text=auto
+# POSIX shim (fake-claude.sh) must stay LF or the shebang breaks
+*.sh text eol=lf
 *.png binary
 *.ico binary
