@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import type { GitInfo, Profile, ServerInfo, SessionInfo, Workspace } from '../types';
 import { accountLabel } from '../accounts';
-import { IconFolder, IconGitBranch, IconHelm, IconPanelLeftClose, IconPencil, IconPlus, IconServer, IconTrash, IconX } from './Icons';
+import { IconFolder, IconGitBranch, IconGrip, IconHelm, IconPanelLeftClose, IconPencil, IconPlus, IconSearch, IconServer, IconTrash, IconX } from './Icons';
 
 interface Props {
   workspaces: Workspace[];
@@ -18,9 +18,24 @@ interface Props {
   onSetPort: (id: string, port: number | null) => Promise<void>;
   onRemove: (id: string) => void;
   onHide: () => void;
+  // Drag-to-reorder: grip on each row → drop on another row's slot.
+  dragId: string | null;
+  dragOverId: string | null;
+  onDragStart: (id: string) => void;
+  onDragOver: (id: string | null) => void;
+  onDrop: (targetId: string) => void;
+  onDragEnd: () => void;
 }
 
-export function Sidebar({ workspaces, sessions, git, servers, selectedId, defaultEmail, profiles, onSelect, onAddClick, onRename, onChangeDir, onSetPort, onRemove, onHide }: Props) {
+export function Sidebar({
+  workspaces, sessions, git, servers, selectedId, defaultEmail, profiles, onSelect, onAddClick,
+  onRename, onChangeDir, onSetPort, onRemove, onHide,
+  dragId, dragOverId, onDragStart, onDragOver, onDrop, onDragEnd,
+}: Props) {
+  const [query, setQuery] = useState('');
+  const shown = query.trim()
+    ? workspaces.filter((w) => w.name.toLowerCase().includes(query.trim().toLowerCase()))
+    : workspaces;
   // Right-click menu (rename / change root dir / remove) + the inline editor it opens.
   const [menu, setMenu] = useState<{ id: string; x: number; y: number } | null>(null);
   const [edit, setEdit] = useState<{ id: string; field: 'name' | 'dir' | 'port'; value: string } | null>(null);
@@ -97,9 +112,17 @@ export function Sidebar({ workspaces, sessions, git, servers, selectedId, defaul
           <IconPanelLeftClose size={16} />
         </button>
       </div>
-      <div className="sidebar-label">Workspaces</div>
+      <div className="sidebar-search">
+        <IconSearch size={13} />
+        <input
+          className="sidebar-search-input"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder="Search workspaces…"
+        />
+      </div>
       <div className="sidebar-list">
-        {workspaces.map((ws) =>
+        {shown.map((ws) =>
           edit && edit.id === ws.id ? (
             <div key={ws.id} className="ws-item ws-editing">
               <input
@@ -123,11 +146,35 @@ export function Sidebar({ workspaces, sessions, git, servers, selectedId, defaul
           ) : (
             <div
               key={ws.id}
-              className={`ws-item ${ws.id === selectedId ? 'selected' : ''}`}
+              className={`ws-item ${ws.id === selectedId ? 'selected' : ''}${dragOverId === ws.id && dragId && dragId !== ws.id ? ' drag-over' : ''}`}
               onClick={() => onSelect(ws.id)}
               onContextMenu={(e) => openMenu(e, ws.id)}
+              onDragOver={(e) => {
+                if (!dragId) return;
+                e.preventDefault();
+                onDragOver(ws.id);
+              }}
+              onDragLeave={() => onDragOver(null)}
+              onDrop={(e) => {
+                e.preventDefault();
+                onDrop(ws.id);
+              }}
               title={ws.dir}
             >
+              <span
+                className="ws-grip"
+                draggable
+                title="Drag to reorder"
+                onClick={(e) => e.stopPropagation()}
+                onDragStart={(e) => {
+                  e.dataTransfer.effectAllowed = 'move';
+                  e.dataTransfer.setData('text/plain', ws.id);
+                  onDragStart(ws.id);
+                }}
+                onDragEnd={onDragEnd}
+              >
+                <IconGrip size={13} />
+              </span>
               <IconFolder size={14} />
               <div className="ws-text">
                 <span className="ws-name">{ws.name}</span>

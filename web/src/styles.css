@@ -100,6 +100,31 @@ html, body {
   user-select: none;
 }
 
+.sidebar-search {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 8px 8px 4px;
+  padding: 5px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--raised);
+  color: var(--faint);
+}
+.sidebar-search:focus-within { border-color: var(--muted); color: var(--muted); }
+.sidebar-search svg { flex-shrink: 0; }
+.sidebar-search-input {
+  flex: 1;
+  min-width: 0;
+  background: none;
+  border: none;
+  outline: none;
+  font: inherit;
+  font-size: 12.5px;
+  color: var(--text);
+}
+.sidebar-search-input::placeholder { color: var(--faint); }
+
 .sidebar-list {
   flex: 1;
   overflow-y: auto;
@@ -120,6 +145,21 @@ html, body {
 .ws-item.selected { background: var(--raised); color: var(--text); }
 .ws-item svg { flex-shrink: 0; color: var(--faint); }
 .ws-item.selected svg { color: var(--accent); }
+.ws-item.drag-over {
+  outline: 2px dashed var(--accent);
+  outline-offset: -2px;
+}
+
+.ws-grip {
+  display: inline-flex;
+  align-items: center;
+  color: var(--faint);
+  cursor: grab;
+  user-select: none;
+  flex-shrink: 0;
+}
+.ws-grip:hover { color: var(--text); }
+.ws-grip:active { cursor: grabbing; }
 
 .ws-text {
   flex: 1;
@@ -352,8 +392,14 @@ html, body {
   flex: 1;
   display: grid;
   place-items: center;
-  gap: 12px;
   color: var(--muted);
+}
+
+.main-empty-inner {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
 }
 
 /* ------------------------------------------------------------------ grid */

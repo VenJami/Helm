@@ -116,8 +116,9 @@ account") stops showing a separate "default DEFAULT" row, and panes that ask for
 default spawn under that profile's config dir instead, so usage lands in one
 place. Server `mappedDefaultProfile()`; `/api/profiles` returns `default.mapped`;
 `createSession` resolves an empty profile through it. Default still shows as its
-own account when unique or when the twin isn't signed in (bootstrap). The usage
-modal's historical default row is left intact (real past tokens).
+own account when unique or when the twin isn't signed in (bootstrap). (The usage
+modal originally kept a separate historical default row; superseded 2026-07-04 —
+see "Fold default into its twin in usage" below.)
 
 Waiting-pane jump + pane cycling + richer alerts (2026-07-04) — toolbar
 "N waiting" pill jumps to the next blocked pane (rotates on repeat, crosses
@@ -190,6 +191,30 @@ search so you can find a pane by what it's doing, not just its star-name. A
 visible toolbar search pill (🔍 "Search panes…" + ⌘/Ctrl K hint) makes the
 palette discoverable instead of a hidden shortcut. Smoke test covers the
 summary derivation (now 9 tests).
+
+Empty-workspace fix + drag-to-reorder workspaces + sidebar search (2026-07-04)
+— the "no panes" placeholder had 3 CSS-grid children (text/`<b>`/text) each
+blockified into its own auto-row that stretched to fill the pane and centered
+independently, spreading the message across the whole canvas; fixed by
+wrapping it in one child, and it now also carries a "+ New pane" button.
+Sidebar workspaces get the same grip-drag reorder panes already had
+(`helm.wsorder` in localStorage, unlisted new workspaces fall to the end) plus
+a search-workspaces input above the list. Verified against the live server
+(headless-Edge screenshots: empty state, filtered list, grip present on every
+row).
+
+Fold default into its twin in usage (2026-07-04) — when the bare default
+account is the same login as a named profile (`default.mapped`, the existing
+auto-map), the usage roll-up now folds default's local history into that
+profile's row and hides the standalone default row — matching what the profile
+picker already does, so one Anthropic login reads as one account instead of two
+split rows. Client-side only (`foldMappedDefault` in web/src/accounts.ts sums
+windows+models; App uses it via a `usageRows` memo) so no server restart / no
+pane deaths; grand total is unchanged (fold only moves numbers between rows).
+Owner context: their default account is heavily used by the VS Code Claude
+extension (dev work) and shares the redacted login with the Claude-2
+profile — folding gives Claude-2 the true combined total (~978M tokens E2E-
+verified: default row gone, "same login" tag gone, Claude-2 carries the sum).
 
 ## Short-term backlog (rough priority order, owner-approved direction)
 1. Theme settings (light theme / accent choice) — font-size is done.

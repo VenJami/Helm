@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { api } from './api';
-import { accountLabel } from './accounts';
+import { accountLabel, foldMappedDefault } from './accounts';
 import type { AccountUsage, GitInfo, LogEntry, Profile, ServerInfo, SessionInfo, Workspace } from './types';
 import { Sidebar } from './components/Sidebar';
 import { TerminalPane } from './components/TerminalPane';
@@ -64,6 +64,34 @@ const USAGE_WINDOWS = [
 
 export function App() {
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
+  // Sidebar order — presentational, kept in localStorage; unlisted (new)
+  // workspaces fall to the end in fetch order.
+  const [wsOrder, setWsOrder] = useState<string[]>(() => {
+    try {
+      return JSON.parse(localStorage.getItem('helm.wsorder') || '[]');
+    } catch {
+      return [];
+    }
+  });
+  const orderedWorkspaces = useMemo(() => {
+    const idx = new Map(wsOrder.map((id, i) => [id, i]));
+    return [...workspaces].sort(
+      (a, b) => (idx.get(a.id) ?? Infinity) - (idx.get(b.id) ?? Infinity),
+    );
+  }, [workspaces, wsOrder]);
+  const [dragWsId, setDragWsId] = useState<string | null>(null);
+  const [dragOverWsId, setDragOverWsId] = useState<string | null>(null);
+  const dropWorkspace = (targetId: string) => {
+    if (!dragWsId || dragWsId === targetId) return;
+    const ids = orderedWorkspaces.map((w) => w.id);
+    const from = ids.indexOf(dragWsId);
+    const to = ids.indexOf(targetId);
+    if (from === -1 || to === -1) return;
+    ids.splice(from, 1);
+    ids.splice(to, 0, dragWsId);
+    setWsOrder(ids);
+    localStorage.setItem('helm.wsorder', JSON.stringify(ids));
+  };
   const [gitInfo, setGitInfo] = useState<Record<string, GitInfo>>({});
   const [serverInfo, setServerInfo] = useState<Record<string, ServerInfo>>({});
   const [sessions, setSessions] = useState<SessionInfo[]>([]);
@@ -215,6 +243,14 @@ export function App() {
     setGlobalUsage(null);
     api.getGlobalUsage().then(setGlobalUsage).catch(() => setGlobalUsage([]));
   };
+
+  // When the bare default account is the same login as a named profile, fold
+  // default's history into that profile's row and hide the standalone default
+  // row — same collapse the profile picker does. Grand total is unchanged.
+  const usageRows = useMemo(
+    () => (globalUsage ? foldMappedDefault(globalUsage, defaultMapped) : null),
+    [globalUsage, defaultMapped],
+  );
 
   // Esc leaves maximized mode
   useEffect(() => {
@@ -705,7 +741,7 @@ export function App() {
       />
       {!sidebarHidden && (
         <Sidebar
-          workspaces={workspaces}
+          workspaces={orderedWorkspaces}
           sessions={sessions}
           git={gitInfo}
           servers={serverInfo}
@@ -719,6 +755,12 @@ export function App() {
           onSetPort={setWorkspacePort}
           onRemove={removeWorkspace}
           onHide={toggleSidebar}
+          dragId={dragWsId}
+          dragOverId={dragOverWsId}
+          onDragStart={setDragWsId}
+          onDragOver={setDragOverWsId}
+          onDrop={dropWorkspace}
+          onDragEnd={() => { setDragWsId(null); setDragOverWsId(null); }}
         />
       )}
       <main className="main">
@@ -919,7 +961,12 @@ export function App() {
               </div>
             ) : (
               <div className="main-empty">
-                No panes in this workspace — hit <b>New pane</b> to launch a Claude session.
+                <div className="main-empty-inner">
+                  <span>No panes in this workspace.</span>
+                  <button className="btn" onClick={newPane}>
+                    <IconPlus size={13} /> New pane
+                  </button>
+                </div>
               </div>
             )}
           </>
@@ -1137,15 +1184,15 @@ export function App() {
               </button>
             ))}
           </div>
-          {!globalUsage ? (
+          {!usageRows ? (
             <p className="modal-desc">crunching transcripts…</p>
-          ) : !globalUsage.length ? (
+          ) : !usageRows.length ? (
             <p className="modal-desc">No usage data found.</p>
           ) : (() => {
             const windowLabel = USAGE_WINDOWS.find(([k]) => k === usageWindow)?.[1] ?? '';
             const phrase = usageWindow === 'all' ? 'all time' : `last ${windowLabel}`;
             const keyName = (a: AccountUsage) => (a.account === 'default' ? 'default' : a.account);
-            const total = globalUsage.reduce(
+            const total = usageRows.reduce(
               (acc, a) => {
                 const w = a.windows[usageWindow];
                 if (w) { acc.tokens += w.input + w.output + w.cacheRead + w.cacheWrite; acc.cost += w.cost; }
@@ -1161,11 +1208,11 @@ export function App() {
                     <b>{fmt(total.tokens)}</b> tokens · {fmtCost(total.cost)} est
                   </span>
                 </div>
-                {globalUsage.map((a, i) => {
+                {usageRows.map((a, i) => {
                   const label = accountLabel(a.account === 'default' ? '' : a.account, a.email, profiles);
                   const tag = a.account === 'default' ? 'default' : label !== a.account ? a.account : null;
                   const dupOf = a.email
-                    ? globalUsage.slice(0, i).find((o) => o.email === a.email)
+                    ? usageRows.slice(0, i).find((o) => o.email === a.email)
                     : undefined;
                   const w = a.windows[usageWindow];
                   const all = a.windows.all;
