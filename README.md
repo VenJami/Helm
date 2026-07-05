@@ -5,8 +5,7 @@ and a grid of live `claude` terminal panes — real CLI sessions you can read,
 type into, and monitor. Run several agents in parallel across your projects and
 see their working at a glance instead of juggling terminal windows.
 
-<!-- TODO before publishing: add a screenshot or GIF here, e.g.
-![Helm — a grid of live Claude Code panes](docs/screenshot.png) -->
+![Helm — a workspace sidebar and a grid of live Claude Code panes](docs/screenshot.png)
 
 ## Features
 
