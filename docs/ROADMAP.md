@@ -240,6 +240,19 @@ drift checks (healthy/below-floor/missing/unknown-model/transcript-shape) on
 isolated servers; committed smoke test now asserts diagnostics health (10
 tests, 1 skip).
 
+Pane render perf (2026-07-05) — the 3 s session poll returned fresh objects
+every tick, so every `TerminalPane` reconciled forever, and all panes stayed
+mounted when minimized/behind a maximized one (each holding a WebSocket + its
+own WebGL context; browsers cap ~16). Now `TerminalPane` is `React.memo` with
+stabilized `session`/`profiles` references (reuse the prior poll's object when
+unchanged, via a `shallowEqual` cache) + stable callbacks; the grid mounts only
+visible panes (`visiblePanes`), so minimized/hidden ones unmount and free their
+socket + WebGL context (restore reconnects, ring buffer replays). A 20 s
+internal tick keeps "working Nm" labels advancing despite the stabilized object.
+Improvement-plan P1-4. Verified E2E via headless Edge against an isolated 6-pane
+server (13/13: minimize unmount + tray, restore remount + replay, maximize
+mounts one, grid columns track visible count, memo skips unchanged panes).
+
 ## Short-term backlog (rough priority order, owner-approved direction)
 1. Theme settings (light theme / accent choice) — font-size is done.
 2. Drag-resize pane sizes (reorder is done; resize = grid column/row weights).
