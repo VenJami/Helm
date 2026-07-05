@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { memo, useEffect, useRef, useState } from 'react';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { WebglAddon } from '@xterm/addon-webgl';
@@ -22,9 +22,12 @@ interface Props {
   onKilled: (id: string) => void;
   onChanged: () => void; // parent re-fetches sessions (e.g. after revive)
   isMaximized: boolean;
-  onToggleMax: () => void;
-  onMinimize: () => void; // pull this pane out of the grid into the tray
-  onGripDragStart: () => void; // drag-to-reorder, handled by the grid
+  // Take the pane id (rather than being pre-bound per pane) so the parent can
+  // pass the same stable function to every pane — required for React.memo
+  // below to actually skip unchanged panes instead of every prop looking new.
+  onToggleMax: (id: string) => void;
+  onMinimize: (id: string) => void; // pull this pane out of the grid into the tray
+  onGripDragStart: (id: string) => void; // drag-to-reorder, handled by the grid
   onGripDragEnd: () => void;
   // This pane receives Ctrl+V file-pastes even when its terminal isn't
   // focused (the maximized pane, or the only pane in the workspace).
@@ -70,7 +73,11 @@ const clipFiles = (e: ClipboardEvent): File[] => {
   return out;
 };
 
-export function TerminalPane({
+// Memoized: the parent polls every 3 s and passes a stabilized `session`
+// reference (same object when nothing changed) plus stable callbacks, so an
+// unchanged pane skips re-rendering entirely instead of every pane's xterm
+// subtree reconciling on a wall-clock timer forever.
+function TerminalPaneImpl({
   session, onKilled, onChanged, isMaximized, onToggleMax, onMinimize, onGripDragStart, onGripDragEnd,
   isPasteFallback, profiles, defaultEmail, mappedDefault, fontSize,
 }: Props) {
@@ -198,7 +205,7 @@ export function TerminalPane({
         return false;
       }
       if (e.code === 'KeyM') {
-        onToggleMaxRef.current();
+        onToggleMaxRef.current(session.id);
         return false;
       }
       return true;
@@ -410,6 +417,17 @@ export function TerminalPane({
     return () => window.removeEventListener('helm:focus-pane', onFocusReq);
   }, [session.id]);
 
+  // The parent now reuses the same `session` object across polls when nothing
+  // changed (so memo can skip untouched panes), which means the "working 7m"
+  // label would otherwise freeze — activitySince doesn't change while a pane
+  // just keeps working. Tick our own re-render independent of the parent poll.
+  const [, forceTick] = useState(0);
+  useEffect(() => {
+    if (conn !== 'live' || (session.activity !== 'working' && session.activity !== 'waiting')) return;
+    const t = setInterval(() => forceTick((n) => n + 1), 20_000);
+    return () => clearInterval(t);
+  }, [conn, session.activity]);
+
   const activity = conn === 'live' ? session.activity : null;
   const dotClass =
     conn === 'live'
@@ -445,7 +463,7 @@ export function TerminalPane({
             onDragStart={(e) => {
               e.dataTransfer.effectAllowed = 'move';
               e.dataTransfer.setData('text/plain', session.id);
-              onGripDragStart();
+              onGripDragStart(session.id);
             }}
             onDragEnd={onGripDragEnd}
           >
@@ -527,7 +545,11 @@ export function TerminalPane({
         </button>
         {!isMaximized && (
           <AnimateIcon asChild>
-            <button className="ibtn" onClick={onMinimize} title="Minimize this pane to the tray">
+            <button
+              className="ibtn"
+              onClick={() => onMinimize(session.id)}
+              title="Minimize this pane to the tray"
+            >
               <IconMinus size={14} />
             </button>
           </AnimateIcon>
@@ -535,7 +557,7 @@ export function TerminalPane({
         <AnimateIcon asChild>
           <button
             className="ibtn"
-            onClick={onToggleMax}
+            onClick={() => onToggleMax(session.id)}
             title={isMaximized ? 'Back to grid (Esc)' : 'Maximize this pane (Ctrl+Shift+M)'}
           >
             {isMaximized ? <IconMinimize size={14} /> : <IconMaximize size={14} />}
@@ -783,3 +805,5 @@ export function TerminalPane({
     </div>
   );
 }
+
+export const TerminalPane = memo(TerminalPaneImpl);

@@ -31,6 +31,16 @@ const IS_MAC = typeof navigator !== 'undefined' && /Mac/i.test(navigator.platfor
 const fmt = (n: number) =>
   n >= 1e6 ? (n / 1e6).toFixed(1) + 'M' : n >= 1e3 ? (n / 1e3).toFixed(1) + 'k' : String(n);
 
+// Field-by-field equality for flat, primitive-only objects (SessionInfo,
+// Profile). Used to reuse the previous poll's object reference when nothing
+// changed, so React.memo on TerminalPane can actually skip untouched panes
+// instead of every prop looking new every 3 s.
+function shallowEqual<T extends object>(a: T, b: T): boolean {
+  const keys = Object.keys(a) as (keyof T)[];
+  if (keys.length !== Object.keys(b).length) return false;
+  return keys.every((k) => a[k] === b[k]);
+}
+
 // Rough dollar figure — cents matter at the low end, so surface <$0.01 rather
 // than a flat $0.00 that reads as "free".
 const fmtCost = (n: number) =>
@@ -311,18 +321,43 @@ export function App() {
     prevActivityRef.current = next;
   }, []);
 
+  // The session/profile polls return brand-new objects every 3 s even when
+  // nothing changed. Reusing the previous reference for unchanged entries lets
+  // React.memo(TerminalPane) actually skip untouched panes instead of every
+  // pane's xterm subtree reconciling on a wall-clock timer forever.
+  const sessionCacheRef = useRef<Map<string, SessionInfo>>(new Map());
+  const stabilizeSessions = useCallback((list: SessionInfo[]): SessionInfo[] => {
+    const cache = sessionCacheRef.current;
+    const next = new Map<string, SessionInfo>();
+    const out = list.map((s) => {
+      const prev = cache.get(s.id);
+      const chosen = prev && shallowEqual(prev, s) ? prev : s;
+      next.set(s.id, chosen);
+      return chosen;
+    });
+    sessionCacheRef.current = next;
+    return out;
+  }, []);
+  const profilesCacheRef = useRef<Profile[]>([]);
+
   const refresh = useCallback(() => {
     api.listSessions().then((list) => {
       maybeNotify(list);
-      setSessions(list);
+      setSessions(stabilizeSessions(list));
     }).catch(() => {});
     // Profiles too, so the email shows up right after /login in a pane
     api.listProfiles().then((info) => {
-      setProfiles(info.profiles);
+      const prevProfiles = profilesCacheRef.current;
+      const unchanged = prevProfiles.length === info.profiles.length
+        && info.profiles.every((p, i) => shallowEqual(p, prevProfiles[i]));
+      if (!unchanged) {
+        profilesCacheRef.current = info.profiles;
+        setProfiles(info.profiles);
+      }
       setDefaultEmail(info.default.email);
       setDefaultMapped(info.default.mapped);
     }).catch(() => {});
-  }, [maybeNotify]);
+  }, [maybeNotify, stabilizeSessions]);
 
   const toggleNotify = async () => {
     if (notify) {
@@ -430,10 +465,20 @@ export function App() {
   // A restored maximizedId can point at a pane in another workspace; only honor
   // it for display when that pane is actually on screen, else the grid blanks.
   const viewMax = maximizedId && panes.some((p) => p.id === maximizedId) ? maximizedId : null;
+  // Panes actually mounted in the grid — minimized/non-maximized ones used to
+  // stay mounted (just CSS-hidden), each still holding a WebSocket + its own
+  // WebGL context (browsers cap ~16 live contexts). Unmounting them frees both;
+  // restoring reconnects and the server's ring buffer replays recent output.
+  const visiblePanes = useMemo(
+    () => (viewMax ? panes.filter((p) => p.id === viewMax) : shownPanes),
+    [viewMax, panes, shownPanes],
+  );
 
   // Drag-to-reorder: grip in a pane header → drop on another pane's slot
   const [dragId, setDragId] = useState<string | null>(null);
   const [dragOverId, setDragOverId] = useState<string | null>(null);
+  const onGripDragStart = useCallback((id: string) => setDragId(id), []);
+  const onGripDragEnd = useCallback(() => { setDragId(null); setDragOverId(null); }, []);
   const dropPane = (targetId: string) => {
     if (!dragId || !orderKey || dragId === targetId) return;
     const ids = panes.map((p) => p.id);
@@ -579,7 +624,9 @@ export function App() {
     api.updateWorkspace(selected.id, { profile: name || null }).catch(() => {});
   };
 
-  const onKilled = (id: string) => {
+  // Stable identities (empty deps — each only uses functional setState) so
+  // they pass through React.memo(TerminalPane) as unchanged props every poll.
+  const onKilled = useCallback((id: string) => {
     setSessions((prev) => prev.filter((s) => s.id !== id));
     setMaximizedId((m) => (m === id ? null : m));
     setMinimizedIds((prev) => {
@@ -588,19 +635,24 @@ export function App() {
       next.delete(id);
       return next;
     });
-  };
+  }, []);
 
-  const minimizePane = (id: string) => {
+  const minimizePane = useCallback((id: string) => {
     setMinimizedIds((prev) => new Set(prev).add(id));
-  };
+  }, []);
 
-  const restorePane = (id: string) => {
+  const restorePane = useCallback((id: string) => {
     setMinimizedIds((prev) => {
       const next = new Set(prev);
       next.delete(id);
       return next;
     });
-  };
+  }, []);
+
+  const toggleMaxPane = useCallback((id: string) => {
+    restorePane(id);
+    setMaximizedId((m) => (m === id ? null : id));
+  }, [restorePane]);
 
   // Bring a pane front-and-center: scroll it into view, focus its terminal
   // (the pane listens for this event), and pulse it so the eye lands on it.
@@ -916,17 +968,12 @@ export function App() {
             )}
             {panes.length ? (
               <div className={viewMax ? 'grid cols-1' : `grid cols-${Math.min(Math.max(shownPanes.length, 1), 3)}`}>
-                {panes.map((s) => (
+                {visiblePanes.map((s) => (
                   <div
                     key={s.id}
                     id={`pane-${s.id}`}
                     className={`pane-slot ${dragOverId === s.id && dragId && dragId !== s.id ? 'drag-over' : ''}${flashId === s.id ? ' pane-flash' : ''}`}
                     onFocusCapture={() => { activePaneRef.current = s.id; }}
-                    style={
-                      (viewMax && viewMax !== s.id) || (!viewMax && minimizedIds.has(s.id))
-                        ? { display: 'none' }
-                        : undefined
-                    }
                     onDragOver={(e) => {
                       if (!dragId) return;
                       e.preventDefault();
@@ -945,13 +992,10 @@ export function App() {
                       onKilled={onKilled}
                       onChanged={refresh}
                       isMaximized={viewMax === s.id}
-                      onToggleMax={() => {
-                        restorePane(s.id);
-                        setMaximizedId((m) => (m === s.id ? null : s.id));
-                      }}
-                      onMinimize={() => minimizePane(s.id)}
-                      onGripDragStart={() => setDragId(s.id)}
-                      onGripDragEnd={() => { setDragId(null); setDragOverId(null); }}
+                      onToggleMax={toggleMaxPane}
+                      onMinimize={minimizePane}
+                      onGripDragStart={onGripDragStart}
+                      onGripDragEnd={onGripDragEnd}
                       isPasteFallback={viewMax === s.id || (!viewMax && panes.length === 1)}
                       profiles={profiles}
                       defaultEmail={defaultEmail}
