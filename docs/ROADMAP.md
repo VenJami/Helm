@@ -253,6 +253,18 @@ Improvement-plan P1-4. Verified E2E via headless Edge against an isolated 6-pane
 server (13/13: minimize unmount + tray, restore remount + replay, maximize
 mounts one, grid columns track visible count, memo skips unchanged panes).
 
+Open-source hygiene (2026-07-05) — added SECURITY.md (honest threat model:
+loopback + token + Origin; explicitly out-of-scope = multi-user/remote; the
+token file is the whole boundary; private vuln reporting) and CONTRIBUTING.md
+(dev setup, pre-PR checklist, simplicity/security ground rules, the real-pane
+verification requirement). README gained the screenshot + links to both. CI
+switched the server job to `npm ci` (reproducible, matches the pinned node-pty)
+and added `npm audit --audit-level=high` to both jobs (audits currently clean).
+Improvement-plan P1-5, finishing Phase 1. Deliberately deferred ESLint/Prettier
+to the Phase 3 tooling pass — bolting a linter onto a never-linted ~2.6k-line
+codebase risks a red CI that blocks pushes, and it pairs naturally with the
+planned backend-typecheck work.
+
 ## Short-term backlog (rough priority order, owner-approved direction)
 1. Theme settings (light theme / accent choice) — font-size is done.
 2. Drag-resize pane sizes (reorder is done; resize = grid column/row weights).

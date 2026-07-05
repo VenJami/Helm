@@ -22,6 +22,9 @@ jobs:
       - name: Install frontend deps
         working-directory: web
         run: npm ci
+      - name: Audit frontend deps
+        working-directory: web
+        run: npm audit --audit-level=high
       - name: Typecheck frontend
         working-directory: web
         run: npx tsc --noEmit
@@ -40,7 +43,10 @@ jobs:
           node-version: 22
       - name: Install server deps
         working-directory: server
-        run: npm install
+        run: npm ci   # exact, reproducible — matches the pinned node-pty (GOTCHAS)
+      - name: Audit server deps
+        working-directory: server
+        run: npm audit --audit-level=high
       - name: Smoke test
         working-directory: server
         run: npm test

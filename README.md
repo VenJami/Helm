@@ -92,6 +92,9 @@ your machine. Helm's defenses:
   never in this repo.
 - Everything runs locally — no cloud services, no telemetry, $0.
 
+Full threat model, what's out of scope (multi-user/remote is **not** supported),
+and how to report a vulnerability: [SECURITY.md](SECURITY.md).
+
 ## Docs
 
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — API, spawn details, hook relay
@@ -100,7 +103,11 @@ your machine. Helm's defenses:
 - [docs/ROADMAP.md](docs/ROADMAP.md) — done + planned
 - [CLAUDE.md](CLAUDE.md) — working agreement for Claude Code sessions on this repo
 
-Issues and PRs welcome.
+## Contributing
+
+Issues and PRs welcome — see [CONTRIBUTING.md](CONTRIBUTING.md) for dev setup,
+the pre-PR checklist, and the project's simplicity/security ground rules.
+Security vulnerabilities: please report privately per [SECURITY.md](SECURITY.md).
 
 ## License
 
