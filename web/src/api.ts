@@ -1,4 +1,4 @@
-import type { AccountUsage, ConsoleState, GitInfo, HelmSettings, LogsResponse, ProfilesInfo, ServerInfo, SessionInfo, UsageInfo, Workspace } from './types';
+import type { AccountUsage, ConsoleState, Diagnostics, GitInfo, HelmSettings, LogsResponse, ProfilesInfo, ServerInfo, SessionInfo, UsageInfo, Workspace } from './types';
 
 const TOKEN = (window as unknown as { __HELM_TOKEN__: string }).__HELM_TOKEN__;
 
@@ -67,6 +67,7 @@ export const api = {
     req<SessionInfo>(`/sessions/${id}`, { method: 'PATCH', body: JSON.stringify(patch) }),
   getGlobalUsage: () => req<AccountUsage[]>('/usage'),
   getLogs: (after: number) => req<LogsResponse>(`/logs?after=${after}`),
+  getDiagnostics: () => req<Diagnostics>('/diagnostics'),
   broadcast: (text: string, sessionIds: string[]) =>
     req<{ ok: boolean; results: Record<string, 'sent' | 'skipped'> }>('/broadcast', {
       method: 'POST',

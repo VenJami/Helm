@@ -121,6 +121,20 @@ test('REST requires the bearer token', async () => {
   assert.ok(Array.isArray(await ok.json()));
 });
 
+test('diagnostics report claude health (drift alarm)', async () => {
+  // fake-claude answers `--version` at the tested floor, so the isolated
+  // server should read a healthy claude and raise no drift warnings.
+  let d;
+  for (let i = 0; i < 20 && !(d = await (await authed('/diagnostics')).json()).claude.checked; i++) {
+    await sleep(150);
+  }
+  assert.equal(d.claude.checked, true);
+  assert.equal(d.claude.ok, true);
+  assert.equal(d.claude.version, '2.1.198');
+  assert.ok(Array.isArray(d.warnings));
+  assert.equal(d.warnings.filter((w) => w.key.startsWith('claude-')).length, 0);
+});
+
 test('session lifecycle + hook status/activityNote + WS replay', async () => {
   const ws = mkdir(path.join(tmp, 'proj'));
   await authed('/workspaces', { method: 'POST', body: JSON.stringify({ name: 'proj', dir: ws }) });

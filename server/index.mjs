@@ -15,17 +15,26 @@ import ptyPkg from 'node-pty';
 
 const { spawn } = ptyPkg;
 
-// node-pty 1.0.0 bug on Windows: killing a pty whose process already died can
-// throw `TypeError: ... reading 'forEach'` inside windowsPtyAgent.js as an
-// unhandled rejection, which would crash the whole server (and every other
-// running session with it). Swallow exactly that case; crash on anything else.
-process.on('unhandledRejection', (err) => {
+// Process-level guards. One process hosts every pane, so an uncaught error
+// crashing it would take all live terminals down with it — after boot, log
+// loudly (🐞 drawer + console) and keep serving. During boot we stay
+// fail-fast: a broken start should exit visibly, not hang half-initialized.
+// Known node-pty bug kept from before (version pinned in package.json — the
+// stack match below silently disarms if that file is ever renamed upstream,
+// so don't float it): killing a pty whose process already died can throw
+// `TypeError: ... reading 'forEach'` from windowsPtyAgent.js as a rejection.
+let booted = false; // flipped once app.listen succeeds
+function absorbProcessError(kind, err) {
   if (err instanceof TypeError && err.stack?.includes('windowsPtyAgent.js')) {
     dbg('error', `ignored node-pty kill race: ${err.message}`);
     return;
   }
-  throw err;
-});
+  if (!booted) throw err; // boot failure: crash loud
+  const msg = `${kind} (server kept alive): ${err?.stack || err}`;
+  try { dbg('error', msg); } catch { console.error(msg); }
+}
+process.on('unhandledRejection', (err) => absorbProcessError('unhandled rejection', err));
+process.on('uncaughtException', (err) => absorbProcessError('uncaught exception', err));
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DIST_DIR = path.join(__dirname, '..', 'web', 'dist');
@@ -47,7 +56,42 @@ const SESSIONS_FILE = path.join(HELM_DIR, 'sessions.json');
 const HOOK_SETTINGS_FILE = path.join(HELM_DIR, 'hook-settings.json');
 const SETTINGS_FILE = path.join(HELM_DIR, 'settings.json');
 
-// Random token per server start; embedded in the served page, required on every
+// --------------------------------------------------- crash-safe persistence
+// All state writes go through temp-file + rename (atomic on the same volume),
+// keeping the previous good copy as <file>.bak. A server killed mid-write can
+// no longer leave a truncated file — and a corrupt file now recovers from its
+// .bak loudly instead of being treated as first-run, which used to silently
+// wipe every persisted session/workspace.
+function writeFileAtomic(file, data) {
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const tmp = `${file}.tmp`;
+  fs.writeFileSync(tmp, data);
+  try { fs.copyFileSync(file, `${file}.bak`); } catch { /* first write — nothing to back up */ }
+  fs.renameSync(tmp, file);
+}
+
+function writeJsonAtomic(file, obj) {
+  writeFileAtomic(file, JSON.stringify(obj, null, 2));
+}
+
+// undefined = file missing (a normal first run). dbg may not be initialized
+// yet when a loader runs at boot, hence the console fallback.
+function readJsonWithBackup(file, label) {
+  let raw;
+  try { raw = fs.readFileSync(file, 'utf8'); } catch { return undefined; } // first run
+  try { return JSON.parse(raw); } catch { /* corrupt — fall through to .bak */ }
+  const complain = (msg) => { try { dbg('error', msg); } catch { console.error(msg); } };
+  try {
+    const val = JSON.parse(fs.readFileSync(`${file}.bak`, 'utf8'));
+    complain(`${label} file was corrupt — recovered from ${path.basename(file)}.bak`);
+    return val;
+  } catch {
+    complain(`${label} file is corrupt with no usable .bak — starting empty (bad file left at ${file})`);
+    return undefined;
+  }
+}
+
+// Random persistent token; embedded in the served page, required on every
 // REST call and WS connect (defense against cross-origin drive-by = RCE).
 // Tokens persist across server restarts (in %LOCALAPPDATA%\Helm, never the
 // OneDrive-synced repo) so open tabs and running panes keep working after a
@@ -60,8 +104,7 @@ function persistentToken(filename) {
     if (/^[0-9a-f]{48}$/.test(t)) return t;
   } catch { /* first run */ }
   const t = crypto.randomBytes(24).toString('hex');
-  fs.mkdirSync(HELM_DIR, { recursive: true });
-  fs.writeFileSync(file, t);
+  writeFileAtomic(file, t);
   return t;
 }
 const TOKEN = persistentToken('token');
@@ -95,13 +138,13 @@ writeHookSettings();
 // autoRevive: respawn every 'dead' session automatically at server start.
 const DEFAULT_SETTINGS = { autoRevive: false };
 let settings = { ...DEFAULT_SETTINGS };
-try {
-  settings = { ...DEFAULT_SETTINGS, ...JSON.parse(fs.readFileSync(SETTINGS_FILE, 'utf8')) };
-} catch { /* first run — defaults */ }
+{
+  const saved = readJsonWithBackup(SETTINGS_FILE, 'settings');
+  if (saved && typeof saved === 'object') settings = { ...DEFAULT_SETTINGS, ...saved };
+}
 
 function saveSettings() {
-  fs.mkdirSync(HELM_DIR, { recursive: true });
-  fs.writeFileSync(SETTINGS_FILE, JSON.stringify(settings, null, 2));
+  writeJsonAtomic(SETTINGS_FILE, settings);
 }
 
 /** @type {Map<string, Session>} id → session */
@@ -119,6 +162,59 @@ function dbg(tag, msg) {
   debugLog.push({ seq: ++debugSeq, t: new Date().toISOString(), tag, msg });
   if (debugLog.length > DEBUG_LOG_MAX) debugLog.shift();
   console.log(`[${tag}] ${msg}`);
+}
+
+// ------------------------------------------------------ claude-CLI drift alarm
+// Helm's features (usage, cost, status, revive, titles) are all parsed out of
+// claude's *undocumented* on-disk formats and model names. When claude changes
+// them, those features quietly return zeros/"no data" instead of erroring — the
+// user assumes Helm is broken and can't tell why. These signals make drift
+// LOUD: a boot-time version check + runtime notes when parsing hits something
+// unexpected, surfaced as a dismissible banner in the UI and in the 🐞 drawer.
+// The assumptions themselves are catalogued in docs/CLAUDE_INTERNALS.md.
+const CLAUDE_VERSION_FLOOR = '2.1.198'; // last version verified end-to-end (GOTCHAS)
+const diagnostics = {
+  claude: { version: null, ok: true, floor: CLAUDE_VERSION_FLOOR, checked: false, error: null },
+  warnings: new Map(), // key → { key, message, since, count } (key dedupes the spam)
+};
+function noteDrift(key, message) {
+  const hit = diagnostics.warnings.get(key);
+  if (hit) { hit.count += 1; return; } // already surfaced — just count it
+  diagnostics.warnings.set(key, { key, message, since: new Date().toISOString(), count: 1 });
+  dbg('drift', message);
+}
+// Numeric semver compare (major.minor.patch). Returns -1 / 0 / 1.
+function cmpVersion(a, b) {
+  const pa = String(a).split('.').map((n) => parseInt(n, 10) || 0);
+  const pb = String(b).split('.').map((n) => parseInt(n, 10) || 0);
+  for (let i = 0; i < 3; i++) {
+    if ((pa[i] || 0) !== (pb[i] || 0)) return (pa[i] || 0) < (pb[i] || 0) ? -1 : 1;
+  }
+  return 0;
+}
+// Runs once after boot. shell:true so Windows can launch the `claude.cmd` shim.
+function checkClaudeVersion() {
+  execFile(CLAUDE_CMD, ['--version'], { shell: true, windowsHide: true, timeout: 8000 }, (err, stdout) => {
+    diagnostics.claude.checked = true;
+    if (err) {
+      diagnostics.claude.ok = false;
+      diagnostics.claude.error = err.message;
+      noteDrift('claude-missing',
+        `Couldn't run \`${CLAUDE_CMD} --version\` — is the claude CLI installed and on PATH? ` +
+        `Panes, usage and revive all need it. (${err.message})`);
+      return;
+    }
+    const m = String(stdout).match(/(\d+\.\d+\.\d+)/);
+    diagnostics.claude.version = m ? m[1] : String(stdout).trim() || null;
+    if (m && cmpVersion(m[1], CLAUDE_VERSION_FLOOR) < 0) {
+      diagnostics.claude.ok = false;
+      noteDrift('claude-below-floor',
+        `claude ${m[1]} is below the version Helm was verified against (${CLAUDE_VERSION_FLOOR}). ` +
+        `Usage, status and revive may misbehave — update claude if these look wrong.`);
+    } else {
+      dbg('server', `claude version ${diagnostics.claude.version ?? '(unparsed)'}`);
+    }
+  });
 }
 
 // Random pane identity — nautical/star names to match the Helm theme, and
@@ -301,10 +397,9 @@ function reviveSession(session, { cols, rows }) {
 // entries that can be revived via `claude --resume <claudeSessionId>`.
 
 function loadPersistedSessions() {
-  let list = [];
-  try {
-    list = JSON.parse(fs.readFileSync(SESSIONS_FILE, 'utf8'));
-  } catch { /* first run */ }
+  const saved = readJsonWithBackup(SESSIONS_FILE, 'sessions');
+  // v1 files wrap the list ({version, sessions}); pre-version files were bare arrays
+  const list = Array.isArray(saved) ? saved : saved?.sessions;
   if (!Array.isArray(list)) return;
   for (const s of list) {
     if (!s?.id || !s?.workspace) continue;
@@ -377,8 +472,13 @@ function persistSessions() {
       transcriptPath: s.transcriptPath,
       createdAt: s.createdAt,
     }));
-  fs.mkdirSync(HELM_DIR, { recursive: true });
-  fs.writeFileSync(SESSIONS_FILE, JSON.stringify(list, null, 2));
+  // Runs inside PTY onExit callbacks and timers — a disk hiccup (full disk,
+  // AV/OneDrive lock) must not crash the server and take every pane with it.
+  try {
+    writeJsonAtomic(SESSIONS_FILE, { version: 1, sessions: list });
+  } catch (err) {
+    dbg('error', `failed to persist sessions: ${err.message}`);
+  }
 }
 
 // Debounced variant for chatty updates (hook events). Lifecycle changes
@@ -782,6 +882,11 @@ app.get('/api/logs', (req, res) => {
   });
 });
 
+// claude-CLI health + accumulated drift warnings — drives the UI's drift banner.
+app.get('/api/diagnostics', (_req, res) => {
+  res.json({ claude: diagnostics.claude, warnings: [...diagnostics.warnings.values()] });
+});
+
 // ------------------------------------------------------ console window toggle
 // Show/hide the OS console window this server is running in (the "Helm server"
 // terminal from start-helm.cmd) so the UI can offer a button for it. Windows
@@ -840,9 +945,10 @@ const FILE_USAGE_CACHE_MAX = 512; // bound memory — oldest-touched entries dro
 // moved history keeps counting against the account it actually ran on.
 const IMPORTED_FILE = path.join(HELM_DIR, 'imported-transcripts.json');
 let importedTranscripts = {};
-try {
-  importedTranscripts = JSON.parse(fs.readFileSync(IMPORTED_FILE, 'utf8')) || {};
-} catch { /* no switches yet */ }
+{
+  const saved = readJsonWithBackup(IMPORTED_FILE, 'imported-transcripts ledger');
+  if (saved && typeof saved === 'object') importedTranscripts = saved;
+}
 
 function markImported(file) {
   // prune entries whose file is gone so the ledger can't grow forever
@@ -850,8 +956,7 @@ function markImported(file) {
     if (!fs.existsSync(f)) delete importedTranscripts[f];
   }
   importedTranscripts[file] = Date.now();
-  fs.mkdirSync(HELM_DIR, { recursive: true });
-  fs.writeFileSync(IMPORTED_FILE, JSON.stringify(importedTranscripts, null, 2));
+  writeJsonAtomic(IMPORTED_FILE, importedTranscripts);
 }
 
 function parseTranscriptFile(file) {
@@ -869,10 +974,12 @@ function parseTranscriptFile(file) {
   const byMessage = new Map();
   let text;
   try { text = fs.readFileSync(file, 'utf8'); } catch { return null; }
+  let sawJson = false; // did any line parse as JSON at all? (drift signal below)
   for (const line of text.split('\n')) {
     if (!line) continue;
     let entry;
     try { entry = JSON.parse(line); } catch { continue; }
+    sawJson = true;
     const usage = entry?.message?.usage;
     const model = entry?.message?.model;
     // '<synthetic>' = placeholder entries (errors/retries), not real usage
@@ -898,6 +1005,16 @@ function parseTranscriptFile(file) {
     m.cacheWrite += cacheWrite;
     m.turns += 1;
     events.push([t, model, input, output, cacheRead, cacheWrite]);
+  }
+  // Drift signal: a substantial, well-formed transcript that yields zero usage
+  // events almost certainly means the JSONL shape changed (assistant/usage
+  // fields renamed or moved). Gated by size so fresh/short sessions with no
+  // assistant turn yet don't false-alarm. (Cached below, so noted at most once.)
+  if (sawJson && events.length === 0 && stat.size > 16 * 1024) {
+    noteDrift('transcript-shape',
+      `A ${Math.round(stat.size / 1024)} KB transcript parsed as JSON but produced 0 usage entries ` +
+      `(e.g. ${path.basename(file)}) — the claude transcript format may have changed, so usage reads low. ` +
+      `See docs/CLAUDE_INTERNALS.md.`);
   }
   const parsed = { mtimeMs: stat.mtimeMs, size: stat.size, models, events };
   fileUsageCache.set(file, parsed);
@@ -943,7 +1060,16 @@ const MODEL_PRICING = [
 // so it simply doesn't contribute to the total rather than inventing a number.
 function tokenCost(model, { input = 0, output = 0, cacheRead = 0, cacheWrite = 0 }) {
   const p = MODEL_PRICING.find(([re]) => re.test(model))?.[1];
-  if (!p) return 0;
+  if (!p) {
+    // A real model with real tokens that matches none of our price regexes =
+    // claude shipped a new family; cost silently under-reports until we add it.
+    if (model && model !== '<synthetic>' && (input || output || cacheRead || cacheWrite)) {
+      noteDrift(`unknown-model:${model}`,
+        `Unknown model "${model}" — its cost isn't counted (add it to MODEL_PRICING). ` +
+        `A newer claude model family has probably shipped, so $ estimates read low.`);
+    }
+    return 0;
+  }
   return (input * p.in + output * p.out
     + cacheRead * p.in * 0.1 + cacheWrite * p.in * 1.25) / 1e6;
 }
@@ -1061,18 +1187,15 @@ app.get('/api/sessions/:id/usage', (req, res) => {
 // OneDrive-synced repo). Removing a workspace does NOT kill its sessions.
 
 function loadWorkspaces() {
-  try {
-    const list = JSON.parse(fs.readFileSync(WORKSPACES_FILE, 'utf8'));
-    return Array.isArray(list) ? list : [];
-  } catch {
-    return [];
-  }
+  const saved = readJsonWithBackup(WORKSPACES_FILE, 'workspaces');
+  // v1 files wrap the list ({version, workspaces}); pre-version files were bare arrays
+  const list = Array.isArray(saved) ? saved : saved?.workspaces;
+  return Array.isArray(list) ? list : [];
 }
 let workspaces = loadWorkspaces();
 
 function saveWorkspaces() {
-  fs.mkdirSync(HELM_DIR, { recursive: true });
-  fs.writeFileSync(WORKSPACES_FILE, JSON.stringify(workspaces, null, 2));
+  writeJsonAtomic(WORKSPACES_FILE, { version: 1, workspaces });
 }
 
 app.get('/api/workspaces', (_req, res) => {
@@ -1334,10 +1457,12 @@ app.patch('/api/profiles/:name', (req, res) => {
 // ---------------------------------------------------------------------- ws
 
 const server = app.listen(PORT, HOST, () => {
+  booted = true; // from here on, uncaught errors log instead of killing every pane
   console.log(`Helm ⎈  http://${HOST}:${PORT}`);
   console.log(`token: ${TOKEN}`);
   const dead = [...sessions.values()].filter((s) => s.status === 'dead').length;
   dbg('server', `started (pid ${process.pid})${dead ? ` — ${dead} dead session(s) loaded, revivable` : ''}`);
+  checkClaudeVersion(); // async; populates /api/diagnostics for the drift banner
 });
 
 server.on('error', (err) => {
@@ -1354,7 +1479,10 @@ server.on('error', (err) => {
     );
     process.exit(1);
   }
-  throw err;
+  // Any other listen failure: exit loudly (don't rely on the process guards —
+  // a server that never bound has nothing to keep alive).
+  console.error(`fatal server error: ${err?.stack || err}`);
+  process.exit(1);
 });
 
 const wss = new WebSocketServer({ noServer: true });

@@ -216,6 +216,30 @@ extension (dev work) and shares the redacted login with the Claude-2
 profile — folding gives Claude-2 the true combined total (~978M tokens E2E-
 verified: default row gone, "same login" tag gone, Claude-2 carries the sum).
 
+Hardening pass 1 (2026-07-05) — atomic state writes (temp+rename + `.bak`,
+loud recovery from corruption instead of silent first-run wipe;
+`sessions`/`workspaces` files now `{version:1,...}` wraps, legacy bare-array
+shape still loads) + crash policy (fail-fast boot, keep-alive after: post-boot
+uncaught errors log to the 🐞 drawer instead of killing every pane; the
+persist call inside PTY callbacks/timers guarded) + node-pty pinned exact
+1.1.0 (the `^1.0.0` range had already silently floated 1.0.0→1.1.0; a float
+can disarm the kill-race guard's filename match). First slice of the
+improvement plan (P1-1/P1-2; plan folder lives outside the repo, in
+`../helm-improvement-plan`). Verified E2E on an isolated server: 6/6
+corruption/recovery checks + the 9-test smoke suite green.
+
+Loud claude-drift alarm (2026-07-05) — Helm parses claude's undocumented
+on-disk formats, so a claude update used to silently zero out usage/status/
+revive. Now surfaced: boot-time `claude --version` check (floor 2.1.198) +
+parse-time signals (unknown model in `MODEL_PRICING`, a >16 KB transcript that
+yields 0 usage entries) → `GET /api/diagnostics` → dismissible top-of-main
+banner (`web/src/components/DriftBanner.tsx`, per-warning-key dismissal in
+localStorage). New `docs/CLAUDE_INTERNALS.md` catalogues every assumed
+format/field/env/flag in one place. Improvement-plan P1-3. Verified E2E: 9/9
+drift checks (healthy/below-floor/missing/unknown-model/transcript-shape) on
+isolated servers; committed smoke test now asserts diagnostics health (10
+tests, 1 skip).
+
 ## Short-term backlog (rough priority order, owner-approved direction)
 1. Theme settings (light theme / accent choice) — font-size is done.
 2. Drag-resize pane sizes (reorder is done; resize = grid column/row weights).

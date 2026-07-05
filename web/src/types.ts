@@ -96,6 +96,26 @@ export interface HelmSettings {
   autoRevive: boolean; // respawn dead panes automatically at server start
 }
 
+// claude-CLI drift diagnostics — Helm reads undocumented claude formats, so
+// when they change, features quietly return zeros. These surface it loudly.
+export interface DriftWarning {
+  key: string;     // stable id (dedupes repeats; also the dismiss key)
+  message: string; // human-readable, plain language
+  since: string;   // ISO — first seen
+  count: number;   // times observed
+}
+
+export interface Diagnostics {
+  claude: {
+    version: string | null;
+    ok: boolean;      // false = not found or below the tested floor
+    floor: string;    // version Helm was verified against
+    checked: boolean; // has the boot-time `claude --version` returned yet
+    error: string | null;
+  };
+  warnings: DriftWarning[];
+}
+
 // State of the server's own console window (start-helm.cmd terminal).
 // supported:false = non-Windows or launched detached with no console → hide the
 // toggle button entirely.

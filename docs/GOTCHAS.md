@@ -1,12 +1,27 @@
 # Helm — Hard-won gotchas (read before touching server code)
 
-- **node-pty 1.0.0 kill-race crash:** killing a pty whose process already died
-  can throw an unhandled `TypeError … 'forEach'` from `windowsPtyAgent.js` and
-  it WILL take down the whole server. Guarded in `server/index.mjs` by a
-  targeted `unhandledRejection` handler (swallows exactly that, rethrows the
-  rest). Don't "fix" by upgrading node-pty casually — the prebuilt binary
-  install is version-sensitive; an upgrade may require a native toolchain this
-  box lacks.
+- **node-pty kill-race crash:** killing a pty whose process already died can
+  throw an unhandled `TypeError … 'forEach'` from `windowsPtyAgent.js` and
+  would take down the whole server. Guarded in `server/index.mjs` by a
+  targeted stack-string match inside the process guards. node-pty is **pinned
+  exact (1.1.0)** in package.json — the `^1.0.0` range had already silently
+  floated 1.0.0 → 1.1.0, and a future rename of `windowsPtyAgent.js` would
+  disarm the guard without any error. Don't upgrade casually — the prebuilt
+  binary is version-sensitive, and if you do, re-verify the guard's filename
+  match.
+- **Crash policy (2026-07-05): fail-fast during boot, keep-alive after.**
+  One process hosts every pane, so post-boot uncaught exceptions/rejections
+  are logged (🐞 drawer + console) instead of crashing all terminals; boot
+  failures still exit loudly. Don't add code that relies on a crash-restart
+  to recover state.
+- **State files are atomic + versioned + backed up (2026-07-05):** all JSON
+  state (`sessions`, `workspaces`, `settings`, imported-transcripts ledger,
+  tokens) is written temp+rename with the previous good copy kept as
+  `<file>.bak`; corrupt files recover from `.bak` loudly (a corrupt file used
+  to be treated as first-run and silently wiped state). `sessions.json` /
+  `workspaces.json` are now `{version: 1, ...}` wraps — loaders still accept
+  the legacy bare-array shape. Use `writeJsonAtomic`/`readJsonWithBackup` for
+  any new persisted file; never raw `writeFileSync`.
 - **"AttachConsole failed" stacks in the server log** when killing sessions:
   node-pty's forked console-list helper dying. Harmless; ignore.
 - **Stale server on port 7777** — the #1 recurring issue. If `EADDRINUSE`:
@@ -51,6 +66,15 @@
   teammate prompt → usage API returns tokens). Helm still degrades gracefully
   when a transcript is missing: `canResume` checks existence, revive falls
   back to fresh.
+- **Everything Helm parses out of claude is undocumented** and can drift on a
+  claude update (usage/cost/status/revive all silently return zeros when it
+  does). The full catalogue of assumed formats/fields/env/flags is
+  `docs/CLAUDE_INTERNALS.md` — check it first when a feature "shows nothing."
+  As of 2026-07-05 drift is no longer silent: a boot-time `claude --version`
+  check (floor `2.1.198`) + parse-time signals (unknown model, empty-but-large
+  transcript) feed `GET /api/diagnostics` and a dismissible UI banner
+  (`web/src/components/DriftBanner.tsx`). When you fix a drift, bump
+  `CLAUDE_VERSION_FLOOR` and update CLAUDE_INTERNALS.md.
 - **Session persistence must be immediate for lifecycle changes**
   (create/delete/exit/revive call `persistSessions()` directly; only chatty
   hook updates use the debounced `schedulePersist()`). A hard-killed server

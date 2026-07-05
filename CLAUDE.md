@@ -104,6 +104,9 @@ Read on demand (open the one you need; not auto-loaded, to save context):
   doesn't work"** (usual culprit: stale server on port 7777)
 - docs/ARCHITECTURE.md — read before API/protocol/spawn changes
 - docs/ACCOUNTS.md — read before profile/login work
+- docs/CLAUDE_INTERNALS.md — the catalogue of every undocumented claude format/
+  field/env/flag Helm parses; read first when usage/status/revive "shows
+  nothing" (likely claude drift — the UI banner + /api/diagnostics flag it)
 
 ## Workflow Reminders
 - Plan first for anything non-trivial; confirm before destructive actions

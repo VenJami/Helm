@@ -8,6 +8,7 @@ import { Modal } from './components/Modal';
 import { ProfileSelect } from './components/ProfileSelect';
 import { TargetCursor } from './components/TargetCursor';
 import { Toaster, toast } from './components/Toaster';
+import { DriftBanner } from './components/DriftBanner';
 import { CommandPalette } from './components/CommandPalette';
 import { IconBug, IconMinus, IconPanelLeftOpen, IconPencil, IconPlus, IconTrash } from './components/Icons';
 import {
@@ -764,6 +765,7 @@ export function App() {
         />
       )}
       <main className="main">
+        <DriftBanner />
         {selected ? (
           <>
             <div className="main-bar">

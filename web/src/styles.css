@@ -939,6 +939,40 @@ input::placeholder { color: var(--faint); }
   to   { opacity: 1; transform: translateY(0); }
 }
 
+/* claude-CLI drift alarm — spans the top of the main column, above the bar. */
+.drift-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin: 10px 12px 0;
+  padding: 10px 10px 10px 12px;
+  background: var(--accent-dim);
+  border: 1px solid var(--border-strong);
+  border-left: 3px solid var(--accent);
+  border-radius: 8px;
+}
+.drift-icon { flex-shrink: 0; margin-top: 1px; color: var(--accent); }
+.drift-body { flex: 1; min-width: 0; }
+.drift-title { font-size: 12.5px; font-weight: 600; color: var(--text); margin-bottom: 2px; }
+.drift-msg {
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--muted);
+  word-break: break-word;
+}
+.drift-msg + .drift-msg { margin-top: 4px; }
+.drift-close {
+  flex-shrink: 0;
+  display: inline-flex;
+  background: none;
+  border: 0;
+  border-radius: 4px;
+  color: var(--faint);
+  cursor: pointer;
+  padding: 2px;
+}
+.drift-close:hover { color: var(--text); background: var(--panel); }
+
 .pane-slot {
   display: flex;
   min-width: 0;
