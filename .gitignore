@@ -1,6 +1,7 @@
 # dependencies + build output
 node_modules/
 web/dist/
+*.tsbuildinfo
 
 # local Claude Code settings (personal machine config)
 .claude/settings.local.json

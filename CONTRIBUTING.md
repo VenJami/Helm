@@ -57,8 +57,10 @@ cd ../server && npm start # → http://127.0.0.1:7777
 ## Before you open a PR
 
 1. **Frontend typechecks, tests, builds:** `cd web && npx tsc --noEmit && npm test && npm run build`
-2. **Server parses:** `node --check` on `server/index.mjs`, `server/hook-post.mjs`,
-   and every `server/src/*.mjs`
+2. **Server parses + typechecks:** `node --check` on `server/index.mjs`,
+   `server/hook-post.mjs`, and every `server/src/*.mjs`, then
+   `cd server && npm run typecheck` (JSDoc + `tsc --checkJs`; ships as plain
+   `.mjs`, so add types via JSDoc — see the `@typedef`s in index.mjs/src)
 3. **Smoke test passes:** `cd server && npm test` (boots a real server on an
    isolated data dir against a keep-alive `claude` stand-in; drives REST + WS +
    the hook relay).

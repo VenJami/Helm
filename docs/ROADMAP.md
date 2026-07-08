@@ -312,6 +312,16 @@ and spends a few tokens, so it's NOT in CI. Verified 10/10 against claude
 the 🐞 log — spot claude field drift fast). Turns the throwaway-script pattern
 from GOTCHAS into a permanent artifact. Improvement-plan P3-3.
 
+Backend typechecking (2026-07-05) — the server ships as plain `.mjs` but is now
+type-CHECKED: `server/tsconfig.json` (`checkJs`+`noEmit`, lenient — strict off,
+noImplicitAny off) + `npm run typecheck` (`tsc`), wired into CI's smoke job.
+Types come from JSDoc: `@typedef Session` + a `ParsedTranscript`-style tuple for
+`USAGE_WINDOWS`/`MODEL_PRICING`, `NodeJS.ErrnoException` on the listen handler,
+env as `Record<string,string|undefined>`. Dev deps added (owner-approved P3-1
+direction): typescript + `@types/node|express|ws`. Tests excluded from the check
+(validated by running; loose `res.json()` shapes = noise). 0 errors; zero
+runtime change (JSDoc is comments). Improvement-plan P3-1.
+
 ## Short-term backlog (rough priority order, owner-approved direction)
 1. Theme settings (light theme / accent choice) — font-size is done.
 2. Drag-resize pane sizes (reorder is done; resize = grid column/row weights).

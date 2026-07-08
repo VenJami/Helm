@@ -72,6 +72,7 @@ export function checkClaudeVersion() {
 // derived (read = 0.1x input, write = 1.25x input). Keyed by name prefix so
 // dated ids (claude-haiku-4-5-20251001) and future point releases still match.
 // Deliberately approximate — ignores Sonnet intro pricing/tiers; UI labels "est".
+/** @type {[RegExp, { in: number, out: number }][]} */
 const MODEL_PRICING = [
   [/^claude-(fable|mythos)/, { in: 10, out: 50 }],
   [/^claude-opus/, { in: 5, out: 25 }],
@@ -207,8 +208,10 @@ export function parseTranscriptFile(file) {
 // projects/<cwd>/<sessionId>/subagents/*.jsonl.
 export function transcriptFiles(configDir) {
   const root = path.join(configDir, 'projects');
+  /** @type {string[]} */
   let entries = [];
-  try { entries = fs.readdirSync(root, { recursive: true }); } catch { return []; }
+  // recursive readdir returns string[] here (no Buffer encoding requested)
+  try { entries = /** @type {string[]} */ (fs.readdirSync(root, { recursive: true })); } catch { return []; }
   return entries
     .filter((f) => f.endsWith('.jsonl'))
     .map((f) => path.join(root, f));

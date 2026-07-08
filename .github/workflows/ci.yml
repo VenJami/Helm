@@ -53,6 +53,9 @@ jobs:
       - name: Audit server deps
         working-directory: server
         run: npm audit --audit-level=high
+      - name: Typecheck server (JSDoc + tsc --checkJs)
+        working-directory: server
+        run: npm run typecheck
       - name: Smoke test
         working-directory: server
         run: npm test

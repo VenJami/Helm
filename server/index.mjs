@@ -117,6 +117,27 @@ function saveSettings() {
   writeJsonAtomic(SETTINGS_FILE, settings);
 }
 
+/**
+ * @typedef {object} Session
+ * @property {string} id
+ * @property {string} name
+ * @property {string} color
+ * @property {string} workspace
+ * @property {string|null} profile
+ * @property {import('node-pty').IPty|null} pty
+ * @property {string[]} buffer            ring buffer of raw PTY output for replay
+ * @property {number} bufLen
+ * @property {Set<import('ws').WebSocket>} sockets
+ * @property {'running'|'exited'|'dead'} status
+ * @property {number|null} exitCode
+ * @property {'working'|'waiting'|'idle'|null} activity
+ * @property {string|null} activitySince
+ * @property {string|null} activityNote
+ * @property {string|null} claudeSessionId  claude's own session id (from hooks) — for --resume
+ * @property {string|null} transcriptPath
+ * @property {string} createdAt
+ */
+
 /** @type {Map<string, Session>} id → session */
 const sessions = new Map();
 
@@ -147,6 +168,7 @@ function randomPaneIdentity() {
 
 // Spawn (or respawn, for revive) the claude PTY for a session.
 function spawnPty(session, extraArgs, { cols, rows }) {
+  /** @type {Record<string, string|undefined>} */
   const env = {
     ...process.env,
     // Lets hook-post.mjs (running inside the pane) report back to this session
@@ -253,6 +275,7 @@ function createSession({ workspace, profile, cols, rows }) {
     const hasCreds = fs.existsSync(path.join(profileDir, '.credentials.json'));
     if (onboarded && !hasCreds) args.push('/login');
   }
+  /** @type {Session} */
   const session = {
     id: crypto.randomUUID(),
     ...randomPaneIdentity(), // name + color (both customizable via PATCH)
@@ -820,6 +843,7 @@ function markImported(file) {
 }
 
 // Rolling windows, newest → oldest. Keys are stable API; the UI labels them.
+/** @type {[string, number][]} */
 const USAGE_WINDOWS = [
   ['h1', 3600_000],
   ['h5', 5 * 3600_000],
@@ -1232,7 +1256,7 @@ const server = app.listen(PORT, HOST, () => {
   checkClaudeVersion(); // async; populates /api/diagnostics for the drift banner
 });
 
-server.on('error', (err) => {
+server.on('error', (/** @type {NodeJS.ErrnoException} */ err) => {
   if (err.code === 'EADDRINUSE') {
     const killTip = IS_WIN
       ? `  Get-NetTCPConnection -LocalPort ${PORT} -State Listen |\n` +

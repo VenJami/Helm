@@ -1,0 +1,19 @@
+{
+  "// note": "Type-CHECK only (checkJs, noEmit) — the server ships as plain .mjs and runs on node directly. Backend types come from JSDoc + @types. Tests are excluded (they're validated by running, and loose res.json() shapes would only add noise). Run: npx tsc -p tsconfig.json",
+  "compilerOptions": {
+    "target": "es2022",
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
+    "lib": ["es2023"],
+    "types": ["node"],
+    "allowJs": true,
+    "checkJs": true,
+    "noEmit": true,
+    "resolveJsonModule": true,
+    "skipLibCheck": true,
+    "strict": false,
+    "noImplicitAny": false,
+    "forceConsistentCasingInFileNames": true
+  },
+  "include": ["index.mjs", "hook-post.mjs", "src/**/*.mjs"]
+}
