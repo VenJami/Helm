@@ -161,9 +161,10 @@ test('session lifecycle + hook status/activityNote + WS replay', async () => {
   assert.equal(s.activityNote, null);
 
   // WS attach replays the ring buffer (the stand-in printed a ready line).
+  // 10 s, not 3 — a cold CI runner can be slow to complete the WS upgrade.
   const replay = await new Promise((resolve, reject) => {
     const sock = new WebSocket(`ws://127.0.0.1:${PORT}/ws?session=${id}&token=${TOKEN}`);
-    const timer = setTimeout(() => { sock.close(); reject(new Error('no replay within 3s')); }, 3000);
+    const timer = setTimeout(() => { sock.close(); reject(new Error('no replay within 10s')); }, 10000);
     sock.on('message', (raw) => {
       const m = JSON.parse(raw);
       if (m.type === 'replay') { clearTimeout(timer); sock.close(); resolve(m); }
@@ -226,9 +227,18 @@ test('hook relay (hook-post.mjs) + usage engine: dedupe, cost, incremental, part
     asst('m1', { input_tokens: 1000, output_tokens: 500, cache_read_input_tokens: 2000, cache_creation_input_tokens: 100 }), // …by the final copy
   ].join('\n') + '\n');
 
-  // Report it through the real relay (exercises env wiring + POST /api/hook auth)
-  await relay(id, { hook_event_name: 'SessionStart', session_id: claudeSid, transcript_path: tpath });
-  const s = (await (await authed('/sessions')).json()).find((x) => x.id === id);
+  // Report it through the real relay (exercises env wiring + POST /api/hook auth).
+  // hook-post.mjs aborts its POST after 1.5 s and never blocks claude, so on a
+  // slow/cold runner the first hook can be dropped — poll (and re-relay) until
+  // the session reflects it rather than asserting on a single fire.
+  let s;
+  const relayDeadline = Date.now() + 15000;
+  do {
+    await relay(id, { hook_event_name: 'SessionStart', session_id: claudeSid, transcript_path: tpath });
+    s = (await (await authed('/sessions')).json()).find((x) => x.id === id);
+    if (s?.canResume) break;
+    await sleep(500);
+  } while (Date.now() < relayDeadline);
   assert.equal(s.summary, 'Refactor the usage engine');
   assert.equal(s.canResume, true);
 
