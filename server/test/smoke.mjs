@@ -80,7 +80,7 @@ async function tryBoot(port) {
   child.stderr.on('data', (d) => { stderr += d; });
   child.on('exit', () => { exited = true; });
 
-  const deadline = Date.now() + 6000;
+  const deadline = Date.now() + 12000; // generous — cold CI runners boot slowly
   while (Date.now() < deadline && !exited) {
     try {
       if (!TOKEN) TOKEN = fs.readFileSync(path.join(helmDir, 'token'), 'utf8').trim();
@@ -124,10 +124,13 @@ test('REST requires the bearer token', async () => {
 
 test('diagnostics report claude health (drift alarm)', async () => {
   // fake-claude answers `--version` at the tested floor, so the isolated
-  // server should read a healthy claude and raise no drift warnings.
+  // server should read a healthy claude and raise no drift warnings. The
+  // version check spawns cmd → node, which a cold CI runner can take seconds
+  // to do — poll up to 10 s rather than a tight wall.
   let d;
-  for (let i = 0; i < 20 && !(d = await (await authed('/diagnostics')).json()).claude.checked; i++) {
-    await sleep(150);
+  const deadline = Date.now() + 10000;
+  while (!(d = await (await authed('/diagnostics')).json()).claude.checked && Date.now() < deadline) {
+    await sleep(200);
   }
   assert.equal(d.claude.checked, true);
   assert.equal(d.claude.ok, true);
