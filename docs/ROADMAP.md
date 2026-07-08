@@ -265,6 +265,23 @@ to the Phase 3 tooling pass — bolting a linter onto a never-linted ~2.6k-line
 codebase risks a red CI that blocks pushes, and it pairs naturally with the
 planned backend-typecheck work.
 
+Usage off the hot path + typed WS protocol (2026-07-05) — a usage poll used to
+synchronously re-read every changed transcript in full (an active multi-MB
+JSONL re-parsed every tick) on the same thread as all PTY I/O, stuttering every
+pane. Now: transcripts parse incrementally (byte-offset + partial-line tail
+buffer, `readAppendedLines`; dedupe map persists across increments), the
+account roll-up is TTL-cached ~15 s with in-flight dedupe
+(`HELM_USAGE_TTL_MS`, invalidated on account switch), scans yield between
+files, `firstPromptSummary` reads only appended bytes and its cache is capped.
+Measured on a 9.4 MB transcript: 99 ms cold → 6 ms after append → 2 ms
+unchanged; roll-up cache hit 1 ms. Also: the WS wire contract is now a shared
+TS union (`WsServerMsg`/`WsClientMsg` in web/src/types.ts; all client frames go
+through a typed `sendWs`), mirrored in a server comment. New committed smoke
+test drives the REAL `hook-post.mjs` relay as a child process and asserts the
+usage engine end-to-end (streaming dedupe last-wins, $ cost, 1 h window,
+incremental append, half-written-line holdback) — 11 tests, 1 skip.
+Improvement-plan P2-1 + P2-2 + P2-5 (server side).
+
 ## Short-term backlog (rough priority order, owner-approved direction)
 1. Theme settings (light theme / accent choice) — font-size is done.
 2. Drag-resize pane sizes (reorder is done; resize = grid column/row weights).

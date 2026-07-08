@@ -41,7 +41,14 @@ Browser (React + xterm.js grid) <--WS/REST--> Node server <--PTY--> claude.cmd
 - `GET /api/sessions/:id/usage` — per-model tokens for that pane's transcript.
 - `GET /api/usage` — roll-up per account (default + each profile) from each
   account's whole transcript store; rolling windows 1 h / 5 h / 10 h / 24 h /
-  7 d / 30 d + all time, each with its own per-model breakdown.
+  7 d / 30 d + all time, each with its own per-model breakdown. Cached ~15 s
+  (`HELM_USAGE_TTL_MS` overrides; account switches invalidate). Transcripts are
+  parsed *incrementally* — only bytes appended since the last poll are read, so
+  an active multi-MB transcript no longer blocks the event loop (and with it
+  every pane) on each poll.
+- `GET /api/diagnostics` — claude-CLI health (boot-time `--version` vs the
+  tested floor) + accumulated drift warnings; drives the UI's top banner
+  (docs/CLAUDE_INTERNALS.md).
 - `POST /api/broadcast {text, sessionIds[]}` — type one instruction into
   several running panes (text lands as a paste; Enter follows ~250 ms later
   as its own keypress).

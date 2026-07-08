@@ -75,6 +75,13 @@
   transcript) feed `GET /api/diagnostics` and a dismissible UI banner
   (`web/src/components/DriftBanner.tsx`). When you fix a drift, bump
   `CLAUDE_VERSION_FLOOR` and update CLAUDE_INTERNALS.md.
+- **Transcript parsing assumes JSONL files are append-only** (they are — claude
+  only appends). The incremental parser (`readAppendedLines` in index.mjs) reads
+  just the bytes added since the last poll and keeps a partial-line tail buffer;
+  a file that *shrank* triggers a clean full re-parse. Consequence to know: a
+  line isn't counted until its trailing `\n` lands (mid-write safety), so a
+  transcript whose final line is unterminated won't include it — real claude
+  always terminates lines.
 - **Session persistence must be immediate for lifecycle changes**
   (create/delete/exit/revive call `persistSessions()` directly; only chatty
   hook updates use the debounced `schedulePersist()`). A hard-killed server

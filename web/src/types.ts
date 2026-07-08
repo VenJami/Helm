@@ -92,6 +92,23 @@ export interface LogsResponse {
   entries: LogEntry[];
 }
 
+// ---- WebSocket protocol -----------------------------------------------
+// The wire contract for /ws, carrying ALL terminal I/O. The server side lives
+// in server/index.mjs (`attach` + the PTY onData/onExit broadcasts) — if you
+// rename or reshape a message, change BOTH sides; the server mirrors this
+// union in a JSDoc comment.
+
+// server → client
+export type WsServerMsg =
+  | { type: 'replay'; data: string }          // ring-buffer snapshot on (re)attach
+  | { type: 'data'; data: string }            // live PTY output
+  | { type: 'exit'; code: number | null };    // process ended; socket closes after
+
+// client → server
+export type WsClientMsg =
+  | { type: 'input'; data: string }           // keystrokes/paste → PTY stdin
+  | { type: 'resize'; cols: number; rows: number };
+
 export interface HelmSettings {
   autoRevive: boolean; // respawn dead panes automatically at server start
 }

@@ -13,9 +13,16 @@ import { IconGrip, IconMinimize, IconMinus, IconUserSwitch, IconX } from './Icon
 import {
   AnimateIcon, IconChart, IconChevronDown, IconChevronUp, IconMaximize, IconPaperclip, IconSearch,
 } from './AnimatedIcons';
-import type { Profile, SessionInfo, UsageInfo } from '../types';
+import type { Profile, SessionInfo, UsageInfo, WsClientMsg, WsServerMsg } from '../types';
 
 type Conn = 'connecting' | 'live' | 'disconnected' | 'exited' | 'dead';
+
+// All client→server frames go through here so the payload is typechecked
+// against the shared WsClientMsg union (a server-side rename becomes a compile
+// error instead of a silently dead terminal).
+const sendWs = (ws: WebSocket | null, msg: WsClientMsg) => {
+  if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify(msg));
+};
 
 interface Props {
   session: SessionInfo;
@@ -215,10 +222,7 @@ function TerminalPaneImpl({
 
     const sendResize = () => {
       fit.fit();
-      const ws = wsRef.current;
-      if (ws?.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify({ type: 'resize', cols: term.cols, rows: term.rows }));
-      }
+      sendWs(wsRef.current, { type: 'resize', cols: term.cols, rows: term.rows });
     };
     let raf = 0;
     const observer = new ResizeObserver(() => {
@@ -228,10 +232,7 @@ function TerminalPaneImpl({
     observer.observe(holder);
 
     const inputSub = term.onData((data) => {
-      const ws = wsRef.current;
-      if (ws?.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify({ type: 'input', data }));
-      }
+      sendWs(wsRef.current, { type: 'input', data });
     });
 
     return () => {
@@ -258,10 +259,7 @@ function TerminalPaneImpl({
     if (!term || !fit) return;
     term.options.fontSize = fontSize;
     fit.fit();
-    const ws = wsRef.current;
-    if (ws?.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify({ type: 'resize', cols: term.cols, rows: term.rows }));
-    }
+    sendWs(wsRef.current, { type: 'resize', cols: term.cols, rows: term.rows });
   }, [fontSize]);
 
   // Attach a WebSocket; detaching (unmount/drop) never kills the session.
@@ -280,23 +278,30 @@ function TerminalPaneImpl({
 
     ws.onopen = () => setConn('live');
     ws.onmessage = (ev) => {
-      const msg = JSON.parse(ev.data);
-      if (msg.type === 'replay') {
-        term.reset();
-        term.write(msg.data);
-        // Sync the PTY to this pane's size after repaint
-        const fit = fitRef.current;
-        if (fit) {
-          fit.fit();
-          ws.send(JSON.stringify({ type: 'resize', cols: term.cols, rows: term.rows }));
+      // The runtime boundary of the typed protocol — everything downstream of
+      // this cast is checked against the shared WsServerMsg union.
+      const msg = JSON.parse(ev.data) as WsServerMsg;
+      switch (msg.type) {
+        case 'replay': {
+          term.reset();
+          term.write(msg.data);
+          // Sync the PTY to this pane's size after repaint
+          const fit = fitRef.current;
+          if (fit) {
+            fit.fit();
+            sendWs(ws, { type: 'resize', cols: term.cols, rows: term.rows });
+          }
+          break;
         }
-      } else if (msg.type === 'data') {
-        term.write(msg.data);
-      } else if (msg.type === 'exit') {
-        exited = true;
-        setExitCode(msg.code);
-        setConn('exited');
-        term.write(`\r\n\x1b[31m[process exited with code ${msg.code}]\x1b[0m\r\n`);
+        case 'data':
+          term.write(msg.data);
+          break;
+        case 'exit':
+          exited = true;
+          setExitCode(msg.code);
+          setConn('exited');
+          term.write(`\r\n\x1b[31m[process exited with code ${msg.code}]\x1b[0m\r\n`);
+          break;
       }
     };
     ws.onclose = () => {

@@ -70,6 +70,7 @@ async function tryBoot(port) {
     USERPROFILE: tmp,
     LOCALAPPDATA: tmp,
     HELM_CLAUDE_CMD: wrapper,
+    HELM_USAGE_TTL_MS: '0', // usage tests append + immediately re-poll
   };
   delete env.CLAUDE_CONFIG_DIR; // don't inherit a real default account
   child = spawn(process.execPath, ['index.mjs'], { cwd: serverDir, env, stdio: ['ignore', 'pipe', 'pipe'] });
@@ -188,6 +189,78 @@ test('pane summary is derived from the first real user prompt', async () => {
   await hook(id, { hook_event_name: 'UserPromptSubmit', session_id: 'sum-1', transcript_path: tpath });
   const s = (await (await authed('/sessions')).json()).find((x) => x.id === id);
   assert.equal(s.summary, 'Fix the OAuth token refresh bug in the API');
+  await authed(`/sessions/${id}`, { method: 'DELETE' });
+});
+
+// Runs the REAL in-pane relay script (hook-post.mjs) as a child — the same way
+// claude invokes it — instead of POSTing /api/hook directly.
+const relay = (sessionId, event) => new Promise((resolve, reject) => {
+  const child = spawn(process.execPath, [path.join(serverDir, 'hook-post.mjs')], {
+    env: { ...process.env, HELM_SESSION_ID: sessionId, HELM_HOOK_TOKEN: HOOK_TOKEN, HELM_PORT: String(PORT) },
+    stdio: ['pipe', 'ignore', 'ignore'],
+  });
+  child.on('exit', resolve);
+  child.on('error', reject);
+  child.stdin.end(JSON.stringify(event));
+});
+
+test('hook relay (hook-post.mjs) + usage engine: dedupe, cost, incremental, partial lines', async () => {
+  const wsDir = mkdir(path.join(tmp, 'usageproj'));
+  const created = await (await authed('/sessions', { method: 'POST', body: JSON.stringify({ workspace: wsDir }) })).json();
+  const id = created.id;
+
+  // A realistic transcript in the DEFAULT account's store (~/.claude/projects,
+  // which the isolated HOME points into tmp) so the roll-up scan finds it too.
+  const claudeSid = 'facade00-0000-4000-8000-000000000001';
+  const tdir = mkdir(path.join(tmp, '.claude', 'projects', 'usageproj'));
+  const tpath = path.join(tdir, `${claudeSid}.jsonl`);
+  const now = new Date().toISOString();
+  const asst = (mid, usage) => JSON.stringify(
+    { type: 'assistant', timestamp: now, message: { id: mid, model: 'claude-sonnet-4-5', usage } });
+  fs.writeFileSync(tpath, [
+    JSON.stringify({ type: 'user', message: { content: 'Refactor the usage engine' }, timestamp: now }),
+    asst('m1', { input_tokens: 999999, output_tokens: 1 }),   // streaming: superseded…
+    asst('m1', { input_tokens: 1000, output_tokens: 500, cache_read_input_tokens: 2000, cache_creation_input_tokens: 100 }), // …by the final copy
+  ].join('\n') + '\n');
+
+  // Report it through the real relay (exercises env wiring + POST /api/hook auth)
+  await relay(id, { hook_event_name: 'SessionStart', session_id: claudeSid, transcript_path: tpath });
+  const s = (await (await authed('/sessions')).json()).find((x) => x.id === id);
+  assert.equal(s.summary, 'Refactor the usage engine');
+  assert.equal(s.canResume, true);
+
+  // Per-pane usage: duplicate message ids collapse to the LAST occurrence
+  let u = await (await authed(`/sessions/${id}/usage`)).json();
+  assert.equal(u.available, true);
+  let m = u.models['claude-sonnet-4-5'];
+  assert.deepEqual(
+    { input: m.input, output: m.output, cacheRead: m.cacheRead, cacheWrite: m.cacheWrite, turns: m.turns },
+    { input: 1000, output: 500, cacheRead: 2000, cacheWrite: 100, turns: 1 },
+  );
+  assert.ok(m.cost > 0, 'known model must carry a $ estimate');
+
+  // Account roll-up: lands in the default account's recent windows, with cost
+  const acc = (await (await authed('/usage')).json()).find((a) => a.account === 'default');
+  assert.ok(acc.windows.h1.input >= 1000, 'fresh usage must appear in the 1h window');
+  assert.ok(acc.windows.all.cost > 0);
+  assert.ok(acc.lastActive > 0);
+
+  // Incremental: an appended turn is picked up (byte-offset parse, not full re-read)
+  fs.appendFileSync(tpath, asst('m2', { input_tokens: 111, output_tokens: 11 }) + '\n');
+  u = await (await authed(`/sessions/${id}/usage`)).json();
+  m = u.models['claude-sonnet-4-5'];
+  assert.equal(m.turns, 2);
+  assert.equal(m.input, 1111);
+
+  // A half-written line (claude mid-write) is held back, then counted once complete
+  const l3 = asst('m3', { input_tokens: 7, output_tokens: 7 }) + '\n';
+  fs.appendFileSync(tpath, l3.slice(0, 40));
+  u = await (await authed(`/sessions/${id}/usage`)).json();
+  assert.equal(u.models['claude-sonnet-4-5'].turns, 2, 'partial tail must not be counted');
+  fs.appendFileSync(tpath, l3.slice(40));
+  u = await (await authed(`/sessions/${id}/usage`)).json();
+  assert.equal(u.models['claude-sonnet-4-5'].turns, 3, 'completed tail must be counted');
+
   await authed(`/sessions/${id}`, { method: 'DELETE' });
 });
 

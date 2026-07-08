@@ -501,20 +501,25 @@ function broadcast(session, msg) {
 // first real user prompt in the transcript. Gives the command palette / search
 // something meaningful to match instead of the random star-name. The opening
 // prompt is immutable once written, so we cache it and never re-read after it's
-// found; before then we stat-gate re-reads of the growing file.
-const summaryCache = new Map(); // transcript path → {mtimeMs, size, summary}
+// found; before then only the bytes APPENDED since the last poll are read (this
+// runs for every session on every 3 s /api/sessions poll — a full re-read of a
+// growing multi-MB transcript here used to stall the event loop).
+const summaryCache = new Map(); // transcript path → {mtimeMs, size, pending, summary}
+const SUMMARY_CACHE_MAX = 512;  // bound memory like fileUsageCache (sessions churn)
 function firstPromptSummary(file) {
   if (!file) return null;
   let stat;
   try { stat = fs.statSync(file); } catch { return null; }
-  const c = summaryCache.get(file);
+  let c = summaryCache.get(file);
   if (c && c.summary) return c.summary;                       // first prompt never changes
   if (c && c.mtimeMs === stat.mtimeMs && c.size === stat.size) return null; // unchanged, still none
-  let text;
-  try { text = fs.readFileSync(file, 'utf8'); } catch { return null; }
-  let summary = null;
-  for (const line of text.split('\n')) {
-    if (!line) continue;
+  const grew = Boolean(c && stat.size > c.size); // append-only → incremental; else full scan
+  if (!grew) c = { size: 0, pending: Buffer.alloc(0), summary: null };
+  let lines;
+  try {
+    ({ lines, pending: c.pending } = readAppendedLines(file, grew ? c.size : 0, c.pending, stat.size));
+  } catch { return null; }
+  for (const line of lines) {
     let e;
     try { e = JSON.parse(line); } catch { continue; }
     if (e?.type !== 'user' || e.isMeta) continue;
@@ -529,11 +534,16 @@ function firstPromptSummary(file) {
     // injections — we want the human's actual opening ask.
     if (!str || str.startsWith('<command-') || str.startsWith('<local-command') ||
         str.startsWith('<system-reminder') || str.startsWith('Caveat:')) continue;
-    summary = str.slice(0, 100);
+    c.summary = str.slice(0, 100);
     break;
   }
-  summaryCache.set(file, { mtimeMs: stat.mtimeMs, size: stat.size, summary });
-  return summary;
+  c.mtimeMs = stat.mtimeMs;
+  c.size = stat.size;
+  summaryCache.set(file, c);
+  while (summaryCache.size > SUMMARY_CACHE_MAX) {
+    summaryCache.delete(summaryCache.keys().next().value);
+  }
+  return c.summary;
 }
 
 function sessionInfo(s) {
@@ -936,9 +946,35 @@ app.post('/api/console', async (req, res) => {
 // Parses transcript JSONL files (assistant messages carry a usage block).
 // Per-file cache keyed by mtime+size; events keep timestamps so rolling
 // windows (5h ≈ subscription session window, 7d ≈ weekly cap) stay accurate.
+// Growing files are parsed INCREMENTALLY (only appended bytes) — an active
+// session rewrites its multi-MB transcript every turn, and a full re-read per
+// poll used to block the event loop (and with it every pane's output).
 
 const fileUsageCache = new Map(); // file path → parsed (insertion order ≈ recency)
 const FILE_USAGE_CACHE_MAX = 512; // bound memory — oldest-touched entries drop first
+
+// Read only the bytes of `file` from `from` to `size`, prepend the previous
+// call's partial tail, and return the complete lines (a trailing partial line
+// — claude may be mid-write — is handed back as `pending` for the next call).
+// Splitting on '\n' at the byte level is UTF-8 safe.
+function readAppendedLines(file, from, pending, size) {
+  const fd = fs.openSync(file, 'r');
+  const chunk = Buffer.alloc(size - from);
+  try {
+    fs.readSync(fd, chunk, 0, chunk.length, from);
+  } finally { fs.closeSync(fd); }
+  const data = pending?.length ? Buffer.concat([pending, chunk]) : chunk;
+  const lines = [];
+  let start = 0;
+  for (let i = 0; i < data.length; i++) {
+    if (data[i] === 0x0a) { // '\n'
+      if (i > start) lines.push(data.subarray(start, i).toString('utf8'));
+      start = i + 1;
+    }
+  }
+  // copy the tail — subarray would pin the whole chunk in memory until next call
+  return { lines, pending: Buffer.from(data.subarray(start)) };
+}
 
 // Transcript copies made by account switches: dest path → import time (ms).
 // The account roll-up skips a copied file's events from before its import so
@@ -957,43 +993,49 @@ function markImported(file) {
   }
   importedTranscripts[file] = Date.now();
   writeJsonAtomic(IMPORTED_FILE, importedTranscripts);
+  invalidateUsageRollup(); // attribution changed — a cached roll-up is now wrong
 }
 
 function parseTranscriptFile(file) {
   let stat;
   try { stat = fs.statSync(file); } catch { return null; }
-  const cached = fileUsageCache.get(file);
-  if (cached && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size) {
+  let entry = fileUsageCache.get(file);
+  if (entry && entry.mtimeMs === stat.mtimeMs && entry.size === stat.size) {
     fileUsageCache.delete(file); // re-insert to mark most-recently-used
-    fileUsageCache.set(file, cached);
-    return cached;
+    fileUsageCache.set(file, entry);
+    return entry;
   }
 
-  // Streaming can log the same assistant message on several lines — dedupe by
-  // message id so its usage counts once (last occurrence wins).
-  const byMessage = new Map();
-  let text;
-  try { text = fs.readFileSync(file, 'utf8'); } catch { return null; }
-  let sawJson = false; // did any line parse as JSON at all? (drift signal below)
-  for (const line of text.split('\n')) {
-    if (!line) continue;
-    let entry;
-    try { entry = JSON.parse(line); } catch { continue; }
-    sawJson = true;
-    const usage = entry?.message?.usage;
-    const model = entry?.message?.model;
+  // Transcripts are append-only, so when the file only grew we parse just the
+  // appended bytes; a shrunk/replaced file falls back to a full parse.
+  // `byMessage` dedupes streaming (the same assistant message can be logged on
+  // several lines — last occurrence wins) and persists across increments.
+  const incremental = entry?.byMessage && stat.size > entry.size;
+  if (!incremental) entry = { byMessage: new Map(), pending: Buffer.alloc(0), sawJson: false };
+  let lines;
+  try {
+    ({ lines, pending: entry.pending } =
+      readAppendedLines(file, incremental ? entry.size : 0, entry.pending, stat.size));
+  } catch { return null; }
+  for (const line of lines) {
+    let e;
+    try { e = JSON.parse(line); } catch { continue; }
+    entry.sawJson = true; // any JSON at all → drift signal below can trust "shape" verdicts
+    const usage = e?.message?.usage;
+    const model = e?.message?.model;
     // '<synthetic>' = placeholder entries (errors/retries), not real usage
-    if (entry?.type === 'assistant' && usage && model && model !== '<synthetic>') {
-      byMessage.set(entry.message.id ?? entry.uuid, {
+    if (e?.type === 'assistant' && usage && model && model !== '<synthetic>') {
+      entry.byMessage.set(e.message.id ?? e.uuid, {
         model,
         usage,
-        t: Date.parse(entry.timestamp) || 0,
+        t: Date.parse(e.timestamp) || 0,
       });
     }
   }
+  // Rebuild the aggregate views from the deduped messages (cheap vs parsing).
   const models = {};
   const events = []; // [timestampMs, model, input, output, cacheRead, cacheWrite]
-  for (const { model, usage, t } of byMessage.values()) {
+  for (const { model, usage, t } of entry.byMessage.values()) {
     const m = (models[model] ??= { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, turns: 0 });
     const input = usage.input_tokens || 0;
     const output = usage.output_tokens || 0;
@@ -1006,22 +1048,26 @@ function parseTranscriptFile(file) {
     m.turns += 1;
     events.push([t, model, input, output, cacheRead, cacheWrite]);
   }
+  entry.models = models;
+  entry.events = events;
+  entry.mtimeMs = stat.mtimeMs;
+  entry.size = stat.size;
   // Drift signal: a substantial, well-formed transcript that yields zero usage
   // events almost certainly means the JSONL shape changed (assistant/usage
   // fields renamed or moved). Gated by size so fresh/short sessions with no
-  // assistant turn yet don't false-alarm. (Cached below, so noted at most once.)
-  if (sawJson && events.length === 0 && stat.size > 16 * 1024) {
+  // assistant turn yet don't false-alarm. (noteDrift dedupes by key.)
+  if (entry.sawJson && events.length === 0 && stat.size > 16 * 1024) {
     noteDrift('transcript-shape',
       `A ${Math.round(stat.size / 1024)} KB transcript parsed as JSON but produced 0 usage entries ` +
       `(e.g. ${path.basename(file)}) — the claude transcript format may have changed, so usage reads low. ` +
       `See docs/CLAUDE_INTERNALS.md.`);
   }
-  const parsed = { mtimeMs: stat.mtimeMs, size: stat.size, models, events };
-  fileUsageCache.set(file, parsed);
+  fileUsageCache.delete(file); // re-insert to mark most-recently-used
+  fileUsageCache.set(file, entry);
   while (fileUsageCache.size > FILE_USAGE_CACHE_MAX) {
     fileUsageCache.delete(fileUsageCache.keys().next().value);
   }
-  return parsed;
+  return entry;
 }
 
 // All transcripts under a config dir's projects/ store (one subdir per cwd).
@@ -1074,7 +1120,7 @@ function tokenCost(model, { input = 0, output = 0, cacheRead = 0, cacheWrite = 0
     + cacheRead * p.in * 0.1 + cacheWrite * p.in * 1.25) / 1e6;
 }
 
-function accountUsage(configDir) {
+async function accountUsage(configDir) {
   const now = Date.now();
   // Every window (incl. 'all') carries totals + its own per-model breakdown,
   // so the UI's window selector re-slices the whole card, not just one number.
@@ -1098,6 +1144,10 @@ function accountUsage(configDir) {
 
   let lastActive = 0; // most recent counted usage → "used 2h ago" in the UI
   for (const file of transcriptFiles(configDir)) {
+    // Yield between files so PTY output / WS writes aren't starved during a
+    // cold scan (a heavy account can hold hundreds of transcripts; warm-cache
+    // files cost one statSync each, so the yields dominate nothing).
+    await new Promise((r) => setImmediate(r));
     const parsed = parseTranscriptFile(file);
     if (!parsed) continue;
     // for transcript copies made by an account switch, only count what
@@ -1123,24 +1173,43 @@ function accountUsage(configDir) {
   return { windows, lastActive: lastActive || null };
 }
 
-// Roll-up across every account: the default one + each Helm profile
-app.get('/api/usage', (_req, res) => {
+// Roll-up across every account: the default one + each Helm profile.
+// Cached for a short TTL with in-flight dedupe — the usage modal polls, and a
+// cold scan across every profile's transcripts is the most expensive thing
+// this server does. HELM_USAGE_TTL_MS overrides (0 = always fresh; tests).
+const USAGE_ROLLUP_TTL = Number(process.env.HELM_USAGE_TTL_MS ?? 15_000);
+let usageRollup = { at: 0, promise: null };
+function invalidateUsageRollup() { usageRollup = { at: 0, promise: null }; }
+
+async function buildUsageRollup() {
   const accounts = [];
   // default account: config file is ~/.claude.json, data lives in ~/.claude
   const defaultRoot = configRoot(null);
   accounts.push({
     account: 'default',
     email: accountEmail(process.env.CLAUDE_CONFIG_DIR || os.homedir()),
-    ...accountUsage(defaultRoot),
+    ...(await accountUsage(defaultRoot)),
   });
   try {
     for (const d of fs.readdirSync(ACCOUNTS_DIR, { withFileTypes: true })) {
       if (!d.isDirectory()) continue;
       const dir = path.join(ACCOUNTS_DIR, d.name);
-      accounts.push({ account: d.name, email: accountEmail(dir), ...accountUsage(dir) });
+      accounts.push({ account: d.name, email: accountEmail(dir), ...(await accountUsage(dir)) });
     }
   } catch { /* no profiles yet */ }
-  res.json(accounts);
+  return accounts;
+}
+
+app.get('/api/usage', async (_req, res) => {
+  try {
+    if (!usageRollup.promise || Date.now() - usageRollup.at >= USAGE_ROLLUP_TTL) {
+      usageRollup = { at: Date.now(), promise: buildUsageRollup() };
+    }
+    res.json(await usageRollup.promise);
+  } catch (err) {
+    invalidateUsageRollup(); // never cache a failure
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // Token usage per model for one pane's conversation transcript, including
@@ -1505,6 +1574,11 @@ server.on('upgrade', (req, socket, head) => {
   wss.handleUpgrade(req, socket, head, (ws) => attach(ws, session));
 });
 
+// WS wire contract — typed on the client as WsServerMsg/WsClientMsg in
+// web/src/types.ts. If you rename or reshape a message here (including the
+// PTY onData/onExit broadcasts in spawnPty), update that union too.
+//   server → client: {type:'replay',data} | {type:'data',data} | {type:'exit',code}
+//   client → server: {type:'input',data}  | {type:'resize',cols,rows}
 function attach(ws, session) {
   dbg('ws', `${session.name} (${session.id.slice(0, 8)}) attached (replay ${session.bufLen} bytes)`);
   // Replay the ring buffer so the pane repaints instantly on (re)attach.
