@@ -49,9 +49,11 @@ const HOST = '127.0.0.1';
 const PORT = Number(process.env.PORT) || 7777;
 const RING_BUFFER_MAX = 200 * 1024; // ~200 KB of output kept per session for replay
 const IS_WIN = process.platform === 'win32';
-const HELM_DIR = IS_WIN
+// HELM_DATA_DIR overrides the state dir wholesale — used by the e2e script to
+// isolate Helm state while the real ~/.claude login stays untouched.
+const HELM_DIR = process.env.HELM_DATA_DIR || (IS_WIN
   ? path.join(process.env.LOCALAPPDATA || os.homedir(), 'Helm')
-  : path.join(os.homedir(), '.helm');
+  : path.join(os.homedir(), '.helm'));
 const ACCOUNTS_DIR = path.join(HELM_DIR, 'accounts');
 const ATTACHMENTS_DIR = path.join(HELM_DIR, 'attachments');
 const WORKSPACES_FILE = path.join(HELM_DIR, 'workspaces.json');
@@ -451,6 +453,10 @@ app.post('/api/hook', (req, res) => {
   const { sessionId, event } = req.body || {};
   const session = sessions.get(sessionId);
   if (!session || !event) return res.status(404).json({ error: 'no such session' });
+  // HELM_DEBUG_HOOKS=1 dumps the raw claude hook payload — the fastest way to
+  // spot claude-side field drift (session_id/transcript_path shape) when
+  // status/usage/revive stop working. Off by default.
+  if (process.env.HELM_DEBUG_HOOKS) dbg('hook-raw', JSON.stringify(event));
   if (typeof event.session_id === 'string') session.claudeSessionId = event.session_id;
   if (typeof event.transcript_path === 'string') session.transcriptPath = event.transcript_path;
   dbg('hook', `${session.name} (${sessionId.slice(0, 8)}) ${event.hook_event_name}` +

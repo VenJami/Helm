@@ -64,9 +64,21 @@ cd ../server && npm start # → http://127.0.0.1:7777
    the hook relay).
 4. **Verify user-facing behavior against a real `claude` pane.** The smoke test
    and a green build are necessary but not sufficient — Helm depends on
-   undocumented `claude` internals (see `docs/CLAUDE_INTERNALS.md`). The
-   throwaway-script pattern in `docs/GOTCHAS.md` ("Testing pattern that works")
-   is how features get verified end-to-end here. **"Build passing" ≠ "working."**
+   undocumented `claude` internals (see `docs/CLAUDE_INTERNALS.md`), so
+   **"build passing" ≠ "working."** For spawn/hook/usage/revive changes (and
+   after any `claude` CLI update) run the real-claude end-to-end check:
+
+   ```bash
+   cd server && npm run e2e
+   ```
+
+   It drives the actual `claude` CLI through a full session (spawn → trust
+   dialog → hooks/status → transcript/usage/title → server restart → revive)
+   against isolated Helm state, leaving your real `%LOCALAPPDATA%\Helm`
+   untouched. It needs a logged-in `claude` and costs a few hundred tokens on
+   your default account, so it is **not** part of `npm test`/CI. When something
+   claude-side looks off, `HELM_DEBUG_HOOKS=1` dumps raw hook payloads to the
+   🐞 log.
 
 CI (`.github/workflows/ci.yml`) runs the server syntax check, frontend
 typecheck + build, `npm audit`, and the Windows smoke test on every push/PR.

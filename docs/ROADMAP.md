@@ -301,6 +301,17 @@ web/src/accounts.ts: `accountLabel` naming rules and `foldMappedDefault`
 lastActive max, input immutability, no-op cases). 10 tests. Finishes
 improvement-plan P2-5 → Phase 2 complete.
 
+Real-claude e2e check (2026-07-05) — `cd server && npm run e2e`
+(`server/test/e2e-real.mjs`) drives the ACTUAL claude CLI end-to-end: spawn →
+folder-trust dialog → SessionStart/UserPromptSubmit/Stop hooks → status badges
+→ transcript + usage + auto-title → server restart (dead+revivable) → revive
+(--resume keeps the same conversation). Runs against isolated Helm state
+(`HELM_DATA_DIR`, new) so the real store is untouched; needs a logged-in claude
+and spends a few tokens, so it's NOT in CI. Verified 10/10 against claude
+2.1.201 (fable-5). Also added `HELM_DEBUG_HOOKS=1` (dumps raw hook payloads to
+the 🐞 log — spot claude field drift fast). Turns the throwaway-script pattern
+from GOTCHAS into a permanent artifact. Improvement-plan P3-3.
+
 ## Short-term backlog (rough priority order, owner-approved direction)
 1. Theme settings (light theme / accent choice) — font-size is done.
 2. Drag-resize pane sizes (reorder is done; resize = grid column/row weights).

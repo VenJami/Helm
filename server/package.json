@@ -12,7 +12,8 @@
   "scripts": {
     "dev": "node --watch index.mjs",
     "start": "node index.mjs",
-    "test": "node --test test/smoke.mjs"
+    "test": "node --test test/smoke.mjs",
+    "e2e": "node test/e2e-real.mjs"
   },
   "dependencies": {
     "express": "^4.21.2",

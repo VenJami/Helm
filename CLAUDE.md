@@ -15,10 +15,11 @@ notifications, all script-verified). Current backlog: see docs/ROADMAP.md.
   aspirational commands/features as if they exist. When state changes, update
   the relevant doc (ROADMAP "Done" list included).
 - **Test end-to-end against a real `claude.cmd` pane** before declaring a
-  feature done (pattern in docs/GOTCHAS.md). Build passing ≠ working. There's
-  also a fast automated smoke test (`cd server && npm test`) that drives a real
-  server against a keep-alive stand-in — run it after server changes, but it's
-  no substitute for a real-pane check on user-facing behavior.
+  feature done. Build passing ≠ working. `cd server && npm run e2e` codifies
+  this (real claude: spawn→hooks→usage→revive; docs/GOTCHAS.md). The fast smoke
+  test (`cd server && npm test`, keep-alive stand-in) + `cd web && npm test`
+  (vitest) run in CI but are no substitute for the real-pane check on
+  user-facing behavior.
 - **Simplicity first.** Lowest-effort thing that solves the request.
   *Decision ladder:* Does this need to exist? → Already in this codebase? →
   Stdlib/runtime does it? → A claude CLI flag/hook already does it? → An
@@ -62,6 +63,9 @@ helm/
 cd server && npm start     # USE this when just using Helm → http://127.0.0.1:7777
 cd server && npm run dev   # DEV only: --watch restarts on edits and KILLS live panes
 cd server && npm test      # fast smoke test (real server + keep-alive claude stand-in)
+cd server && npm run e2e   # real-claude end-to-end (spawn→hooks→usage→revive); needs
+                           #   a logged-in claude, spends a few tokens, NOT in CI
+cd web && npm test         # vitest unit tests (accounts.ts usage math)
 cd web && npm run build    # after frontend changes (or `npm run watch` while developing)
 # npm install once in server/ and web/. NO vite dev server — the Node server
 # must serve web/dist to inject the auth token.

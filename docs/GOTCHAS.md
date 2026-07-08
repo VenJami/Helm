@@ -89,9 +89,20 @@
   a deleted session as a revivable ghost. Don't re-debounce lifecycle writes.
 
 ## Testing pattern that works
-Write a throwaway node script (in the session scratchpad, not the repo) that
-hits the REST API + WS of a locally started server and drives a real
-`claude.cmd` pane: accept the trust dialog by sending `\r`, wait generously
-(claude takes 5–10 s to boot/respond), assert on stripped-ANSI output. Verify
-features end-to-end before declaring them done. Clean up test
-sessions/profiles afterwards.
+`cd server && npm run e2e` now codifies this permanently
+(`server/test/e2e-real.mjs`): it drives a real `claude` pane through
+spawn → trust dialog → hooks/status → transcript/usage/title → server restart →
+revive, against isolated Helm state (`HELM_DATA_DIR`) so your real store is
+untouched. Not in `npm test`/CI (needs a logged-in claude, spends tokens). Run
+it after spawn/hook/usage/revive changes and after any claude CLI update.
+
+Hard-won specifics it encodes (useful if you write another throwaway script):
+- **ConPTY collapses on-screen spaces** — pane output reads `trustthisfolder`,
+  not `trust this folder`, so matching dialog *text* is unreliable. Just send
+  `\r` a few times early to accept the trust dialog (idempotent once past it).
+- **The public API never exposes `claudeSessionId`/`transcriptPath`** — assert
+  on `canResume` / `hasTranscript` / `summary` instead (see `sessionInfo`).
+- **Hooks carry `session_id` + `transcript_path`**; SessionStart's `source` is
+  `startup`. `HELM_DEBUG_HOOKS=1` dumps the raw payload to the 🐞 log — the
+  fastest way to spot claude-side field drift.
+- claude takes 5–10 s to boot/respond; wait generously. Clean up sessions after.
