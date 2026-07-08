@@ -139,6 +139,17 @@ test('diagnostics report claude health (drift alarm)', async () => {
   assert.equal(d.warnings.filter((w) => w.key.startsWith('claude-')).length, 0);
 });
 
+test('GET /health is unauthenticated and reports liveness', async () => {
+  const res = await fetch(U('/health')); // no bearer token on purpose
+  assert.equal(res.status, 200);
+  const h = await res.json();
+  assert.equal(h.ok, true);
+  assert.equal(h.pid > 0, true);
+  assert.equal(typeof h.startedAt, 'string');
+  assert.equal(typeof h.uptimeSec, 'number');
+  assert.ok(h.sessions && typeof h.sessions.total === 'number');
+});
+
 test('session lifecycle + hook status/activityNote + WS replay', async () => {
   const ws = mkdir(path.join(tmp, 'proj'));
   await authed('/workspaces', { method: 'POST', body: JSON.stringify({ name: 'proj', dir: ws }) });

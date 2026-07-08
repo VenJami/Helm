@@ -467,6 +467,28 @@ app.get('/', (_req, res) => {
 });
 app.use(express.static(DIST_DIR, { index: false }));
 
+// Liveness/status — unauthenticated on purpose so `curl 127.0.0.1:7777/health`
+// answers the "is a server up here, which pid/version?" question (the
+// stale-server-on-7777 trap) without needing the token from the served page.
+// Safe: it's loopback-only, sends no CORS headers (so a cross-origin page can't
+// read the body), and exposes nothing actionable — no token, no paths.
+app.get('/health', (_req, res) => {
+  const counts = { total: sessions.size, running: 0, waiting: 0, exited: 0, dead: 0 };
+  for (const s of sessions.values()) {
+    if (s.status === 'running') counts[s.activity === 'waiting' ? 'waiting' : 'running'] += 1;
+    else if (s.status === 'exited') counts.exited += 1;
+    else if (s.status === 'dead') counts.dead += 1;
+  }
+  res.json({
+    ok: true,
+    pid: process.pid,
+    startedAt: SERVER_STARTED_AT,
+    uptimeSec: Math.round(process.uptime()),
+    claude: { version: diagnostics.claude.version, ok: diagnostics.claude.ok },
+    sessions: counts,
+  });
+});
+
 // Hook relay from inside panes — authed by HOOK_TOKEN (spawn env), not the UI
 // token, so it must be registered before the bearer-auth middleware below.
 app.post('/api/hook', (req, res) => {
@@ -1244,6 +1266,25 @@ app.patch('/api/profiles/:name', (req, res) => {
   saveWorkspaces();
   res.json({ ok: true });
 });
+
+// ------------------------------------------------------------- shutdown
+// One process hosts every pane; on Ctrl-C / a kill signal, persist sessions
+// (so they reload as revivable 'dead') then stop the claude children so they
+// don't orphan (a known hazard — GOTCHAS). Best-effort and idempotent; exit
+// after a short grace so kills can flush.
+let shuttingDown = false;
+function gracefulShutdown(signal) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  dbg('server', `${signal} received — persisting ${sessions.size} session(s), stopping panes`);
+  try { persistSessions(); } catch (err) { dbg('error', `shutdown persist failed: ${err.message}`); }
+  for (const s of sessions.values()) {
+    try { s.pty?.kill(); } catch { /* already gone / node-pty kill race */ }
+  }
+  setTimeout(() => process.exit(0), 300).unref();
+}
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
 
 // ---------------------------------------------------------------------- ws
 

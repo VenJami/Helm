@@ -101,6 +101,7 @@ and how to report a vulnerability: [SECURITY.md](SECURITY.md).
 - [docs/ACCOUNTS.md](docs/ACCOUNTS.md) — multi-account profiles
 - [docs/GOTCHAS.md](docs/GOTCHAS.md) — known traps (read before touching server code)
 - [docs/ROADMAP.md](docs/ROADMAP.md) — done + planned
+- [CHANGELOG.md](CHANGELOG.md) — release notes
 - [CLAUDE.md](CLAUDE.md) — working agreement for Claude Code sessions on this repo
 
 ## Contributing

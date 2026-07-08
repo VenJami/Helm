@@ -53,6 +53,15 @@ Browser (React + xterm.js grid) <--WS/REST--> Node server <--PTY--> claude.cmd
 - `GET /api/diagnostics` — claude-CLI health (boot-time `--version` vs the
   tested floor) + accumulated drift warnings; drives the UI's top banner
   (docs/CLAUDE_INTERNALS.md).
+- `GET /health` — **unauthenticated** liveness (loopback-only, no CORS): `{ok,
+  pid, startedAt, uptimeSec, claude:{version,ok}, sessions:{total,running,
+  waiting,exited,dead}}`. For the stale-server-on-7777 check without the token.
+- Env knobs: `HELM_LOG_FILE` (append the debug log to a file — survives
+  restarts), `HELM_USAGE_TTL_MS` (usage roll-up cache TTL, default 15 000),
+  `HELM_DATA_DIR` (override the state dir; used by the e2e), `HELM_DEBUG_HOOKS`
+  (dump raw hook payloads). Log entries carry a coarse `level` (`error` for
+  error/drift tags, else `info`). On SIGINT/SIGTERM the server persists sessions
+  and stops panes (no orphaned claude children).
 - `POST /api/broadcast {text, sessionIds[]}` — type one instruction into
   several running panes (text lands as a paste; Enter follows ~250 ms later
   as its own keypress).

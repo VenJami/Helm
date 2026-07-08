@@ -322,6 +322,15 @@ direction): typescript + `@types/node|express|ws`. Tests excluded from the check
 (validated by running; loose `res.json()` shapes = noise). 0 errors; zero
 runtime change (JSDoc is comments). Improvement-plan P3-1.
 
+Observability + graceful shutdown + first release (2026-07-05) — `GET /health`
+(unauthenticated loopback liveness: pid/uptime/claude version/session counts —
+the stale-server check without the token); `dbg` entries now carry a coarse
+`level` (error for error/drift tags) + an optional `HELM_LOG_FILE` disk sink
+(survives restarts, no rotation); SIGINT/SIGTERM handler persists sessions and
+stops panes so claude children don't orphan. Cut the first tagged release:
+`CHANGELOG.md` (Keep a Changelog) + `v0.1.0`. Smoke test now covers /health (12
+tests). Improvement-plan P3-5.
+
 ## Short-term backlog (rough priority order, owner-approved direction)
 1. Theme settings (light theme / accent choice) — font-size is done.
 2. Drag-resize pane sizes (reorder is done; resize = grid column/row weights).
