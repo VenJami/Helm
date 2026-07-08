@@ -22,7 +22,9 @@ opening a PR so your change fits the project's grain.
 ## Project layout
 
 ```
-server/index.mjs      the entire backend (Express + ws + node-pty)
+server/index.mjs      backend bootstrap + sessions/PTY + routes + WebSocket
+server/src/           log.mjs · persist.mjs (atomic state) · claude.mjs (ALL
+                      claude-internals: transcript parsing, pricing, drift alarm)
 server/hook-post.mjs  runs inside panes; relays Claude Code hook events
 web/src/              React + TS frontend, built to web/dist (served by the server)
 docs/                 ARCHITECTURE, GOTCHAS, ACCOUNTS, ROADMAP, CLAUDE_INTERNALS
@@ -55,7 +57,8 @@ cd ../server && npm start # → http://127.0.0.1:7777
 ## Before you open a PR
 
 1. **Frontend typechecks + builds:** `cd web && npx tsc --noEmit && npm run build`
-2. **Server parses:** `node --check server/index.mjs && node --check server/hook-post.mjs`
+2. **Server parses:** `node --check` on `server/index.mjs`, `server/hook-post.mjs`,
+   and every `server/src/*.mjs`
 3. **Smoke test passes:** `cd server && npm test` (boots a real server on an
    isolated data dir against a keep-alive `claude` stand-in; drives REST + WS +
    the hook relay).

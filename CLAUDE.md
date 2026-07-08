@@ -49,7 +49,9 @@ helm/
 │   ├── ACCOUNTS.md         # multi-account profiles via CLAUDE_CONFIG_DIR
 │   └── ROADMAP.md          # done list + prioritized backlog
 ├── server/
-│   ├── index.mjs           # entire backend (Express + ws + node-pty)
+│   ├── index.mjs           # backend bootstrap + sessions/PTY + routes + WS
+│   ├── src/                # log.mjs · persist.mjs (atomic state) · claude.mjs
+│   │                       #   (ALL claude-internals: parsing/pricing/drift)
 │   └── hook-post.mjs       # runs inside panes; relays Claude Code hook events
 └── web/                    # React frontend → built to web/dist (server serves it)
     └── src/ (App.tsx, components/TerminalPane|Sidebar|Modal.tsx, api.ts, types.ts)

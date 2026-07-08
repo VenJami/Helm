@@ -282,6 +282,18 @@ usage engine end-to-end (streaming dedupe last-wins, $ cost, 1 h window,
 incremental append, half-written-line holdback) — 11 tests, 1 skip.
 Improvement-plan P2-1 + P2-2 + P2-5 (server side).
 
+Backend module split, slice 1 (2026-07-05) — extracted from the ~1.6k-line
+index.mjs into `server/src/`: `log.mjs` (dbg + 🐞 ring buffer, `logsSince`),
+`persist.mjs` (atomic writes + .bak recovery), and `claude.mjs` — the single
+home for every claude-internals assumption (version check + drift diagnostics,
+MODEL_PRICING/tokenCost, incremental transcript parsing, transcriptFiles,
+firstPromptSummary, accountEmail), so claude drift is a one-file fix. index.mjs
+keeps sessions/PTY/routes/WS (further split deferred until it earns its cost).
+CI syntax-checks `server/src/*.mjs`; docs repointed (CLAUDE.md, ARCHITECTURE,
+CONTRIBUTING, CLAUDE_INTERNALS, GOTCHAS). Improvement-plan P2-3 slice 1.
+Behavior-preserving — verified: 11-test smoke suite + all three E2E suites
+(atomic 6/6, drift 9/9, usage-perf 6/6, identical timings).
+
 ## Short-term backlog (rough priority order, owner-approved direction)
 1. Theme settings (light theme / accent choice) — font-size is done.
 2. Drag-resize pane sizes (reorder is done; resize = grid column/row weights).

@@ -9,8 +9,11 @@ Helm's features quietly return zeros / "no data".
 fixed fast. When a claude update breaks something, check here first, fix the
 parse in `server/index.mjs`, bump the floor below, and update this doc.
 
+- **Where the code lives:** everything below is implemented in
+  `server/src/claude.mjs` — the single module for claude-internals, so drift is
+  a one-file fix.
 - **Known-good floor:** `2.1.198` (constant `CLAUDE_VERSION_FLOOR` in
-  `server/index.mjs`). Verified end-to-end at this version.
+  `server/src/claude.mjs`). Verified end-to-end at this version.
 - **Drift is now surfaced loudly** (see "Drift detection" at the bottom) — a
   boot-time version check + parse-time signals feed `GET /api/diagnostics` and a
   dismissible banner (`web/src/components/DriftBanner.tsx`). It won't fix drift,
@@ -42,7 +45,7 @@ parse in `server/index.mjs`, bump the floor below, and update this doc.
 
 ## 2. Model names → pricing
 
-`MODEL_PRICING` in `server/index.mjs` matches model ids by **name prefix**
+`MODEL_PRICING` in `server/src/claude.mjs` matches model ids by **name prefix**
 regex: `claude-(fable|mythos)`, `claude-opus`, `claude-sonnet`, `claude-haiku`.
 An unmatched model contributes **$0** (never a guess) — and now raises an
 `unknown-model` drift warning. **A new model family = add a row here.**
@@ -83,8 +86,8 @@ writing (dissected in `docs/GOTCHAS.md`):
 
 ## Drift detection (what fires the banner)
 
-Implemented in `server/index.mjs` (`checkClaudeVersion`, `noteDrift`, and inline
-signals), exposed at `GET /api/diagnostics`:
+Implemented in `server/src/claude.mjs` (`checkClaudeVersion`, `noteDrift`, and
+inline signals), exposed at `GET /api/diagnostics`:
 
 | Signal | Key | Trigger |
 |---|---|---|

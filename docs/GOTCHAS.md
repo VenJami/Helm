@@ -76,7 +76,7 @@
   (`web/src/components/DriftBanner.tsx`). When you fix a drift, bump
   `CLAUDE_VERSION_FLOOR` and update CLAUDE_INTERNALS.md.
 - **Transcript parsing assumes JSONL files are append-only** (they are — claude
-  only appends). The incremental parser (`readAppendedLines` in index.mjs) reads
+  only appends). The incremental parser (`readAppendedLines` in src/claude.mjs) reads
   just the bytes added since the last poll and keeps a partial-line tail buffer;
   a file that *shrank* triggers a clean full re-parse. Consequence to know: a
   line isn't counted until its trailing `\n` lands (mid-write safety), so a

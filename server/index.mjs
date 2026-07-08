@@ -12,6 +12,12 @@ import { fileURLToPath } from 'node:url';
 import express from 'express';
 import { WebSocketServer } from 'ws';
 import ptyPkg from 'node-pty';
+import { dbg, logsSince, SERVER_STARTED_AT } from './src/log.mjs';
+import { readJsonWithBackup, writeFileAtomic, writeJsonAtomic } from './src/persist.mjs';
+import {
+  CLAUDE_CMD, accountEmail, checkClaudeVersion, diagnostics, firstPromptSummary,
+  parseTranscriptFile, tokenCost, transcriptFiles,
+} from './src/claude.mjs';
 
 const { spawn } = ptyPkg;
 
@@ -43,9 +49,6 @@ const HOST = '127.0.0.1';
 const PORT = Number(process.env.PORT) || 7777;
 const RING_BUFFER_MAX = 200 * 1024; // ~200 KB of output kept per session for replay
 const IS_WIN = process.platform === 'win32';
-// Windows must spawn the .cmd shim (node-pty can't run the .ps1); elsewhere
-// plain `claude` from PATH. HELM_CLAUDE_CMD overrides for unusual installs.
-const CLAUDE_CMD = process.env.HELM_CLAUDE_CMD || (IS_WIN ? 'claude.cmd' : 'claude');
 const HELM_DIR = IS_WIN
   ? path.join(process.env.LOCALAPPDATA || os.homedir(), 'Helm')
   : path.join(os.homedir(), '.helm');
@@ -55,41 +58,6 @@ const WORKSPACES_FILE = path.join(HELM_DIR, 'workspaces.json');
 const SESSIONS_FILE = path.join(HELM_DIR, 'sessions.json');
 const HOOK_SETTINGS_FILE = path.join(HELM_DIR, 'hook-settings.json');
 const SETTINGS_FILE = path.join(HELM_DIR, 'settings.json');
-
-// --------------------------------------------------- crash-safe persistence
-// All state writes go through temp-file + rename (atomic on the same volume),
-// keeping the previous good copy as <file>.bak. A server killed mid-write can
-// no longer leave a truncated file — and a corrupt file now recovers from its
-// .bak loudly instead of being treated as first-run, which used to silently
-// wipe every persisted session/workspace.
-function writeFileAtomic(file, data) {
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  const tmp = `${file}.tmp`;
-  fs.writeFileSync(tmp, data);
-  try { fs.copyFileSync(file, `${file}.bak`); } catch { /* first write — nothing to back up */ }
-  fs.renameSync(tmp, file);
-}
-
-function writeJsonAtomic(file, obj) {
-  writeFileAtomic(file, JSON.stringify(obj, null, 2));
-}
-
-// undefined = file missing (a normal first run). dbg may not be initialized
-// yet when a loader runs at boot, hence the console fallback.
-function readJsonWithBackup(file, label) {
-  let raw;
-  try { raw = fs.readFileSync(file, 'utf8'); } catch { return undefined; } // first run
-  try { return JSON.parse(raw); } catch { /* corrupt — fall through to .bak */ }
-  const complain = (msg) => { try { dbg('error', msg); } catch { console.error(msg); } };
-  try {
-    const val = JSON.parse(fs.readFileSync(`${file}.bak`, 'utf8'));
-    complain(`${label} file was corrupt — recovered from ${path.basename(file)}.bak`);
-    return val;
-  } catch {
-    complain(`${label} file is corrupt with no usable .bak — starting empty (bad file left at ${file})`);
-    return undefined;
-  }
-}
 
 // Random persistent token; embedded in the served page, required on every
 // REST call and WS connect (defense against cross-origin drive-by = RCE).
@@ -149,73 +117,6 @@ function saveSettings() {
 
 /** @type {Map<string, Session>} id → session */
 const sessions = new Map();
-
-// ----------------------------------------------------------------- debug log
-// In-memory ring of server events, served at GET /api/logs and shown in the
-// UI's 🐞 drawer. startedAt/pid identify the running server process — the
-// quick tell for the stale-server-on-7777 trap (docs/GOTCHAS.md).
-const SERVER_STARTED_AT = new Date().toISOString();
-const DEBUG_LOG_MAX = 500;
-const debugLog = []; // {seq, t, tag, msg}
-let debugSeq = 0;
-function dbg(tag, msg) {
-  debugLog.push({ seq: ++debugSeq, t: new Date().toISOString(), tag, msg });
-  if (debugLog.length > DEBUG_LOG_MAX) debugLog.shift();
-  console.log(`[${tag}] ${msg}`);
-}
-
-// ------------------------------------------------------ claude-CLI drift alarm
-// Helm's features (usage, cost, status, revive, titles) are all parsed out of
-// claude's *undocumented* on-disk formats and model names. When claude changes
-// them, those features quietly return zeros/"no data" instead of erroring — the
-// user assumes Helm is broken and can't tell why. These signals make drift
-// LOUD: a boot-time version check + runtime notes when parsing hits something
-// unexpected, surfaced as a dismissible banner in the UI and in the 🐞 drawer.
-// The assumptions themselves are catalogued in docs/CLAUDE_INTERNALS.md.
-const CLAUDE_VERSION_FLOOR = '2.1.198'; // last version verified end-to-end (GOTCHAS)
-const diagnostics = {
-  claude: { version: null, ok: true, floor: CLAUDE_VERSION_FLOOR, checked: false, error: null },
-  warnings: new Map(), // key → { key, message, since, count } (key dedupes the spam)
-};
-function noteDrift(key, message) {
-  const hit = diagnostics.warnings.get(key);
-  if (hit) { hit.count += 1; return; } // already surfaced — just count it
-  diagnostics.warnings.set(key, { key, message, since: new Date().toISOString(), count: 1 });
-  dbg('drift', message);
-}
-// Numeric semver compare (major.minor.patch). Returns -1 / 0 / 1.
-function cmpVersion(a, b) {
-  const pa = String(a).split('.').map((n) => parseInt(n, 10) || 0);
-  const pb = String(b).split('.').map((n) => parseInt(n, 10) || 0);
-  for (let i = 0; i < 3; i++) {
-    if ((pa[i] || 0) !== (pb[i] || 0)) return (pa[i] || 0) < (pb[i] || 0) ? -1 : 1;
-  }
-  return 0;
-}
-// Runs once after boot. shell:true so Windows can launch the `claude.cmd` shim.
-function checkClaudeVersion() {
-  execFile(CLAUDE_CMD, ['--version'], { shell: true, windowsHide: true, timeout: 8000 }, (err, stdout) => {
-    diagnostics.claude.checked = true;
-    if (err) {
-      diagnostics.claude.ok = false;
-      diagnostics.claude.error = err.message;
-      noteDrift('claude-missing',
-        `Couldn't run \`${CLAUDE_CMD} --version\` — is the claude CLI installed and on PATH? ` +
-        `Panes, usage and revive all need it. (${err.message})`);
-      return;
-    }
-    const m = String(stdout).match(/(\d+\.\d+\.\d+)/);
-    diagnostics.claude.version = m ? m[1] : String(stdout).trim() || null;
-    if (m && cmpVersion(m[1], CLAUDE_VERSION_FLOOR) < 0) {
-      diagnostics.claude.ok = false;
-      noteDrift('claude-below-floor',
-        `claude ${m[1]} is below the version Helm was verified against (${CLAUDE_VERSION_FLOOR}). ` +
-        `Usage, status and revive may misbehave — update claude if these look wrong.`);
-    } else {
-      dbg('server', `claude version ${diagnostics.claude.version ?? '(unparsed)'}`);
-    }
-  });
-}
 
 // Random pane identity — nautical/star names to match the Helm theme, and
 // accent colors picked to read well on the dark UI.
@@ -495,55 +396,6 @@ function broadcast(session, msg) {
   for (const ws of session.sockets) {
     if (ws.readyState === ws.OPEN) ws.send(json);
   }
-}
-
-// A short, human-readable title for a pane derived from its conversation: the
-// first real user prompt in the transcript. Gives the command palette / search
-// something meaningful to match instead of the random star-name. The opening
-// prompt is immutable once written, so we cache it and never re-read after it's
-// found; before then only the bytes APPENDED since the last poll are read (this
-// runs for every session on every 3 s /api/sessions poll — a full re-read of a
-// growing multi-MB transcript here used to stall the event loop).
-const summaryCache = new Map(); // transcript path → {mtimeMs, size, pending, summary}
-const SUMMARY_CACHE_MAX = 512;  // bound memory like fileUsageCache (sessions churn)
-function firstPromptSummary(file) {
-  if (!file) return null;
-  let stat;
-  try { stat = fs.statSync(file); } catch { return null; }
-  let c = summaryCache.get(file);
-  if (c && c.summary) return c.summary;                       // first prompt never changes
-  if (c && c.mtimeMs === stat.mtimeMs && c.size === stat.size) return null; // unchanged, still none
-  const grew = Boolean(c && stat.size > c.size); // append-only → incremental; else full scan
-  if (!grew) c = { size: 0, pending: Buffer.alloc(0), summary: null };
-  let lines;
-  try {
-    ({ lines, pending: c.pending } = readAppendedLines(file, grew ? c.size : 0, c.pending, stat.size));
-  } catch { return null; }
-  for (const line of lines) {
-    let e;
-    try { e = JSON.parse(line); } catch { continue; }
-    if (e?.type !== 'user' || e.isMeta) continue;
-    const content = e.message?.content;
-    let str = typeof content === 'string'
-      ? content
-      : Array.isArray(content)
-        ? content.filter((b) => b?.type === 'text' && typeof b.text === 'string').map((b) => b.text).join(' ')
-        : '';
-    str = str.replace(/\s+/g, ' ').trim();
-    // Skip tool results (no text), slash-command wrappers, and system-reminder
-    // injections — we want the human's actual opening ask.
-    if (!str || str.startsWith('<command-') || str.startsWith('<local-command') ||
-        str.startsWith('<system-reminder') || str.startsWith('Caveat:')) continue;
-    c.summary = str.slice(0, 100);
-    break;
-  }
-  c.mtimeMs = stat.mtimeMs;
-  c.size = stat.size;
-  summaryCache.set(file, c);
-  while (summaryCache.size > SUMMARY_CACHE_MAX) {
-    summaryCache.delete(summaryCache.keys().next().value);
-  }
-  return c.summary;
 }
 
 function sessionInfo(s) {
@@ -884,12 +736,7 @@ app.patch('/api/settings', (req, res) => {
 // which server process it is talking to (staleness check).
 app.get('/api/logs', (req, res) => {
   const after = Number(req.query.after) || 0;
-  res.json({
-    seq: debugSeq,
-    startedAt: SERVER_STARTED_AT,
-    pid: process.pid,
-    entries: debugLog.filter((e) => e.seq > after),
-  });
+  res.json({ startedAt: SERVER_STARTED_AT, pid: process.pid, ...logsSince(after) });
 });
 
 // claude-CLI health + accumulated drift warnings — drives the UI's drift banner.
@@ -943,38 +790,8 @@ app.post('/api/console', async (req, res) => {
 });
 
 // ------------------------------------------------------------ usage roll-up
-// Parses transcript JSONL files (assistant messages carry a usage block).
-// Per-file cache keyed by mtime+size; events keep timestamps so rolling
-// windows (5h ≈ subscription session window, 7d ≈ weekly cap) stay accurate.
-// Growing files are parsed INCREMENTALLY (only appended bytes) — an active
-// session rewrites its multi-MB transcript every turn, and a full re-read per
-// poll used to block the event loop (and with it every pane's output).
-
-const fileUsageCache = new Map(); // file path → parsed (insertion order ≈ recency)
-const FILE_USAGE_CACHE_MAX = 512; // bound memory — oldest-touched entries drop first
-
-// Read only the bytes of `file` from `from` to `size`, prepend the previous
-// call's partial tail, and return the complete lines (a trailing partial line
-// — claude may be mid-write — is handed back as `pending` for the next call).
-// Splitting on '\n' at the byte level is UTF-8 safe.
-function readAppendedLines(file, from, pending, size) {
-  const fd = fs.openSync(file, 'r');
-  const chunk = Buffer.alloc(size - from);
-  try {
-    fs.readSync(fd, chunk, 0, chunk.length, from);
-  } finally { fs.closeSync(fd); }
-  const data = pending?.length ? Buffer.concat([pending, chunk]) : chunk;
-  const lines = [];
-  let start = 0;
-  for (let i = 0; i < data.length; i++) {
-    if (data[i] === 0x0a) { // '\n'
-      if (i > start) lines.push(data.subarray(start, i).toString('utf8'));
-      start = i + 1;
-    }
-  }
-  // copy the tail — subarray would pin the whole chunk in memory until next call
-  return { lines, pending: Buffer.from(data.subarray(start)) };
-}
+// Aggregates parsed transcripts (src/claude.mjs owns the parsing) into
+// per-account rolling windows + costs.
 
 // Transcript copies made by account switches: dest path → import time (ms).
 // The account roll-up skips a copied file's events from before its import so
@@ -996,92 +813,6 @@ function markImported(file) {
   invalidateUsageRollup(); // attribution changed — a cached roll-up is now wrong
 }
 
-function parseTranscriptFile(file) {
-  let stat;
-  try { stat = fs.statSync(file); } catch { return null; }
-  let entry = fileUsageCache.get(file);
-  if (entry && entry.mtimeMs === stat.mtimeMs && entry.size === stat.size) {
-    fileUsageCache.delete(file); // re-insert to mark most-recently-used
-    fileUsageCache.set(file, entry);
-    return entry;
-  }
-
-  // Transcripts are append-only, so when the file only grew we parse just the
-  // appended bytes; a shrunk/replaced file falls back to a full parse.
-  // `byMessage` dedupes streaming (the same assistant message can be logged on
-  // several lines — last occurrence wins) and persists across increments.
-  const incremental = entry?.byMessage && stat.size > entry.size;
-  if (!incremental) entry = { byMessage: new Map(), pending: Buffer.alloc(0), sawJson: false };
-  let lines;
-  try {
-    ({ lines, pending: entry.pending } =
-      readAppendedLines(file, incremental ? entry.size : 0, entry.pending, stat.size));
-  } catch { return null; }
-  for (const line of lines) {
-    let e;
-    try { e = JSON.parse(line); } catch { continue; }
-    entry.sawJson = true; // any JSON at all → drift signal below can trust "shape" verdicts
-    const usage = e?.message?.usage;
-    const model = e?.message?.model;
-    // '<synthetic>' = placeholder entries (errors/retries), not real usage
-    if (e?.type === 'assistant' && usage && model && model !== '<synthetic>') {
-      entry.byMessage.set(e.message.id ?? e.uuid, {
-        model,
-        usage,
-        t: Date.parse(e.timestamp) || 0,
-      });
-    }
-  }
-  // Rebuild the aggregate views from the deduped messages (cheap vs parsing).
-  const models = {};
-  const events = []; // [timestampMs, model, input, output, cacheRead, cacheWrite]
-  for (const { model, usage, t } of entry.byMessage.values()) {
-    const m = (models[model] ??= { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, turns: 0 });
-    const input = usage.input_tokens || 0;
-    const output = usage.output_tokens || 0;
-    const cacheRead = usage.cache_read_input_tokens || 0;
-    const cacheWrite = usage.cache_creation_input_tokens || 0;
-    m.input += input;
-    m.output += output;
-    m.cacheRead += cacheRead;
-    m.cacheWrite += cacheWrite;
-    m.turns += 1;
-    events.push([t, model, input, output, cacheRead, cacheWrite]);
-  }
-  entry.models = models;
-  entry.events = events;
-  entry.mtimeMs = stat.mtimeMs;
-  entry.size = stat.size;
-  // Drift signal: a substantial, well-formed transcript that yields zero usage
-  // events almost certainly means the JSONL shape changed (assistant/usage
-  // fields renamed or moved). Gated by size so fresh/short sessions with no
-  // assistant turn yet don't false-alarm. (noteDrift dedupes by key.)
-  if (entry.sawJson && events.length === 0 && stat.size > 16 * 1024) {
-    noteDrift('transcript-shape',
-      `A ${Math.round(stat.size / 1024)} KB transcript parsed as JSON but produced 0 usage entries ` +
-      `(e.g. ${path.basename(file)}) — the claude transcript format may have changed, so usage reads low. ` +
-      `See docs/CLAUDE_INTERNALS.md.`);
-  }
-  fileUsageCache.delete(file); // re-insert to mark most-recently-used
-  fileUsageCache.set(file, entry);
-  while (fileUsageCache.size > FILE_USAGE_CACHE_MAX) {
-    fileUsageCache.delete(fileUsageCache.keys().next().value);
-  }
-  return entry;
-}
-
-// All transcripts under a config dir's projects/ store (one subdir per cwd).
-// Recursive: newer claude nests subagent transcripts in
-// projects/<cwd>/<sessionId>/subagents/*.jsonl.
-function transcriptFiles(configDir) {
-  const root = path.join(configDir, 'projects');
-  let entries = [];
-  try { entries = fs.readdirSync(root, { recursive: true }); } catch { return []; }
-  return entries
-    .filter((f) => f.endsWith('.jsonl'))
-    .map((f) => path.join(root, f));
-}
-
 // Rolling windows, newest → oldest. Keys are stable API; the UI labels them.
 const USAGE_WINDOWS = [
   ['h1', 3600_000],
@@ -1091,34 +822,6 @@ const USAGE_WINDOWS = [
   ['d7', 7 * 24 * 3600_000],
   ['d30', 30 * 24 * 3600_000],
 ];
-
-// Rough published per-model prices ($ per 1M tokens): input + output. Cache is
-// derived (read = 0.1x input, write = 1.25x input). Keyed by name prefix so
-// dated ids (claude-haiku-4-5-20251001) and future point releases still match.
-// Deliberately approximate — ignores Sonnet intro pricing/tiers; UI labels "est".
-const MODEL_PRICING = [
-  [/^claude-(fable|mythos)/, { in: 10, out: 50 }],
-  [/^claude-opus/, { in: 5, out: 25 }],
-  [/^claude-sonnet/, { in: 3, out: 15 }],
-  [/^claude-haiku/, { in: 1, out: 5 }],
-];
-// Dollar estimate for one model's token bundle. Unknown model → 0 (no guess),
-// so it simply doesn't contribute to the total rather than inventing a number.
-function tokenCost(model, { input = 0, output = 0, cacheRead = 0, cacheWrite = 0 }) {
-  const p = MODEL_PRICING.find(([re]) => re.test(model))?.[1];
-  if (!p) {
-    // A real model with real tokens that matches none of our price regexes =
-    // claude shipped a new family; cost silently under-reports until we add it.
-    if (model && model !== '<synthetic>' && (input || output || cacheRead || cacheWrite)) {
-      noteDrift(`unknown-model:${model}`,
-        `Unknown model "${model}" — its cost isn't counted (add it to MODEL_PRICING). ` +
-        `A newer claude model family has probably shipped, so $ estimates read low.`);
-    }
-    return 0;
-  }
-  return (input * p.in + output * p.out
-    + cacheRead * p.in * 0.1 + cacheWrite * p.in * 1.25) / 1e6;
-}
 
 async function accountUsage(configDir) {
   const now = Date.now();
@@ -1408,17 +1111,6 @@ app.delete('/api/workspaces/:id', (req, res) => {
   saveWorkspaces();
   res.json({ ok: true });
 });
-
-// The logged-in account's email lives in `<config dir>\.claude.json` →
-// oauthAccount.emailAddress (null until /login has been run in that profile).
-function accountEmail(configDir) {
-  try {
-    const cfg = JSON.parse(fs.readFileSync(path.join(configDir, '.claude.json'), 'utf8'));
-    return cfg.oauthAccount?.emailAddress ?? null;
-  } catch {
-    return null;
-  }
-}
 
 // The named profile signed into the same account as the bare default, if any:
 // same oauth email AND a stored login (so a pane can spawn there without a

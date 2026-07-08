@@ -18,7 +18,10 @@ jobs:
         with:
           node-version: 22
       - name: Syntax-check server
-        run: node --check server/index.mjs && node --check server/hook-post.mjs
+        run: |
+          for f in server/index.mjs server/hook-post.mjs server/src/*.mjs; do
+            node --check "$f"
+          done
       - name: Install frontend deps
         working-directory: web
         run: npm ci

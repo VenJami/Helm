@@ -6,7 +6,11 @@ Browser (React + xterm.js grid) <--WS/REST--> Node server <--PTY--> claude.cmd
 ```
 
 ## Files
-- `server/index.mjs` — the whole backend: Express + `ws` + `node-pty`.
+- `server/index.mjs` — backend core: Express + `ws` + `node-pty` (sessions/PTY,
+  routes, WebSocket attach). Shared concerns live in `server/src/`:
+  `log.mjs` (🐞 drawer feed) · `persist.mjs` (atomic JSON state) ·
+  `claude.mjs` (ALL claude-internals: transcript parsing, pricing, drift alarm
+  — see docs/CLAUDE_INTERNALS.md).
   Sessions map (id → {pty, ring buffer, sockets, name, color, activity,
   claudeSessionId, transcriptPath…}), REST under `/api`, WS attach, hook
   endpoint, usage parsing, persistence.
