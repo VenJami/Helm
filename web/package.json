@@ -10,7 +10,8 @@
   "description": "Helm — frontend: workspace sidebar + grid of live Claude Code panes",
   "scripts": {
     "build": "vite build",
-    "watch": "vite build --watch"
+    "watch": "vite build --watch",
+    "test": "vitest run"
   },
   "dependencies": {
     "@xterm/addon-fit": "^0.10.0",
@@ -28,6 +29,7 @@
     "@types/react-dom": "^18.3.1",
     "@vitejs/plugin-react": "^4.3.4",
     "typescript": "^5.7.2",
-    "vite": "^6.0.5"
+    "vite": "^6.0.5",
+    "vitest": "^4.1.10"
   }
 }

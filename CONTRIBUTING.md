@@ -56,7 +56,7 @@ cd ../server && npm start # → http://127.0.0.1:7777
 
 ## Before you open a PR
 
-1. **Frontend typechecks + builds:** `cd web && npx tsc --noEmit && npm run build`
+1. **Frontend typechecks, tests, builds:** `cd web && npx tsc --noEmit && npm test && npm run build`
 2. **Server parses:** `node --check` on `server/index.mjs`, `server/hook-post.mjs`,
    and every `server/src/*.mjs`
 3. **Smoke test passes:** `cd server && npm test` (boots a real server on an

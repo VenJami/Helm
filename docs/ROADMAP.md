@@ -294,6 +294,13 @@ CONTRIBUTING, CLAUDE_INTERNALS, GOTCHAS). Improvement-plan P2-3 slice 1.
 Behavior-preserving — verified: 11-test smoke suite + all three E2E suites
 (atomic 6/6, drift 9/9, usage-perf 6/6, identical timings).
 
+Frontend unit tests (2026-07-05) — vitest (dev-only dep, owner-approved) +
+`web npm test` in CI; covers the money-adjacent client math in
+web/src/accounts.ts: `accountLabel` naming rules and `foldMappedDefault`
+(fold-into-twin, grand-total invariance, window-key union, per-model merge,
+lastActive max, input immutability, no-op cases). 10 tests. Finishes
+improvement-plan P2-5 → Phase 2 complete.
+
 ## Short-term backlog (rough priority order, owner-approved direction)
 1. Theme settings (light theme / accent choice) — font-size is done.
 2. Drag-resize pane sizes (reorder is done; resize = grid column/row weights).
