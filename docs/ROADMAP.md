@@ -331,6 +331,18 @@ stops panes so claude children don't orphan. Cut the first tagged release:
 `CHANGELOG.md` (Keep a Changelog) + `v0.1.0`. Smoke test now covers /health (12
 tests). Improvement-plan P3-5.
 
+Typed localStorage module (2026-07-09) — new `web/src/lib/storage.ts`
+centralizes every UI-preference key (wsorder, workspaceId, notify, maximized,
+minimized, fontSize, sidebarHidden, per-workspace paneorder) behind typed,
+validated accessors: corrupt/missing values fall back to defaults instead of
+throwing into render, every access is guarded (private mode/quota), and
+removing a workspace now prunes its orphaned `helm.paneorder.<id>` key (they
+used to accumulate forever). App.tsx no longer touches localStorage directly
+(9 scattered string-literal sites removed); `api.ts` keeps its self-contained
+`helm.reload401` sessionStorage guard. 8 new vitest tests (18 total). First
+slice of improvement-plan P3-2 (App decomposition). Verified: tsc + build +
+headless-Edge render against an isolated seeded server.
+
 ## Short-term backlog (rough priority order, owner-approved direction)
 1. Theme settings (light theme / accent choice) — font-size is done.
 2. Drag-resize pane sizes (reorder is done; resize = grid column/row weights).

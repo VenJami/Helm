@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { api } from './api';
+import { storage } from './lib/storage';
 import { accountLabel, foldMappedDefault } from './accounts';
 import type { AccountUsage, GitInfo, LogEntry, Profile, ServerInfo, SessionInfo, Workspace } from './types';
 import { Sidebar } from './components/Sidebar';
@@ -77,13 +78,7 @@ export function App() {
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
   // Sidebar order — presentational, kept in localStorage; unlisted (new)
   // workspaces fall to the end in fetch order.
-  const [wsOrder, setWsOrder] = useState<string[]>(() => {
-    try {
-      return JSON.parse(localStorage.getItem('helm.wsorder') || '[]');
-    } catch {
-      return [];
-    }
-  });
+  const [wsOrder, setWsOrder] = useState<string[]>(() => storage.wsOrder.get());
   const orderedWorkspaces = useMemo(() => {
     const idx = new Map(wsOrder.map((id, i) => [id, i]));
     return [...workspaces].sort(
@@ -101,7 +96,7 @@ export function App() {
     ids.splice(from, 1);
     ids.splice(to, 0, dragWsId);
     setWsOrder(ids);
-    localStorage.setItem('helm.wsorder', JSON.stringify(ids));
+    storage.wsOrder.set(ids);
   };
   const [gitInfo, setGitInfo] = useState<Record<string, GitInfo>>({});
   const [serverInfo, setServerInfo] = useState<Record<string, ServerInfo>>({});
@@ -109,37 +104,26 @@ export function App() {
   const [profiles, setProfiles] = useState<Profile[]>([]);
   const [defaultEmail, setDefaultEmail] = useState<string | null>(null);
   const [defaultMapped, setDefaultMapped] = useState<string | null>(null);
-  const [selectedId, setSelectedId] = useState<string | null>(
-    localStorage.getItem('helm.workspaceId'),
-  );
+  const [selectedId, setSelectedId] = useState<string | null>(storage.workspaceId.get());
   const [profileChoice, setProfileChoice] = useState('');
   const [dialog, setDialog] = useState<Dialog>(null);
   const [draftName, setDraftName] = useState('');
   const [draftError, setDraftError] = useState('');
   const [notify, setNotify] = useState(
-    () => localStorage.getItem('helm.notify') === '1' && Notification.permission === 'granted',
+    () => storage.notify.get() && Notification.permission === 'granted',
   );
   const [globalUsage, setGlobalUsage] = useState<AccountUsage[] | null>(null);
   // 5h ≈ the subscription session window — the slice that matters most
   const [usageWindow, setUsageWindow] = useState('d7');
   // Maximize/minimize layout survives a reload — restored from localStorage,
   // pruned against the live session list once it loads (stale ids dropped).
-  const [maximizedId, setMaximizedId] = useState<string | null>(
-    () => localStorage.getItem('helm.maximized'),
-  );
-  const [minimizedIds, setMinimizedIds] = useState<Set<string>>(() => {
-    try {
-      return new Set(JSON.parse(localStorage.getItem('helm.minimized') || '[]') as string[]);
-    } catch {
-      return new Set();
-    }
-  });
+  const [maximizedId, setMaximizedId] = useState<string | null>(() => storage.maximized.get());
+  const [minimizedIds, setMinimizedIds] = useState<Set<string>>(() => storage.minimized.get());
   useEffect(() => {
-    localStorage.setItem('helm.minimized', JSON.stringify([...minimizedIds]));
+    storage.minimized.set(minimizedIds);
   }, [minimizedIds]);
   useEffect(() => {
-    if (maximizedId) localStorage.setItem('helm.maximized', maximizedId);
-    else localStorage.removeItem('helm.maximized');
+    storage.maximized.set(maximizedId);
   }, [maximizedId]);
   // Drop restored ids that point at sessions which no longer exist (killed while
   // Helm was closed). Guarded on a loaded list so pre-fetch emptiness is ignored.
@@ -155,14 +139,11 @@ export function App() {
     setMaximizedId((prev) => (prev && !live.has(prev) ? null : prev));
   }, [sessions]);
   // Global terminal font size (px), shared by every pane and user-adjustable.
-  const [fontSize, setFontSize] = useState<number>(() => {
-    const n = Number(localStorage.getItem('helm.fontSize'));
-    return Number.isFinite(n) && n >= 11 && n <= 20 ? n : 13;
-  });
+  const [fontSize, setFontSize] = useState<number>(() => storage.fontSize.get(13));
   const changeFont = (delta: number) =>
     setFontSize((f) => {
       const next = Math.min(20, Math.max(11, f + delta));
-      localStorage.setItem('helm.fontSize', String(next));
+      storage.fontSize.set(next);
       return next;
     });
   // Ctrl+K command palette / quick pane switcher.
@@ -178,13 +159,11 @@ export function App() {
   // Which pane's terminal last held focus — the anchor for Ctrl+Shift+←/→ cycling.
   const activePaneRef = useRef<string | null>(null);
   const flashTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const [sidebarHidden, setSidebarHidden] = useState(
-    () => localStorage.getItem('helm.sidebarHidden') === '1',
-  );
+  const [sidebarHidden, setSidebarHidden] = useState(() => storage.sidebarHidden.get());
   const toggleSidebar = () =>
     setSidebarHidden((h) => {
       const next = !h;
-      localStorage.setItem('helm.sidebarHidden', next ? '1' : '0');
+      storage.sidebarHidden.set(next);
       return next;
     });
   const [autoRevive, setAutoRevive] = useState(false); // mirrors server settings
@@ -362,7 +341,7 @@ export function App() {
   const toggleNotify = async () => {
     if (notify) {
       setNotify(false);
-      localStorage.setItem('helm.notify', '0');
+      storage.notify.set(false);
       return;
     }
     const perm = await Notification.requestPermission();
@@ -371,7 +350,7 @@ export function App() {
       return;
     }
     setNotify(true);
-    localStorage.setItem('helm.notify', '1');
+    storage.notify.set(true);
   };
 
   // Tab title shows how many panes are blocked on you
@@ -431,16 +410,10 @@ export function App() {
 
   // Pane order per workspace — presentational, kept in localStorage.
   // Unlisted panes (new ones) fall to the end in creation order.
-  const orderKey = selected ? `helm.paneorder.${selected.id}` : null;
   const [paneOrder, setPaneOrder] = useState<string[]>([]);
   useEffect(() => {
-    if (!orderKey) return;
-    try {
-      setPaneOrder(JSON.parse(localStorage.getItem(orderKey) || '[]'));
-    } catch {
-      setPaneOrder([]);
-    }
-  }, [orderKey]);
+    if (selected) setPaneOrder(storage.paneOrder.get(selected.id));
+  }, [selected?.id]);
 
   const panes = useMemo(() => {
     const idx = new Map(paneOrder.map((id, i) => [id, i]));
@@ -480,7 +453,7 @@ export function App() {
   const onGripDragStart = useCallback((id: string) => setDragId(id), []);
   const onGripDragEnd = useCallback(() => { setDragId(null); setDragOverId(null); }, []);
   const dropPane = (targetId: string) => {
-    if (!dragId || !orderKey || dragId === targetId) return;
+    if (!dragId || !selected || dragId === targetId) return;
     const ids = panes.map((p) => p.id);
     const from = ids.indexOf(dragId);
     const to = ids.indexOf(targetId);
@@ -488,7 +461,7 @@ export function App() {
     ids.splice(from, 1);
     ids.splice(to, 0, dragId); // dragged pane takes the target's slot
     setPaneOrder(ids);
-    localStorage.setItem(orderKey, JSON.stringify(ids));
+    storage.paneOrder.set(selected.id, ids);
   };
 
   // Every running pane across all workspaces — broadcast can target any of them
@@ -540,7 +513,7 @@ export function App() {
 
   const select = (id: string) => {
     setSelectedId(id);
-    localStorage.setItem('helm.workspaceId', id);
+    storage.workspaceId.set(id);
   };
 
   const submitAddWorkspace = async () => {
@@ -593,7 +566,11 @@ export function App() {
 
   const removeWorkspace = async (id: string) => {
     await api.removeWorkspace(id).catch(() => {});
-    setWorkspaces((prev) => prev.filter((w) => w.id !== id));
+    setWorkspaces((prev) => {
+      const next = prev.filter((w) => w.id !== id);
+      storage.paneOrder.pruneOrphans(next.map((w) => w.id)); // drop the gone ws's pane-order key
+      return next;
+    });
     if (selectedId === id) setSelectedId(null);
   };
 
