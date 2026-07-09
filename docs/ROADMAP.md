@@ -390,8 +390,20 @@ as dark cards on light chrome. New `hooks/useTheme` + `modals/AppearanceModal`.
 (screenshot), back to dark+blue (screenshot), attributes + localStorage
 round-trip asserted. Backlog item #1 done.
 
+Drag-resize panes (2026-07-09) — thin gutters between grid columns/rows (amber
+line on hover): dragging trades fr-weight between the two adjacent tracks (grid
+total never changes), double-click resets an axis to equal. Weights persist per
+workspace AND per layout (`helm.gridweights.<ws>` → `{c3:[…], r2:[…]}` —
+3-column weights survive independently of 2-column), validated on read, pruned
+with the workspace. Min 0.3fr per track keeps every pane usable; maximized view
+has no gutters. New `hooks/useGridWeights` + `components/GridResizers` (pointer
+capture, absolute snapshot math — no drift compounding). 21 vitest tests.
+Verified via CDP: dragged a column and a row on a 4-pane grid (template
+0.53fr/1.47fr/1fr…), asserted persistence + restore across reload, screenshot.
+Backlog item #2 done — the short-term backlog is now EMPTY.
+
 ## Short-term backlog (rough priority order, owner-approved direction)
-1. Drag-resize pane sizes (reorder is done; resize = grid column/row weights).
+(empty — next items to be chosen with the owner)
 
 ## Bigger ideas discussed with owner (not committed)
 - Remote access from phone/laptop via Tailscale (origin/token checks already

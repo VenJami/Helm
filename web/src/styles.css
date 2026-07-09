@@ -466,7 +466,30 @@ html, body {
   gap: 8px;
   padding: 8px;
   grid-auto-rows: minmax(280px, 1fr);
+  position: relative; /* anchors the resize gutters (GridResizers) */
 }
+
+/* Drag handles between grid tracks — thin invisible strips that show an
+   accent line on hover/drag. Positioned by GridResizers at track boundaries. */
+.grid-gutter {
+  position: absolute;
+  z-index: 5;
+  touch-action: none;
+}
+.grid-gutter-col { top: 8px; bottom: 8px; width: 10px; cursor: col-resize; }
+.grid-gutter-row { left: 8px; right: 8px; height: 10px; cursor: row-resize; }
+.grid-gutter::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  margin: auto;
+  background: transparent;
+  border-radius: 2px;
+  transition: background 80ms ease-out;
+}
+.grid-gutter-col::after { width: 3px; }
+.grid-gutter-row::after { height: 3px; }
+.grid-gutter:hover::after, .grid-gutter:active::after { background: var(--accent); }
 .grid.cols-1 { grid-template-columns: 1fr; }
 .grid.cols-2 { grid-template-columns: repeat(2, 1fr); }
 .grid.cols-3 { grid-template-columns: repeat(3, 1fr); }

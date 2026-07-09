@@ -4,6 +4,7 @@ import { storage } from './lib/storage';
 import { useSessionsPoll } from './hooks/useSessionsPoll';
 import { useWorkspaceStatus } from './hooks/useWorkspaceStatus';
 import { useTheme } from './hooks/useTheme';
+import { useGridWeights } from './hooks/useGridWeights';
 import type { LogEntry, Profile, SessionInfo, Workspace } from './types';
 import { Sidebar } from './components/Sidebar';
 import { TerminalPane } from './components/TerminalPane';
@@ -12,6 +13,7 @@ import { TargetCursor } from './components/TargetCursor';
 import { Toaster, toast } from './components/Toaster';
 import { DriftBanner } from './components/DriftBanner';
 import { CommandPalette } from './components/CommandPalette';
+import { GridResizers } from './components/GridResizers';
 import { NewProfileModal } from './components/modals/NewProfileModal';
 import { ProfilesModal } from './components/modals/ProfilesModal';
 import { UsageModal } from './components/modals/UsageModal';
@@ -293,6 +295,15 @@ export function App() {
     () => (viewMax ? panes.filter((p) => p.id === viewMax) : shownPanes),
     [viewMax, panes, shownPanes],
   );
+
+  // Drag-resize: fr-weights for the grid's columns/rows, per workspace and per
+  // layout count (dragging the gutters between panes; double-click resets).
+  const gridRef = useRef<HTMLDivElement>(null);
+  const { weightsFor, setWeights, resetAxis } = useGridWeights(selected?.id ?? null);
+  const gridCols = Math.min(Math.max(shownPanes.length, 1), 3);
+  const gridRows = Math.max(Math.ceil(shownPanes.length / gridCols), 1);
+  const colWeights = weightsFor('c', gridCols);
+  const rowWeights = weightsFor('r', gridRows);
 
   // Drag-to-reorder: grip in a pane header → drop on another pane's slot
   const [dragId, setDragId] = useState<string | null>(null);
@@ -726,7 +737,25 @@ export function App() {
               </div>
             )}
             {panes.length ? (
-              <div className={viewMax ? 'grid cols-1' : `grid cols-${Math.min(Math.max(shownPanes.length, 1), 3)}`}>
+              <div
+                ref={gridRef}
+                className={viewMax ? 'grid cols-1' : `grid cols-${gridCols}`}
+                style={viewMax ? undefined : {
+                  gridTemplateColumns: colWeights.map((w) => `${w}fr`).join(' '),
+                  ...(gridRows > 1
+                    ? { gridTemplateRows: rowWeights.map((w) => `minmax(280px, ${w}fr)`).join(' ') }
+                    : {}),
+                }}
+              >
+                {!viewMax && (gridCols > 1 || gridRows > 1) && (
+                  <GridResizers
+                    containerRef={gridRef}
+                    colWeights={colWeights}
+                    rowWeights={rowWeights}
+                    onDrag={setWeights}
+                    onReset={resetAxis}
+                  />
+                )}
                 {visiblePanes.map((s) => (
                   <div
                     key={s.id}
