@@ -376,9 +376,22 @@ broadcast). Improvement-plan P3-2 complete. Verified: tsc/vitest/build + a
 CDP check driving Ctrl+Shift+→ and confirming focus lands in the pane's xterm
 textarea with the flash pulse firing.
 
+Theme settings (2026-07-09) — Appearance dialog (palette icon next to the font
+stepper): dark/light theme toggle + five accent presets (amber default, blue,
+green, violet, rose), applied instantly as `data-theme`/`data-accent`
+attributes on `<html>` and persisted (`helm.theme`/`helm.accent`, validated in
+lib/storage). The whole palette now lives in CSS variables (the ~18 stray
+hardcoded colors were promoted to vars: hover/border-hover/scroll-thumb/
+overlay/backdrop/on-inverse…), with a full light palette and per-theme accent
+values so contrast holds on white. Terminal panes deliberately STAY dark in
+light mode — claude's TUI/ANSI colors assume a dark background, so panes read
+as dark cards on light chrome. New `hooks/useTheme` + `modals/AppearanceModal`.
+20 vitest tests. Verified via CDP: opened the dialog, switched light+rose
+(screenshot), back to dark+blue (screenshot), attributes + localStorage
+round-trip asserted. Backlog item #1 done.
+
 ## Short-term backlog (rough priority order, owner-approved direction)
-1. Theme settings (light theme / accent choice) — font-size is done.
-2. Drag-resize pane sizes (reorder is done; resize = grid column/row weights).
+1. Drag-resize pane sizes (reorder is done; resize = grid column/row weights).
 
 ## Bigger ideas discussed with owner (not committed)
 - Remote access from phone/laptop via Tailscale (origin/token checks already

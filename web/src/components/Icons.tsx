@@ -265,3 +265,12 @@ export const IconUsersGear = (p: IconProps) => (
     <path d="M18 12.5v1M18 20.5v1M21.5 17h-1M15.5 17h-1M20.4 14.6l-.7.7M15.9 18.7l-.7.7M20.4 19.4l-.7-.7M15.9 15.3l-.7-.7" />
   </Icon>
 );
+
+export const IconPalette = (p: IconProps) => (
+  <Icon {...p}>
+    <path d="M12 22a10 10 0 1 1 10-10c0 2.2-1.8 3.5-3.5 3.5H16a2.5 2.5 0 0 0-2 4c.5.7 0 2.5-2 2.5Z" />
+    <circle cx="7.5" cy="11.5" r="1" />
+    <circle cx="11" cy="7.5" r="1" />
+    <circle cx="16" cy="9" r="1" />
+  </Icon>
+);

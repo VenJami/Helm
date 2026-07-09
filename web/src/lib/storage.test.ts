@@ -58,6 +58,23 @@ describe('fontSize clamping', () => {
   });
 });
 
+describe('theme/accent validate against the preset lists', () => {
+  it('default to dark/amber and round-trip', () => {
+    expect(storage.theme.get()).toBe('dark');
+    expect(storage.accent.get()).toBe('amber');
+    storage.theme.set('light');
+    storage.accent.set('violet');
+    expect(storage.theme.get()).toBe('light');
+    expect(storage.accent.get()).toBe('violet');
+  });
+  it('unknown stored values fall back to defaults', () => {
+    localStorage.setItem('helm.theme', 'hotdog');
+    localStorage.setItem('helm.accent', 'neon-zebra');
+    expect(storage.theme.get()).toBe('dark');
+    expect(storage.accent.get()).toBe('amber');
+  });
+});
+
 describe('corrupt values fall back, never throw', () => {
   it('malformed JSON yields the default', () => {
     localStorage.setItem('helm.wsorder', '{not json');

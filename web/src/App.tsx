@@ -3,6 +3,7 @@ import { api } from './api';
 import { storage } from './lib/storage';
 import { useSessionsPoll } from './hooks/useSessionsPoll';
 import { useWorkspaceStatus } from './hooks/useWorkspaceStatus';
+import { useTheme } from './hooks/useTheme';
 import type { LogEntry, Profile, SessionInfo, Workspace } from './types';
 import { Sidebar } from './components/Sidebar';
 import { TerminalPane } from './components/TerminalPane';
@@ -16,7 +17,8 @@ import { ProfilesModal } from './components/modals/ProfilesModal';
 import { UsageModal } from './components/modals/UsageModal';
 import { BroadcastModal } from './components/modals/BroadcastModal';
 import { AddWorkspaceModal } from './components/modals/AddWorkspaceModal';
-import { IconBug, IconMinus, IconPanelLeftOpen, IconPlus } from './components/Icons';
+import { AppearanceModal } from './components/modals/AppearanceModal';
+import { IconBug, IconMinus, IconPalette, IconPanelLeftOpen, IconPlus } from './components/Icons';
 import {
   AnimateIcon, IconBellOff, IconBellRing, IconChart, IconNfc, IconRefreshCcw, IconSearch, IconTerminal,
 } from './components/AnimatedIcons';
@@ -29,6 +31,7 @@ type Dialog =
   | { kind: 'usage' }
   | { kind: 'broadcast'; initialIds: Set<string> }
   | { kind: 'add-workspace' }
+  | { kind: 'appearance' }
   | null;
 
 // ⌘K on Mac, Ctrl K elsewhere — for the command-palette hint.
@@ -70,6 +73,8 @@ export function App() {
     sessions, setSessions, profiles, setProfiles, defaultEmail, defaultMapped, refresh,
   } = useSessionsPoll(notify);
   const { gitInfo, serverInfo, setServerInfo } = useWorkspaceStatus();
+  // Theme + accent, applied as data attributes on <html> (persisted).
+  const { theme, setTheme, accent, setAccent } = useTheme();
   // Maximize/minimize layout survives a reload — restored from localStorage,
   // pruned against the live session list once it loads (stale ids dropped).
   const [maximizedId, setMaximizedId] = useState<string | null>(() => storage.maximized.get());
@@ -628,6 +633,14 @@ export function App() {
                     <IconPlus size={14} />
                   </button>
                 </div>
+                <button
+                  className="tbtn tbtn-icon"
+                  onClick={() => setDialog({ kind: 'appearance' })}
+                  title="Appearance (theme & accent)"
+                  aria-label="Appearance settings"
+                >
+                  <IconPalette size={15} />
+                </button>
                 {waiting > 0 && (
                   <button
                     className="tbtn waiting-jump"
@@ -804,6 +817,16 @@ export function App() {
 
       {dialog?.kind === 'new-profile' && (
         <NewProfileModal profiles={profiles} onClose={closeDialog} onCreate={createProfile} />
+      )}
+
+      {dialog?.kind === 'appearance' && (
+        <AppearanceModal
+          theme={theme}
+          accent={accent}
+          onTheme={setTheme}
+          onAccent={setAccent}
+          onClose={closeDialog}
+        />
       )}
 
       {dialog?.kind === 'add-workspace' && (

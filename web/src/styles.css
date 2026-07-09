@@ -16,10 +16,65 @@
   --danger: #f0655a;
   --danger-dim: rgba(240, 101, 90, 0.12);
   --live: #4cc38a;
+  --live-dim: rgba(76, 195, 138, 0.14);
   --working: #5eb1ef;
   --waiting: #e2b34c;
+  --waiting-dim: rgba(226, 179, 76, 0.16);
   --dead: #f0655a;
+  --hover: #1f1f24;         /* one step above --raised (menu/list item hover) */
+  --border-hover: #3d3d44;  /* hovered inputs/buttons/chips */
+  --border-focus: #4a4a52;  /* focused inputs */
+  --scroll-thumb: #2e2e33;
+  --on-inverse: #0a0a0b;    /* text on the inverted (primary) button */
+  --inverse-hover: #fff;    /* primary button hover surface */
+  --overlay: rgba(10, 10, 11, 0.9);  /* dead-pane veil */
+  --backdrop: rgba(0, 0, 0, 0.6);    /* modal backdrop */
 }
+
+/* Light theme — same structure, inverted surfaces (toggled from the
+   Appearance dialog; persisted as helm.theme). Terminal panes deliberately
+   STAY dark in light mode: claude's TUI and ANSI colors assume a dark
+   background, so panes read as dark cards on a light chrome. */
+:root[data-theme='light'] {
+  color-scheme: light;
+  --bg: #f6f6f7;
+  --panel: #ffffff;
+  --raised: #f0f0f2;
+  --border: #e3e3e7;
+  --border-strong: #d2d2d8;
+  --text: #1a1a1e;
+  --muted: #5d616b;
+  --faint: #8c8f98;
+  --accent: #9a7418;        /* amber, darkened for contrast on light */
+  --accent-dim: rgba(154, 116, 24, 0.12);
+  --danger: #d33d31;
+  --danger-dim: rgba(211, 61, 49, 0.10);
+  --live: #178a55;
+  --live-dim: rgba(23, 138, 85, 0.12);
+  --working: #2673cc;
+  --waiting: #9a7418;
+  --waiting-dim: rgba(154, 116, 24, 0.14);
+  --dead: #d33d31;
+  --hover: #e9e9ec;
+  --border-hover: #b9b9c2;
+  --border-focus: #a3a3ae;
+  --scroll-thumb: #c9c9d0;
+  --on-inverse: #fafafa;
+  --inverse-hover: #000;
+  --overlay: rgba(246, 246, 247, 0.9);
+  --backdrop: rgba(24, 24, 27, 0.35);
+}
+
+/* Accent presets (helm.accent) — each tuned per theme so contrast holds.
+   Amber is the default (no data-accent attribute). */
+:root[data-accent='blue'] { --accent: #5eb1ef; --accent-dim: rgba(94, 177, 239, 0.12); }
+:root[data-theme='light'][data-accent='blue'] { --accent: #2563eb; --accent-dim: rgba(37, 99, 235, 0.10); }
+:root[data-accent='green'] { --accent: #4cc38a; --accent-dim: rgba(76, 195, 138, 0.12); }
+:root[data-theme='light'][data-accent='green'] { --accent: #178a55; --accent-dim: rgba(23, 138, 85, 0.10); }
+:root[data-accent='violet'] { --accent: #b085e8; --accent-dim: rgba(176, 133, 232, 0.12); }
+:root[data-theme='light'][data-accent='violet'] { --accent: #7c3aed; --accent-dim: rgba(124, 58, 237, 0.10); }
+:root[data-accent='rose'] { --accent: #ef6d9b; --accent-dim: rgba(239, 109, 155, 0.12); }
+:root[data-theme='light'][data-accent='rose'] { --accent: #db2777; --accent-dim: rgba(219, 39, 119, 0.10); }
 
 * { box-sizing: border-box; }
 
@@ -35,15 +90,15 @@ html, body {
 /* Themed scrollbars everywhere (incl. xterm viewports and the modal) */
 * {
   scrollbar-width: thin;                       /* Firefox */
-  scrollbar-color: #2e2e33 transparent;
+  scrollbar-color: var(--scroll-thumb) transparent;
 }
 *::-webkit-scrollbar { width: 8px; height: 8px; }
 *::-webkit-scrollbar-track { background: transparent; }
 *::-webkit-scrollbar-thumb {
-  background: #2e2e33;
+  background: var(--scroll-thumb);
   border-radius: 999px;
 }
-*::-webkit-scrollbar-thumb:hover { background: #3d3d44; }
+*::-webkit-scrollbar-thumb:hover { background: var(--border-hover); }
 *::-webkit-scrollbar-corner { background: transparent; }
 
 .app {
@@ -232,14 +287,14 @@ html, body {
   background: var(--live); /* green = listening */
   box-shadow: 0 0 5px rgba(76, 195, 138, 0.6);
 }
-.ws-server-dot.down { background: #d16060; } /* red = refused/timeout */
+.ws-server-dot.down { background: var(--dead); } /* red = refused/timeout */
 .ws-server-dot.unknown { background: var(--faint); } /* not checked yet */
 .ws-server-port { font-variant-numeric: tabular-nums; }
 .ws-item.selected .ws-server { color: var(--muted); }
 
 .ws-badges { display: inline-flex; gap: 4px; flex-shrink: 0; }
 .ws-badge {
-  background: rgba(76, 195, 138, 0.14);
+  background: var(--live-dim);
   color: var(--live);
   font-size: 11px;
   font-weight: 600;
@@ -249,7 +304,7 @@ html, body {
 }
 /* Working = green (default badge color); waiting = amber accent. */
 .ws-badge-waiting {
-  background: rgba(226, 179, 76, 0.16);
+  background: var(--waiting-dim);
   color: var(--accent);
 }
 
@@ -310,10 +365,10 @@ html, body {
   cursor: pointer;
 }
 .ws-menu-item svg { flex-shrink: 0; color: var(--faint); }
-.ws-menu-item:hover { background: #1f1f24; }
+.ws-menu-item:hover { background: var(--hover); }
 .ws-menu-danger { color: var(--danger); }
 .ws-menu-danger svg { color: var(--danger); }
-.ws-menu-danger:hover { background: rgba(224, 108, 108, 0.12); }
+.ws-menu-danger:hover { background: var(--danger-dim); }
 .ws-menu-sep { height: 1px; margin: 4px 2px; background: var(--border); }
 
 .sidebar-empty {
@@ -497,7 +552,7 @@ html, body {
   cursor: pointer;
   padding: 0;
 }
-.color-swatch.active { border-color: #fff; }
+.color-swatch.active { border-color: var(--text); }
 .color-swatch:hover { transform: scale(1.12); }
 
 .pane-header {
@@ -556,7 +611,7 @@ html, body {
   gap: 10px;
   padding: 20px;
   text-align: center;
-  background: rgba(10, 10, 11, 0.9);
+  background: var(--overlay);
   color: var(--muted);
   cursor: default;
 }
@@ -652,7 +707,7 @@ html, body {
   justify-content: center;
   gap: 6px;
   background: var(--text);
-  color: #0a0a0b;
+  color: var(--on-inverse);
   border: 1px solid transparent;
   border-radius: 6px;
   padding: 4px 12px;
@@ -663,7 +718,7 @@ html, body {
   line-height: 1.5;
   white-space: nowrap;
 }
-.btn:hover { background: #fff; }
+.btn:hover { background: var(--inverse-hover); }
 .btn-small { padding: 2px 8px; font-size: 11.5px; }
 
 /* Secondary — hairline border, quiet */
@@ -673,7 +728,7 @@ html, body {
   border-color: var(--border-strong);
   font-weight: 400;
 }
-.btn-secondary:hover { background: var(--raised); border-color: #3d3d44; }
+.btn-secondary:hover { background: var(--raised); border-color: var(--border-hover); }
 
 .btn-danger {
   background: transparent;
@@ -768,7 +823,7 @@ input, select {
 }
 input:focus, select:focus {
   outline: none;
-  border-color: #4a4a52;
+  border-color: var(--border-focus);
 }
 input::placeholder { color: var(--faint); }
 
@@ -793,7 +848,7 @@ input::placeholder { color: var(--faint); }
   cursor: pointer;
 }
 .pselect-trigger:hover,
-.pselect-trigger.open { background: var(--raised); border-color: #3d3d44; }
+.pselect-trigger.open { background: var(--raised); border-color: var(--border-hover); }
 .pselect-trigger > svg:first-child { color: var(--faint); flex-shrink: 0; }
 .pselect-name {
   max-width: min(160px, 30vw); /* long names shrink, never push the bar wider */
@@ -837,7 +892,7 @@ input::placeholder { color: var(--faint); }
   text-align: left;
   cursor: pointer;
 }
-.pselect-item:hover { background: #1f1f24; } /* one step above --raised */
+.pselect-item:hover { background: var(--hover); }
 .pselect-item-name {
   display: flex;
   align-items: center;
@@ -1086,7 +1141,7 @@ input::placeholder { color: var(--faint); }
   font-family: inherit;
   cursor: pointer;
 }
-.chip:hover { color: var(--text); border-color: #3d3d44; }
+.chip:hover { color: var(--text); border-color: var(--border-hover); }
 .chip.selected {
   background: var(--accent-dim);
   border-color: var(--accent);
@@ -1169,7 +1224,7 @@ input::placeholder { color: var(--faint); }
   z-index: 100;
   display: grid;
   place-items: center;
-  background: rgba(0, 0, 0, 0.6);
+  background: var(--backdrop);
   backdrop-filter: blur(3px);
   animation: fade-in 120ms ease-out;
 }
@@ -1502,3 +1557,16 @@ input::placeholder { color: var(--faint); }
   #root, .app { min-width: 0; }
   .usage-bar-label { width: 80px; }
 }
+
+/* ------------------------------------------------- appearance dialog */
+.accent-row { display: flex; gap: 10px; margin: 4px 0 6px; }
+.accent-swatch {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  border: 2px solid transparent;
+  cursor: pointer;
+  padding: 0;
+}
+.accent-swatch:hover { transform: scale(1.1); }
+.accent-swatch.active { border-color: var(--text); }

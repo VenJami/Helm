@@ -15,7 +15,14 @@ const KEYS = {
   minimized: 'helm.minimized',
   fontSize: 'helm.fontSize',
   sidebarHidden: 'helm.sidebarHidden',
+  theme: 'helm.theme',
+  accent: 'helm.accent',
 } as const;
+
+// Appearance choices — must match the CSS preset selectors in styles.css.
+export type Theme = 'dark' | 'light';
+export const ACCENTS = ['amber', 'blue', 'green', 'violet', 'rose'] as const;
+export type Accent = (typeof ACCENTS)[number];
 const PANE_ORDER_PREFIX = 'helm.paneorder.';
 const paneOrderKey = (wsId: string) => `${PANE_ORDER_PREFIX}${wsId}`;
 
@@ -71,6 +78,18 @@ export const storage = {
   sidebarHidden: {
     get: (): boolean => getRaw(KEYS.sidebarHidden) === '1',
     set: (hidden: boolean): void => setRaw(KEYS.sidebarHidden, hidden ? '1' : '0'),
+  },
+  // unknown/corrupt stored values fall back to the defaults (dark / amber)
+  theme: {
+    get: (): Theme => (getRaw(KEYS.theme) === 'light' ? 'light' : 'dark'),
+    set: (t: Theme): void => setRaw(KEYS.theme, t),
+  },
+  accent: {
+    get: (): Accent => {
+      const a = getRaw(KEYS.accent);
+      return (ACCENTS as readonly string[]).includes(a ?? '') ? (a as Accent) : 'amber';
+    },
+    set: (a: Accent): void => setRaw(KEYS.accent, a),
   },
   // one key per workspace (pane display order within it)
   paneOrder: {
