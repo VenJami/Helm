@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { api } from './api';
 import { storage } from './lib/storage';
+import { useSessionsPoll } from './hooks/useSessionsPoll';
+import { useWorkspaceStatus } from './hooks/useWorkspaceStatus';
 import { accountLabel, foldMappedDefault } from './accounts';
-import type { AccountUsage, GitInfo, LogEntry, Profile, ServerInfo, SessionInfo, Workspace } from './types';
+import type { AccountUsage, LogEntry, Profile, SessionInfo, Workspace } from './types';
 import { Sidebar } from './components/Sidebar';
 import { TerminalPane } from './components/TerminalPane';
 import { Modal } from './components/Modal';
@@ -31,16 +33,6 @@ const IS_MAC = typeof navigator !== 'undefined' && /Mac/i.test(navigator.platfor
 
 const fmt = (n: number) =>
   n >= 1e6 ? (n / 1e6).toFixed(1) + 'M' : n >= 1e3 ? (n / 1e3).toFixed(1) + 'k' : String(n);
-
-// Field-by-field equality for flat, primitive-only objects (SessionInfo,
-// Profile). Used to reuse the previous poll's object reference when nothing
-// changed, so React.memo on TerminalPane can actually skip untouched panes
-// instead of every prop looking new every 3 s.
-function shallowEqual<T extends object>(a: T, b: T): boolean {
-  const keys = Object.keys(a) as (keyof T)[];
-  if (keys.length !== Object.keys(b).length) return false;
-  return keys.every((k) => a[k] === b[k]);
-}
 
 // Rough dollar figure — cents matter at the low end, so surface <$0.01 rather
 // than a flat $0.00 that reads as "free".
@@ -98,12 +90,6 @@ export function App() {
     setWsOrder(ids);
     storage.wsOrder.set(ids);
   };
-  const [gitInfo, setGitInfo] = useState<Record<string, GitInfo>>({});
-  const [serverInfo, setServerInfo] = useState<Record<string, ServerInfo>>({});
-  const [sessions, setSessions] = useState<SessionInfo[]>([]);
-  const [profiles, setProfiles] = useState<Profile[]>([]);
-  const [defaultEmail, setDefaultEmail] = useState<string | null>(null);
-  const [defaultMapped, setDefaultMapped] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(storage.workspaceId.get());
   const [profileChoice, setProfileChoice] = useState('');
   const [dialog, setDialog] = useState<Dialog>(null);
@@ -112,6 +98,12 @@ export function App() {
   const [notify, setNotify] = useState(
     () => storage.notify.get() && Notification.permission === 'granted',
   );
+  // Data layer (extracted hooks): sessions+profiles poll w/ stable references
+  // and edge-triggered notifications, plus per-workspace git/dev-server status.
+  const {
+    sessions, setSessions, profiles, setProfiles, defaultEmail, defaultMapped, refresh,
+  } = useSessionsPoll(notify);
+  const { gitInfo, serverInfo, setServerInfo } = useWorkspaceStatus();
   const [globalUsage, setGlobalUsage] = useState<AccountUsage[] | null>(null);
   // 5h ≈ the subscription session window — the slice that matters most
   const [usageWindow, setUsageWindow] = useState('d7');
@@ -264,80 +256,6 @@ export function App() {
     return () => window.removeEventListener('keydown', onKey);
   }, []);
 
-  // Previous activity per session, for edge-triggered notifications.
-  // undefined entry = first sighting (never notify on first sighting).
-  const prevActivityRef = useRef<Map<string, SessionInfo['activity']>>(new Map());
-  const notifyRef = useRef(notify);
-  notifyRef.current = notify;
-
-  const maybeNotify = useCallback((list: SessionInfo[]) => {
-    const prev = prevActivityRef.current;
-    const next = new Map<string, SessionInfo['activity']>();
-    for (const s of list) next.set(s.id, s.activity);
-
-    // No alerts while the user is actively looking at Helm
-    const shouldAlert =
-      notifyRef.current && Notification.permission === 'granted' && !document.hasFocus();
-    if (shouldAlert) {
-      for (const s of list) {
-        if (!prev.has(s.id) || s.status !== 'running') continue;
-        const was = prev.get(s.id);
-        const where = s.workspace.split(/[\\/]/).filter(Boolean).pop();
-        let text: string | null = null;
-        if (s.activity === 'waiting' && was !== 'waiting') {
-          // Prefer the hook's own message ("Claude needs permission to…") so
-          // the alert says why it's blocked, not just the generic phrase.
-          text = `${s.activityNote || 'needs your input'} · ${where}`;
-        } else if (s.activity === 'idle' && was === 'working') {
-          text = `finished · ${where}`;
-        }
-        if (text) {
-          const n = new Notification(`${s.name} · ${text}`, { tag: s.id });
-          n.onclick = () => window.focus();
-        }
-      }
-    }
-    prevActivityRef.current = next;
-  }, []);
-
-  // The session/profile polls return brand-new objects every 3 s even when
-  // nothing changed. Reusing the previous reference for unchanged entries lets
-  // React.memo(TerminalPane) actually skip untouched panes instead of every
-  // pane's xterm subtree reconciling on a wall-clock timer forever.
-  const sessionCacheRef = useRef<Map<string, SessionInfo>>(new Map());
-  const stabilizeSessions = useCallback((list: SessionInfo[]): SessionInfo[] => {
-    const cache = sessionCacheRef.current;
-    const next = new Map<string, SessionInfo>();
-    const out = list.map((s) => {
-      const prev = cache.get(s.id);
-      const chosen = prev && shallowEqual(prev, s) ? prev : s;
-      next.set(s.id, chosen);
-      return chosen;
-    });
-    sessionCacheRef.current = next;
-    return out;
-  }, []);
-  const profilesCacheRef = useRef<Profile[]>([]);
-
-  const refresh = useCallback(() => {
-    api.listSessions().then((list) => {
-      maybeNotify(list);
-      setSessions(stabilizeSessions(list));
-    }).catch(() => {});
-    // Profiles too, so the email shows up right after /login in a pane
-    api.listProfiles().then((info) => {
-      const prevProfiles = profilesCacheRef.current;
-      const unchanged = prevProfiles.length === info.profiles.length
-        && info.profiles.every((p, i) => shallowEqual(p, prevProfiles[i]));
-      if (!unchanged) {
-        profilesCacheRef.current = info.profiles;
-        setProfiles(info.profiles);
-      }
-      setDefaultEmail(info.default.email);
-      setDefaultMapped(info.default.mapped);
-    }).catch(() => {});
-  }, [maybeNotify, stabilizeSessions]);
-
   const toggleNotify = async () => {
     if (notify) {
       setNotify(false);
@@ -359,36 +277,10 @@ export function App() {
     document.title = waiting > 0 ? `(${waiting} waiting) Helm ⎈` : 'Helm ⎈';
   }, [waiting]);
 
+  // One-shot boot fetches (session/profile/git/server polling lives in hooks).
   useEffect(() => {
     api.listWorkspaces().then(setWorkspaces).catch(() => {});
     api.getSettings().then((s) => setAutoRevive(s.autoRevive)).catch(() => {});
-    refresh();
-    const timer = setInterval(refresh, 3000);
-    return () => clearInterval(timer);
-  }, [refresh]);
-
-  // Git branch/dirty per workspace — slower poll than sessions (6 s); branches
-  // and working-tree state change on a human timescale, and it spawns git.
-  useEffect(() => {
-    const pull = () =>
-      api.getWorkspacesGit()
-        .then((list) => setGitInfo(Object.fromEntries(list.map((g) => [g.id, g]))))
-        .catch(() => {});
-    pull();
-    const timer = setInterval(pull, 6000);
-    return () => clearInterval(timer);
-  }, []);
-
-  // Dev-server up/down per workspace — polled a touch faster than git (4 s), so
-  // starting/stopping a project server reflects quickly. Just a TCP connect.
-  useEffect(() => {
-    const pull = () =>
-      api.getWorkspacesServers()
-        .then((list) => setServerInfo(Object.fromEntries(list.map((s) => [s.id, s]))))
-        .catch(() => {});
-    pull();
-    const timer = setInterval(pull, 4000);
-    return () => clearInterval(timer);
   }, []);
 
   const toggleAutoRevive = async () => {

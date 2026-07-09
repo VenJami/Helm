@@ -343,6 +343,16 @@ used to accumulate forever). App.tsx no longer touches localStorage directly
 slice of improvement-plan P3-2 (App decomposition). Verified: tsc + build +
 headless-Edge render against an isolated seeded server.
 
+Data-layer hooks (2026-07-09) — App decomposition slice 2: the polling engine
+moved out of App.tsx into `web/src/hooks/` — `useSessionsPoll` (3 s session +
+profile poll, stable-reference cache for React.memo, edge-triggered desktop
+notifications) and `useWorkspaceStatus` (git 6 s / dev-server 4 s). App now
+consumes `{sessions, profiles, refresh, …}` and keeps only optimistic updates
+via the returned setters + one-shot boot fetches. Behavior-preserving move
+(logic byte-identical); App.tsx 1,379 → 1,238 lines. Improvement-plan P3-2
+slice 2. Verified: strict tsc, 18 vitest tests, build, headless-Edge render on
+an isolated seeded server (badge counts, profile email, live pane all polling).
+
 ## Short-term backlog (rough priority order, owner-approved direction)
 1. Theme settings (light theme / accent choice) — font-size is done.
 2. Drag-resize pane sizes (reorder is done; resize = grid column/row weights).
