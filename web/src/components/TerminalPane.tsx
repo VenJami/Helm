@@ -36,6 +36,10 @@ interface Props {
   onMinimize: (id: string) => void; // pull this pane out of the grid into the tray
   onGripDragStart: (id: string) => void; // drag-to-reorder, handled by the grid
   onGripDragEnd: () => void;
+  // Registers a "focus my terminal" handle with the parent (ref-map pattern):
+  // App calls it directly on jump/cycle instead of the old window-event
+  // broadcast that every pane had to string-match. null = unregister.
+  onRegisterFocus: (id: string, focus: (() => void) | null) => void;
   // This pane receives Ctrl+V file-pastes even when its terminal isn't
   // focused (the maximized pane, or the only pane in the workspace).
   isPasteFallback: boolean;
@@ -86,7 +90,7 @@ const clipFiles = (e: ClipboardEvent): File[] => {
 // subtree reconciling on a wall-clock timer forever.
 function TerminalPaneImpl({
   session, onKilled, onChanged, isMaximized, onToggleMax, onMinimize, onGripDragStart, onGripDragEnd,
-  isPasteFallback, profiles, defaultEmail, mappedDefault, fontSize,
+  onRegisterFocus, isPasteFallback, profiles, defaultEmail, mappedDefault, fontSize,
 }: Props) {
   // Read at terminal-creation time only; live changes go through the effect below.
   const fontSizeRef = useRef(fontSize);
@@ -412,15 +416,11 @@ function TerminalPaneImpl({
     : defaultEmail;
   const profileText = accountLabel(effectiveProfile, profileEmail, profiles);
 
-  // App fires this when the user jumps to (waiting) or cycles to this pane —
-  // focus our terminal so keystrokes land here.
+  // Hand App a direct "focus this pane's terminal" handle (jump/cycle target).
   useEffect(() => {
-    const onFocusReq = (e: Event) => {
-      if ((e as CustomEvent).detail === session.id) termRef.current?.focus();
-    };
-    window.addEventListener('helm:focus-pane', onFocusReq);
-    return () => window.removeEventListener('helm:focus-pane', onFocusReq);
-  }, [session.id]);
+    onRegisterFocus(session.id, () => termRef.current?.focus());
+    return () => onRegisterFocus(session.id, null);
+  }, [session.id, onRegisterFocus]);
 
   // The parent now reuses the same `session` object across polls when nothing
   // changed (so memo can skip untouched panes), which means the "working 7m"

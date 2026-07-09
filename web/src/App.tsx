@@ -108,6 +108,16 @@ export function App() {
   // Which pane's terminal last held focus — the anchor for Ctrl+Shift+←/→ cycling.
   const activePaneRef = useRef<string | null>(null);
   const flashTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Imperative pane handles (ref-map pattern): each grid slot registers its
+  // element (for scrollIntoView) and each TerminalPane registers a "focus my
+  // terminal" fn — so focusPane addresses ONE pane directly instead of the old
+  // dual coupling (getElementById + a window event every pane string-matched).
+  const paneSlotRefs = useRef(new Map<string, HTMLDivElement>());
+  const paneFocusFns = useRef(new Map<string, () => void>());
+  const registerPaneFocus = useCallback((id: string, focus: (() => void) | null) => {
+    if (focus) paneFocusFns.current.set(id, focus);
+    else paneFocusFns.current.delete(id);
+  }, []);
   const [sidebarHidden, setSidebarHidden] = useState(() => storage.sidebarHidden.get());
   const toggleSidebar = () =>
     setSidebarHidden((h) => {
@@ -420,13 +430,14 @@ export function App() {
   }, [restorePane]);
 
   // Bring a pane front-and-center: scroll it into view, focus its terminal
-  // (the pane listens for this event), and pulse it so the eye lands on it.
+  // (via its registered handle), and pulse it so the eye lands on it. The 60 ms
+  // delay lets a just-restored/remounted pane register before we address it.
   const focusPane = (id: string) => {
     activePaneRef.current = id;
     setFlashId(id);
     setTimeout(() => {
-      document.getElementById(`pane-${id}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
-      window.dispatchEvent(new CustomEvent('helm:focus-pane', { detail: id }));
+      paneSlotRefs.current.get(id)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      paneFocusFns.current.get(id)?.();
     }, 60);
     if (flashTimer.current) clearTimeout(flashTimer.current);
     flashTimer.current = setTimeout(() => setFlashId((f) => (f === id ? null : f)), 1600);
@@ -706,7 +717,10 @@ export function App() {
                 {visiblePanes.map((s) => (
                   <div
                     key={s.id}
-                    id={`pane-${s.id}`}
+                    ref={(el) => {
+                      if (el) paneSlotRefs.current.set(s.id, el);
+                      else paneSlotRefs.current.delete(s.id);
+                    }}
                     className={`pane-slot ${dragOverId === s.id && dragId && dragId !== s.id ? 'drag-over' : ''}${flashId === s.id ? ' pane-flash' : ''}`}
                     onFocusCapture={() => { activePaneRef.current = s.id; }}
                     onDragOver={(e) => {
@@ -731,6 +745,7 @@ export function App() {
                       onMinimize={minimizePane}
                       onGripDragStart={onGripDragStart}
                       onGripDragEnd={onGripDragEnd}
+                      onRegisterFocus={registerPaneFocus}
                       isPasteFallback={viewMax === s.id || (!viewMax && panes.length === 1)}
                       profiles={profiles}
                       defaultEmail={defaultEmail}

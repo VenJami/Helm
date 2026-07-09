@@ -366,6 +366,16 @@ build, and a CDP-driven headless-Edge check that clicks the toolbar Usage
 button and screenshots the extracted modal fully rendered (chips, grand total,
 per-model bars). Improvement-plan P3-2 slice 3.
 
+Focus ref-map (2026-07-09) — App decomposition slice 4 (final): jumping/cycling
+to a pane now goes through registered imperative handles (each grid slot
+registers its element for scrollIntoView; each TerminalPane registers a
+"focus my terminal" fn via a stable `onRegisterFocus` prop) instead of the old
+dual coupling — `getElementById('pane-<id>')` + a `helm:focus-pane` window
+event every pane string-matched. The toast bus stays (it's a legitimate
+broadcast). Improvement-plan P3-2 complete. Verified: tsc/vitest/build + a
+CDP check driving Ctrl+Shift+→ and confirming focus lands in the pane's xterm
+textarea with the flash pulse firing.
+
 ## Short-term backlog (rough priority order, owner-approved direction)
 1. Theme settings (light theme / accent choice) — font-size is done.
 2. Drag-resize pane sizes (reorder is done; resize = grid column/row weights).

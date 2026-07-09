@@ -3,8 +3,7 @@ import { IconX } from './Icons';
 
 // Transient action feedback (a failed switch, a revive error, "notifications
 // blocked") that used to jam red text into the toolbar. A module-level event
-// bus lets any component raise a toast without prop-drilling — the same
-// decoupled pattern as the helm:focus-pane event.
+// bus lets any component raise a toast without prop-drilling.
 
 export type ToastKind = 'error' | 'success' | 'info';
 interface Toast { id: number; kind: ToastKind; message: string; }
