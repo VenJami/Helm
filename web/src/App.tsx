@@ -3,68 +3,36 @@ import { api } from './api';
 import { storage } from './lib/storage';
 import { useSessionsPoll } from './hooks/useSessionsPoll';
 import { useWorkspaceStatus } from './hooks/useWorkspaceStatus';
-import { accountLabel, foldMappedDefault } from './accounts';
-import type { AccountUsage, LogEntry, Profile, SessionInfo, Workspace } from './types';
+import type { LogEntry, Profile, SessionInfo, Workspace } from './types';
 import { Sidebar } from './components/Sidebar';
 import { TerminalPane } from './components/TerminalPane';
-import { Modal } from './components/Modal';
 import { ProfileSelect } from './components/ProfileSelect';
 import { TargetCursor } from './components/TargetCursor';
 import { Toaster, toast } from './components/Toaster';
 import { DriftBanner } from './components/DriftBanner';
 import { CommandPalette } from './components/CommandPalette';
-import { IconBug, IconMinus, IconPanelLeftOpen, IconPencil, IconPlus, IconTrash } from './components/Icons';
+import { NewProfileModal } from './components/modals/NewProfileModal';
+import { ProfilesModal } from './components/modals/ProfilesModal';
+import { UsageModal } from './components/modals/UsageModal';
+import { BroadcastModal } from './components/modals/BroadcastModal';
+import { AddWorkspaceModal } from './components/modals/AddWorkspaceModal';
+import { IconBug, IconMinus, IconPanelLeftOpen, IconPlus } from './components/Icons';
 import {
   AnimateIcon, IconBellOff, IconBellRing, IconChart, IconNfc, IconRefreshCcw, IconSearch, IconTerminal,
 } from './components/AnimatedIcons';
 
+// Which modal is open. Each modal component owns its own draft state — App
+// only tracks the kind (plus any payload computed at open time).
 type Dialog =
   | { kind: 'new-profile' }
-  | { kind: 'manage-profiles' }
-  | { kind: 'edit-profile'; profile: Profile }
-  | { kind: 'delete-profile'; profile: Profile }
+  | { kind: 'profiles' }
   | { kind: 'usage' }
-  | { kind: 'broadcast' }
+  | { kind: 'broadcast'; initialIds: Set<string> }
   | { kind: 'add-workspace' }
   | null;
 
 // ⌘K on Mac, Ctrl K elsewhere — for the command-palette hint.
 const IS_MAC = typeof navigator !== 'undefined' && /Mac/i.test(navigator.platform);
-
-const fmt = (n: number) =>
-  n >= 1e6 ? (n / 1e6).toFixed(1) + 'M' : n >= 1e3 ? (n / 1e3).toFixed(1) + 'k' : String(n);
-
-// Rough dollar figure — cents matter at the low end, so surface <$0.01 rather
-// than a flat $0.00 that reads as "free".
-const fmtCost = (n: number) =>
-  n <= 0 ? '$0'
-    : n < 0.01 ? '<$0.01'
-    : n < 100 ? '$' + n.toFixed(2)
-    : '$' + Math.round(n).toLocaleString();
-
-// "just now" / "2h ago" / "3d ago" from an epoch-ms timestamp (null = never).
-const relTime = (ms: number | null): string => {
-  if (!ms) return 'never used';
-  const s = Math.max(0, (Date.now() - ms) / 1000);
-  if (s < 90) return 'used just now';
-  const m = s / 60;
-  if (m < 60) return `used ${Math.round(m)}m ago`;
-  const h = m / 60;
-  if (h < 24) return `used ${Math.round(h)}h ago`;
-  const d = h / 24;
-  if (d < 7) return `used ${Math.round(d)}d ago`;
-  return `used ${Math.round(d / 7)}w ago`;
-};
-
-const USAGE_WINDOWS = [
-  ['h1', '1 h'],
-  ['h5', '5 h'],
-  ['h10', '10 h'],
-  ['h24', '24 h'],
-  ['d7', '7 d'],
-  ['d30', '30 d'],
-  ['all', 'all'],
-] as const;
 
 export function App() {
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
@@ -93,8 +61,6 @@ export function App() {
   const [selectedId, setSelectedId] = useState<string | null>(storage.workspaceId.get());
   const [profileChoice, setProfileChoice] = useState('');
   const [dialog, setDialog] = useState<Dialog>(null);
-  const [draftName, setDraftName] = useState('');
-  const [draftError, setDraftError] = useState('');
   const [notify, setNotify] = useState(
     () => storage.notify.get() && Notification.permission === 'granted',
   );
@@ -104,9 +70,6 @@ export function App() {
     sessions, setSessions, profiles, setProfiles, defaultEmail, defaultMapped, refresh,
   } = useSessionsPoll(notify);
   const { gitInfo, serverInfo, setServerInfo } = useWorkspaceStatus();
-  const [globalUsage, setGlobalUsage] = useState<AccountUsage[] | null>(null);
-  // 5h ≈ the subscription session window — the slice that matters most
-  const [usageWindow, setUsageWindow] = useState('d7');
   // Maximize/minimize layout survives a reload — restored from localStorage,
   // pruned against the live session list once it loads (stale ids dropped).
   const [maximizedId, setMaximizedId] = useState<string | null>(() => storage.maximized.get());
@@ -140,12 +103,6 @@ export function App() {
     });
   // Ctrl+K command palette / quick pane switcher.
   const [paletteOpen, setPaletteOpen] = useState(false);
-  // Add-workspace modal fields.
-  const [wsDir, setWsDir] = useState('');
-  const [wsName2, setWsName2] = useState('');
-  const [wsProfile, setWsProfile] = useState('');
-  const [wsPort, setWsPort] = useState('');
-  const [wsAddError, setWsAddError] = useState('');
   // Pane that briefly pulses after a jump/cycle so the eye can find it.
   const [flashId, setFlashId] = useState<string | null>(null);
   // Which pane's terminal last held focus — the anchor for Ctrl+Shift+←/→ cycling.
@@ -159,11 +116,6 @@ export function App() {
       return next;
     });
   const [autoRevive, setAutoRevive] = useState(false); // mirrors server settings
-  // Broadcast dialog: one instruction typed into several panes at once
-  const [bcText, setBcText] = useState('');
-  const [bcIds, setBcIds] = useState<Set<string>>(new Set());
-  const [bcBusy, setBcBusy] = useState(false);
-  const [bcError, setBcError] = useState('');
 
   // Server console window (start-helm.cmd terminal) show/hide toggle.
   const [consoleState, setConsoleState] = useState<{ supported: boolean; visible: boolean }>(
@@ -220,19 +172,7 @@ export function App() {
     return () => document.removeEventListener('contextmenu', onCtx);
   }, []);
 
-  const openUsage = () => {
-    setDialog({ kind: 'usage' });
-    setGlobalUsage(null);
-    api.getGlobalUsage().then(setGlobalUsage).catch(() => setGlobalUsage([]));
-  };
-
-  // When the bare default account is the same login as a named profile, fold
-  // default's history into that profile's row and hide the standalone default
-  // row — same collapse the profile picker does. Grand total is unchanged.
-  const usageRows = useMemo(
-    () => (globalUsage ? foldMappedDefault(globalUsage, defaultMapped) : null),
-    [globalUsage, defaultMapped],
-  );
+  const openUsage = () => setDialog({ kind: 'usage' }); // the modal fetches on mount
 
   // Esc leaves maximized mode
   useEffect(() => {
@@ -375,65 +315,21 @@ export function App() {
   );
 
   const openBroadcast = () => {
-    setBcText('');
-    setBcError('');
     // Default targets: this workspace's running panes — minus ones waiting on
     // a question, since the trailing Enter could answer their dialog.
-    setBcIds(new Set(
-      runningPanes
-        .filter((s) => selected && s.workspace === selected.dir && s.activity !== 'waiting')
-        .map((s) => s.id),
-    ));
-    setDialog({ kind: 'broadcast' });
-  };
-
-  const sendBroadcast = async () => {
-    const text = bcText.trim();
-    const ids = [...bcIds];
-    if (!text || !ids.length || bcBusy) return;
-    setBcBusy(true);
-    setBcError('');
-    try {
-      await api.broadcast(text, ids);
-      setDialog(null);
-    } catch (err) {
-      setBcError((err as Error).message);
-    } finally {
-      setBcBusy(false);
-    }
+    setDialog({
+      kind: 'broadcast',
+      initialIds: new Set(
+        runningPanes
+          .filter((s) => selected && s.workspace === selected.dir && s.activity !== 'waiting')
+          .map((s) => s.id),
+      ),
+    });
   };
 
   const select = (id: string) => {
     setSelectedId(id);
     storage.workspaceId.set(id);
-  };
-
-  const submitAddWorkspace = async () => {
-    const dir = wsDir.trim();
-    if (!dir) {
-      setWsAddError('A directory path is required.');
-      return;
-    }
-    let port: number | null = null;
-    if (wsPort.trim()) {
-      const p = Number(wsPort);
-      if (!Number.isInteger(p) || p < 1 || p > 65535) {
-        setWsAddError('Port must be a whole number between 1 and 65535.');
-        return;
-      }
-      port = p;
-    }
-    const name = wsName2.trim() || dir.split(/[\\/]/).filter(Boolean).pop() || dir;
-    try {
-      const created = await api.addWorkspace(name, dir, wsProfile || undefined);
-      // Port isn't part of the create payload — set it in a follow-up patch.
-      const ws = port !== null ? await api.updateWorkspace(created.id, { port }) : created;
-      setWorkspaces((prev) => [...prev, ws]);
-      select(ws.id);
-      closeDialog();
-    } catch (err) {
-      setWsAddError((err as Error).message);
-    }
   };
 
   const renameWorkspace = async (id: string, name: string) => {
@@ -577,37 +473,16 @@ export function App() {
     return () => window.removeEventListener('keydown', onKey);
   }, [shownPanes]);
 
-  const submitNewProfile = () => {
-    const name = draftName.trim();
-    if (!/^[\w-]+$/.test(name)) {
-      setDraftError('Use letters, numbers, dashes or underscores only.');
-      return;
-    }
-    if (profiles.some((p) => p.name === name)) {
-      setDraftError('That profile already exists.');
-      return;
-    }
-    setDialog(null);
-    setDraftName('');
-    setDraftError('');
+  // Modal callbacks — the modals validate + own their drafts; App handles the
+  // state fallout. closeDialog is trivial now (no draft fields to reset).
+  const closeDialog = () => setDialog(null);
+
+  const createProfile = (name: string) => {
     chooseProfile(name); // pin the new account to this workspace
     void createPane(name);
   };
 
-  const closeDialog = () => {
-    setDialog(null);
-    setDraftName('');
-    setDraftError('');
-    setBcError('');
-    setWsDir('');
-    setWsName2('');
-    setWsProfile('');
-    setWsPort('');
-    setWsAddError('');
-  };
-
   const confirmDeleteProfile = async (name: string) => {
-    setDialog(null);
     try {
       await api.deleteProfile(name);
       setProfiles((prev) => prev.filter((p) => p.name !== name));
@@ -624,29 +499,20 @@ export function App() {
     }
   };
 
-  const submitRenameProfile = async (oldName: string) => {
-    const nextName = draftName.trim();
-    if (!/^[\w-]+$/.test(nextName)) {
-      setDraftError('Use letters, numbers, dashes or underscores only.');
-      return;
-    }
-    if (nextName !== oldName && profiles.some((p) => p.name === nextName)) {
-      setDraftError('That profile already exists.');
-      return;
-    }
-    try {
-      await api.renameProfile(oldName, nextName);
-      setProfiles((prev) => prev.map((p) => (p.name === oldName ? { ...p, name: nextName } : p)));
-      if (profileChoice === oldName) setProfileChoice(nextName);
-      setWorkspaces((prev) =>
-        prev.map((w) => (w.profile === oldName ? { ...w, profile: nextName } : w)),
-      );
-      setDialog({ kind: 'manage-profiles' });
-      setDraftName('');
-      setDraftError('');
-    } catch (err) {
-      setDraftError((err as Error).message);
-    }
+  // API + state sync only — validation and inline errors live in ProfilesModal
+  // (a thrown error surfaces next to its input field).
+  const renameProfile = async (oldName: string, nextName: string) => {
+    await api.renameProfile(oldName, nextName);
+    setProfiles((prev) => prev.map((p) => (p.name === oldName ? { ...p, name: nextName } : p)));
+    if (profileChoice === oldName) setProfileChoice(nextName);
+    setWorkspaces((prev) =>
+      prev.map((w) => (w.profile === oldName ? { ...w, profile: nextName } : w)),
+    );
+  };
+
+  const addedWorkspace = (ws: Workspace) => {
+    setWorkspaces((prev) => [...prev, ws]);
+    select(ws.id);
   };
 
   return (
@@ -714,7 +580,7 @@ export function App() {
                 value={profileChoice}
                 onChange={chooseProfile}
                 onNewProfile={() => setDialog({ kind: 'new-profile' })}
-                onManageProfiles={() => setDialog({ kind: 'manage-profiles' })}
+                onManageProfiles={() => setDialog({ kind: 'profiles' })}
               />
               <button className="btn" onClick={newPane}>
                 <IconPlus size={13} /> New pane
@@ -922,359 +788,33 @@ export function App() {
       </main>
 
       {dialog?.kind === 'new-profile' && (
-        <Modal title="New account profile" onClose={closeDialog}>
-          <p className="modal-desc">
-            Each profile is an isolated Claude Code account. A pane will open with
-            Claude's setup — sign in there with the account this profile is for.
-          </p>
-          <input
-            className="modal-input"
-            placeholder="profile name — e.g. work, personal-max"
-            value={draftName}
-            autoFocus
-            onChange={(e) => {
-              setDraftName(e.target.value);
-              setDraftError('');
-            }}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') submitNewProfile();
-            }}
-          />
-          {draftError && <div className="form-error">{draftError}</div>}
-          <div className="modal-actions">
-            <button className="btn btn-ghost" onClick={closeDialog}>Cancel</button>
-            <button className="btn" onClick={submitNewProfile} disabled={!draftName.trim()}>
-              Create &amp; open login pane
-            </button>
-          </div>
-        </Modal>
+        <NewProfileModal profiles={profiles} onClose={closeDialog} onCreate={createProfile} />
       )}
 
       {dialog?.kind === 'add-workspace' && (
-        <Modal title="Add workspace" onClose={closeDialog}>
-          <p className="modal-desc">
-            Point Helm at a project folder. Panes you open here launch Claude in
-            this directory.
-          </p>
-          <label className="field-label">Directory path</label>
-          <input
-            className="modal-input"
-            placeholder="e.g. C:\Users\you\Projects\my-app"
-            value={wsDir}
-            autoFocus
-            onChange={(e) => { setWsDir(e.target.value); setWsAddError(''); }}
-            onKeyDown={(e) => { if (e.key === 'Enter') void submitAddWorkspace(); }}
-          />
-          <label className="field-label">Name <span className="field-hint">(optional — defaults to the folder name)</span></label>
-          <input
-            className="modal-input"
-            placeholder="workspace name"
-            value={wsName2}
-            onChange={(e) => setWsName2(e.target.value)}
-            onKeyDown={(e) => { if (e.key === 'Enter') void submitAddWorkspace(); }}
-          />
-          <label className="field-label">Pinned account <span className="field-hint">(optional)</span></label>
-          <select
-            className="modal-input"
-            value={wsProfile}
-            onChange={(e) => setWsProfile(e.target.value)}
-          >
-            <option value="">Default account</option>
-            {profiles.map((p) => (
-              <option key={p.name} value={p.name}>
-                {p.name}{p.email ? ` — ${p.email}` : ''}
-              </option>
-            ))}
-          </select>
-          <label className="field-label">Dev-server port <span className="field-hint">(optional — enables the up/down check)</span></label>
-          <input
-            className="modal-input"
-            placeholder="e.g. 3000"
-            inputMode="numeric"
-            value={wsPort}
-            onChange={(e) => { setWsPort(e.target.value); setWsAddError(''); }}
-            onKeyDown={(e) => { if (e.key === 'Enter') void submitAddWorkspace(); }}
-          />
-          {wsAddError && <div className="form-error">{wsAddError}</div>}
-          <div className="modal-actions">
-            <button className="btn btn-ghost" onClick={closeDialog}>Cancel</button>
-            <button className="btn" onClick={() => void submitAddWorkspace()} disabled={!wsDir.trim()}>
-              Add workspace
-            </button>
-          </div>
-        </Modal>
+        <AddWorkspaceModal profiles={profiles} onClose={closeDialog} onAdded={addedWorkspace} />
       )}
 
-      {dialog?.kind === 'manage-profiles' && (
-        <Modal title="Manage profiles" onClose={closeDialog}>
-          {profiles.length === 0 ? (
-            <p className="modal-desc">No profiles yet — create one from the profile picker.</p>
-          ) : (
-            <div className="manage-list">
-              {profiles.map((p) => (
-                <div className="manage-row" key={p.name}>
-                  <div className="manage-row-info">
-                    <span className="manage-row-name">{p.name}</span>
-                    <span className="manage-row-email">{p.email ?? 'not logged in'}</span>
-                  </div>
-                  <button
-                    className="btn btn-small btn-ghost"
-                    title="Rename profile"
-                    onClick={() => {
-                      setDraftName(p.name);
-                      setDraftError('');
-                      setDialog({ kind: 'edit-profile', profile: p });
-                    }}
-                  >
-                    <IconPencil size={12} />
-                  </button>
-                  <button
-                    className="btn btn-small btn-danger"
-                    title="Delete this profile (removes its stored login)"
-                    onClick={() => setDialog({ kind: 'delete-profile', profile: p })}
-                  >
-                    <IconTrash size={12} />
-                  </button>
-                </div>
-              ))}
-            </div>
-          )}
-          <div className="modal-actions">
-            <button className="btn btn-ghost" onClick={closeDialog}>Close</button>
-          </div>
-        </Modal>
-      )}
-
-      {dialog?.kind === 'edit-profile' && (
-        <Modal title={`Rename profile "${dialog.profile.name}"`} onClose={closeDialog}>
-          <p className="modal-desc">
-            Renaming updates any panes or workspaces pinned to this profile.
-          </p>
-          <input
-            className="modal-input"
-            placeholder="profile name — e.g. work, personal-max"
-            value={draftName}
-            autoFocus
-            onChange={(e) => {
-              setDraftName(e.target.value);
-              setDraftError('');
-            }}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') void submitRenameProfile(dialog.profile.name);
-            }}
-          />
-          {draftError && <div className="form-error">{draftError}</div>}
-          <div className="modal-actions">
-            <button
-              className="btn btn-ghost"
-              onClick={() => {
-                setDraftName('');
-                setDraftError('');
-                setDialog({ kind: 'manage-profiles' });
-              }}
-            >
-              Back
-            </button>
-            <button
-              className="btn"
-              onClick={() => void submitRenameProfile(dialog.profile.name)}
-              disabled={!draftName.trim()}
-            >
-              Save
-            </button>
-          </div>
-        </Modal>
+      {dialog?.kind === 'profiles' && (
+        <ProfilesModal
+          profiles={profiles}
+          onClose={closeDialog}
+          renameProfile={renameProfile}
+          onDelete={(name) => void confirmDeleteProfile(name)}
+        />
       )}
 
       {dialog?.kind === 'usage' && (
-        <Modal title="Usage by account" onClose={closeDialog}>
-          <div className="chip-row">
-            {USAGE_WINDOWS.map(([key, label]) => (
-              <button
-                key={key}
-                className={`chip ${usageWindow === key ? 'selected' : ''}`}
-                onClick={() => setUsageWindow(key)}
-              >
-                {label}
-              </button>
-            ))}
-          </div>
-          {!usageRows ? (
-            <p className="modal-desc">crunching transcripts…</p>
-          ) : !usageRows.length ? (
-            <p className="modal-desc">No usage data found.</p>
-          ) : (() => {
-            const windowLabel = USAGE_WINDOWS.find(([k]) => k === usageWindow)?.[1] ?? '';
-            const phrase = usageWindow === 'all' ? 'all time' : `last ${windowLabel}`;
-            const keyName = (a: AccountUsage) => (a.account === 'default' ? 'default' : a.account);
-            const total = usageRows.reduce(
-              (acc, a) => {
-                const w = a.windows[usageWindow];
-                if (w) { acc.tokens += w.input + w.output + w.cacheRead + w.cacheWrite; acc.cost += w.cost; }
-                return acc;
-              },
-              { tokens: 0, cost: 0 },
-            );
-            return (
-              <>
-                <div className="usage-total">
-                  <span>All accounts · {phrase}</span>
-                  <span className="usage-total-nums">
-                    <b>{fmt(total.tokens)}</b> tokens · {fmtCost(total.cost)} est
-                  </span>
-                </div>
-                {usageRows.map((a, i) => {
-                  const label = accountLabel(a.account === 'default' ? '' : a.account, a.email, profiles);
-                  const tag = a.account === 'default' ? 'default' : label !== a.account ? a.account : null;
-                  const dupOf = a.email
-                    ? usageRows.slice(0, i).find((o) => o.email === a.email)
-                    : undefined;
-                  const w = a.windows[usageWindow];
-                  const all = a.windows.all;
-                  const allTokens = all ? all.input + all.output + all.cacheRead + all.cacheWrite : 0;
-                  const winTokens = w ? w.input + w.output + w.cacheRead + w.cacheWrite : 0;
-                  const models = w ? Object.entries(w.models).sort(([, x], [, y]) => y.output - x.output) : [];
-                  const maxOut = Math.max(...models.map(([, m]) => m.output), 1);
-                  return (
-                    <div key={a.account} className="usage-account">
-                      <div className="usage-account-head">
-                        <b>{label}</b>
-                        {tag && <span className="usage-tag">{tag}</span>}
-                        <span className="usage-email">{a.email ?? 'not logged in'}</span>
-                      </div>
-                      <div className="usage-account-meta">
-                        {relTime(a.lastActive)}
-                        {allTokens > 0 && <> · {fmt(allTokens)} tokens · {fmtCost(all.cost)} all-time</>}
-                        {dupOf && <span className="usage-dup"> · same login as “{keyName(dupOf)}”</span>}
-                      </div>
-                      {models.length > 0 ? (
-                        <>
-                          <div className="usage-stats">
-                            <span><b>{fmt(winTokens)}</b> tokens</span>
-                            <span>{fmt(w.output)} out · {fmt(w.input)} in · {fmt(w.cacheRead + w.cacheWrite)} cache</span>
-                            <span>{w.turns} turns</span>
-                            <span className="usage-cost">{fmtCost(w.cost)} est</span>
-                          </div>
-                          <div className="usage-bars">
-                            {models.map(([model, m]) => (
-                              <div key={model} className="usage-bar-row">
-                                <span className="usage-bar-label" title={model}>
-                                  {model.replace(/^claude-/, '')}
-                                </span>
-                                <span className="usage-bar-track">
-                                  <span className="usage-bar-plot">
-                                    <span
-                                      className="usage-bar-fill"
-                                      style={{ width: `${Math.max((m.output / maxOut) * 100, 1)}%` }}
-                                    />
-                                  </span>
-                                  <span className="usage-bar-val">{fmt(m.output)}</span>
-                                </span>
-                                <span className="usage-tip">
-                                  <b>{model}</b><br />
-                                  {fmt(m.output)} out · {fmt(m.input)} in ·{' '}
-                                  {fmt(m.cacheRead)} cache · {m.turns} turns<br />
-                                  {fmtCost(m.cost ?? 0)} est
-                                </span>
-                              </div>
-                            ))}
-                          </div>
-                        </>
-                      ) : (
-                        <div className="usage-empty">
-                          {usageWindow === 'all' ? 'no usage recorded' : `no usage in the ${phrase}`}
-                        </div>
-                      )}
-                    </div>
-                  );
-                })}
-              </>
-            );
-          })()}
-          <div className="modal-actions">
-            <button className="btn" onClick={closeDialog}>Close</button>
-          </div>
-        </Modal>
+        <UsageModal profiles={profiles} defaultMapped={defaultMapped} onClose={closeDialog} />
       )}
 
       {dialog?.kind === 'broadcast' && (
-        <Modal title="Broadcast to panes" onClose={closeDialog}>
-          <p className="modal-desc">
-            Types one instruction into every selected pane and presses Enter —
-            as if you'd typed it in each terminal yourself. Panes waiting on a
-            question start unchecked (Enter could answer their dialog).
-          </p>
-          <input
-            className="modal-input"
-            placeholder="e.g. commit your work, then summarize where you're at"
-            value={bcText}
-            autoFocus
-            maxLength={4000}
-            onChange={(e) => setBcText(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') void sendBroadcast();
-            }}
-          />
-          <div className="bc-list">
-            {runningPanes.map((s) => (
-              <label key={s.id} className="bc-row">
-                <input
-                  type="checkbox"
-                  checked={bcIds.has(s.id)}
-                  onChange={(e) => {
-                    setBcIds((prev) => {
-                      const next = new Set(prev);
-                      if (e.target.checked) next.add(s.id);
-                      else next.delete(s.id);
-                      return next;
-                    });
-                  }}
-                />
-                <span
-                  className={`dot ${
-                    { working: 'dot-working', waiting: 'dot-waiting', idle: 'dot-live' }[
-                      s.activity ?? 'idle'
-                    ]
-                  }`}
-                />
-                <span className="bc-name" style={{ color: s.color }}>{s.name}</span>
-                <span className="bc-where" title={s.workspace}>{wsName(s.workspace)}</span>
-                <span className="bc-activity">{s.activity ?? 'starting'}</span>
-              </label>
-            ))}
-          </div>
-          {bcError && <div className="form-error">{bcError}</div>}
-          <div className="modal-actions">
-            <button className="btn btn-ghost" onClick={closeDialog}>Cancel</button>
-            <button
-              className="btn"
-              onClick={() => void sendBroadcast()}
-              disabled={bcBusy || !bcText.trim() || !bcIds.size}
-            >
-              {bcBusy ? 'sending…' : `Send to ${bcIds.size} pane${bcIds.size === 1 ? '' : 's'}`}
-            </button>
-          </div>
-        </Modal>
-      )}
-
-      {dialog?.kind === 'delete-profile' && (
-        <Modal title={`Delete profile "${dialog.profile.name}"?`} onClose={closeDialog}>
-          <p className="modal-desc">
-            {dialog.profile.email ? (
-              <>Signed in as <b>{dialog.profile.email}</b>. </>
-            ) : (
-              <>This profile was never signed in. </>
-            )}
-            Deleting removes its stored login from this PC — the Claude account
-            itself is untouched, and you can add the profile again later.
-          </p>
-          <div className="modal-actions">
-            <button className="btn btn-ghost" onClick={closeDialog}>Cancel</button>
-            <button className="btn btn-danger" onClick={() => confirmDeleteProfile(dialog.profile.name)}>
-              Delete profile
-            </button>
-          </div>
-        </Modal>
+        <BroadcastModal
+          panes={runningPanes}
+          initialIds={dialog.initialIds}
+          wsName={wsName}
+          onClose={closeDialog}
+        />
       )}
       {paletteOpen && (
         <CommandPalette

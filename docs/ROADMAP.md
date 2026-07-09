@@ -353,6 +353,19 @@ via the returned setters + one-shot boot fetches. Behavior-preserving move
 slice 2. Verified: strict tsc, 18 vitest tests, build, headless-Edge render on
 an isolated seeded server (badge counts, profile email, live pane all polling).
 
+Modal extraction (2026-07-09) — App decomposition slice 3: all five dialogs
+moved out of App.tsx into `web/src/components/modals/` (NewProfile,
+AddWorkspace, Profiles, Usage, Broadcast), each owning its draft state and —
+where sensible — its API call (add-workspace create, broadcast send, usage
+fetch-on-open). The old manage/edit/delete-profile trio collapsed into ONE
+ProfilesModal with an internal view state, so App's Dialog union is 5 simple
+kinds and `closeDialog` is just `setDialog(null)` (the fragile 8-field manual
+reset is gone — a modal's draft dies with the modal). App.tsx 1,238 → 786
+lines (1,379 at the start of P3-2). Verified: strict tsc, 18 vitest tests,
+build, and a CDP-driven headless-Edge check that clicks the toolbar Usage
+button and screenshots the extracted modal fully rendered (chips, grand total,
+per-model bars). Improvement-plan P3-2 slice 3.
+
 ## Short-term backlog (rough priority order, owner-approved direction)
 1. Theme settings (light theme / accent choice) — font-size is done.
 2. Drag-resize pane sizes (reorder is done; resize = grid column/row weights).
