@@ -5,11 +5,21 @@ import { storage } from './storage';
 // Storage surface storage.ts touches: getItem/setItem/removeItem/length/key.
 class FakeStorage {
   map = new Map<string, string>();
-  getItem(k: string) { return this.map.has(k) ? this.map.get(k)! : null; }
-  setItem(k: string, v: string) { this.map.set(k, String(v)); }
-  removeItem(k: string) { this.map.delete(k); }
-  get length() { return this.map.size; }
-  key(i: number) { return [...this.map.keys()][i] ?? null; }
+  getItem(k: string) {
+    return this.map.has(k) ? this.map.get(k)! : null;
+  }
+  setItem(k: string, v: string) {
+    this.map.set(k, String(v));
+  }
+  removeItem(k: string) {
+    this.map.delete(k);
+  }
+  get length() {
+    return this.map.size;
+  }
+  key(i: number) {
+    return [...this.map.keys()][i] ?? null;
+  }
 }
 
 beforeEach(() => {
@@ -117,8 +127,10 @@ describe('gridWeights validate per-entry', () => {
     storage.gridWeights.set('ws1', { c3: [1.2, 1, 0.8], r2: [1.5, 0.5] });
     expect(storage.gridWeights.get('ws1')).toEqual({ c3: [1.2, 1, 0.8], r2: [1.5, 0.5] });
 
-    localStorage.setItem('helm.gridweights.ws1',
-      JSON.stringify({ c2: [1, -5], c3: ['x', 1, 1], r2: [1.5, 0.5] }));
+    localStorage.setItem(
+      'helm.gridweights.ws1',
+      JSON.stringify({ c2: [1, -5], c3: ['x', 1, 1], r2: [1.5, 0.5] }),
+    );
     expect(storage.gridWeights.get('ws1')).toEqual({ r2: [1.5, 0.5] }); // bad entries dropped
     localStorage.setItem('helm.gridweights.ws1', '{broken');
     expect(storage.gridWeights.get('ws1')).toEqual({});

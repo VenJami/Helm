@@ -34,7 +34,11 @@ const U = (p) => `http://127.0.0.1:${PORT}${p}`; // absolute URL for a given pat
 const authed = (p, opts = {}) =>
   fetch(U('/api' + p), {
     ...opts,
-    headers: { Authorization: `Bearer ${TOKEN}`, 'Content-Type': 'application/json', ...opts.headers },
+    headers: {
+      Authorization: `Bearer ${TOKEN}`,
+      'Content-Type': 'application/json',
+      ...opts.headers,
+    },
   });
 // Hook relay POST — authed by the separate hook token, not the UI bearer token.
 const hook = (sessionId, event) =>
@@ -43,19 +47,23 @@ const hook = (sessionId, event) =>
     headers: { 'content-type': 'application/json', 'x-helm-hook': HOOK_TOKEN },
     body: JSON.stringify({ sessionId, event }),
   });
-const mkdir = (p) => { fs.mkdirSync(p, { recursive: true }); return p; };
+const mkdir = (p) => {
+  fs.mkdirSync(p, { recursive: true });
+  return p;
+};
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // Let the OS assign a free ephemeral port — dodges Windows' scattered reserved
 // port ranges (which reject fixed guesses with EACCES).
-const freePort = () => new Promise((resolve, reject) => {
-  const srv = net.createServer();
-  srv.on('error', reject);
-  srv.listen(0, '127.0.0.1', () => {
-    const { port } = srv.address();
-    srv.close(() => resolve(port));
+const freePort = () =>
+  new Promise((resolve, reject) => {
+    const srv = net.createServer();
+    srv.on('error', reject);
+    srv.listen(0, '127.0.0.1', () => {
+      const { port } = srv.address();
+      srv.close(() => resolve(port));
+    });
   });
-});
 
 // Boot the server on one port; resolve true once it answers an authed request.
 // Windows reserves scattered high-port ranges (EACCES) and ports can be busy,
@@ -73,24 +81,38 @@ async function tryBoot(port) {
     HELM_USAGE_TTL_MS: '0', // usage tests append + immediately re-poll
   };
   delete env.CLAUDE_CONFIG_DIR; // don't inherit a real default account
-  child = spawn(process.execPath, ['index.mjs'], { cwd: serverDir, env, stdio: ['ignore', 'pipe', 'pipe'] });
+  child = spawn(process.execPath, ['index.mjs'], {
+    cwd: serverDir,
+    env,
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
   let stderr = '';
   let exited = false;
-  child.stdout.on('data', () => {});          // drain so the child never blocks on a full pipe
-  child.stderr.on('data', (d) => { stderr += d; });
-  child.on('exit', () => { exited = true; });
+  child.stdout.on('data', () => {}); // drain so the child never blocks on a full pipe
+  child.stderr.on('data', (d) => {
+    stderr += d;
+  });
+  child.on('exit', () => {
+    exited = true;
+  });
 
   const deadline = Date.now() + 12000; // generous — cold CI runners boot slowly
   while (Date.now() < deadline && !exited) {
     try {
       if (!TOKEN) TOKEN = fs.readFileSync(path.join(helmDir, 'token'), 'utf8').trim();
       const res = await authed('/sessions');
-      if (res.ok) { HOOK_TOKEN = fs.readFileSync(path.join(helmDir, 'hook-token'), 'utf8').trim(); return true; }
-    } catch { /* not up yet */ }
+      if (res.ok) {
+        HOOK_TOKEN = fs.readFileSync(path.join(helmDir, 'hook-token'), 'utf8').trim();
+        return true;
+      }
+    } catch {
+      /* not up yet */
+    }
     await sleep(150);
   }
   child.kill();
-  if (stderr && !/EACCES|EADDRINUSE/.test(stderr)) console.error(`server stderr on ${port}:\n${stderr}`);
+  if (stderr && !/EACCES|EADDRINUSE/.test(stderr))
+    console.error(`server stderr on ${port}:\n${stderr}`);
   return false;
 }
 
@@ -108,7 +130,9 @@ after(async () => {
   try {
     const list = await (await authed('/sessions')).json();
     for (const s of list) await authed(`/sessions/${s.id}`, { method: 'DELETE' }).catch(() => {});
-  } catch { /* server may already be gone */ }
+  } catch {
+    /* server may already be gone */
+  }
   child?.kill();
   await new Promise((r) => setTimeout(r, 300));
   fs.rmSync(tmp, { recursive: true, force: true });
@@ -129,7 +153,10 @@ test('diagnostics report claude health (drift alarm)', async () => {
   // to do — poll up to 10 s rather than a tight wall.
   let d;
   const deadline = Date.now() + 10000;
-  while (!(d = await (await authed('/diagnostics')).json()).claude.checked && Date.now() < deadline) {
+  while (
+    !(d = await (await authed('/diagnostics')).json()).claude.checked &&
+    Date.now() < deadline
+  ) {
     await sleep(200);
   }
   assert.equal(d.claude.checked, true);
@@ -154,7 +181,9 @@ test('session lifecycle + hook status/activityNote + WS replay', async () => {
   const ws = mkdir(path.join(tmp, 'proj'));
   await authed('/workspaces', { method: 'POST', body: JSON.stringify({ name: 'proj', dir: ws }) });
 
-  const created = await (await authed('/sessions', { method: 'POST', body: JSON.stringify({ workspace: ws }) })).json();
+  const created = await (
+    await authed('/sessions', { method: 'POST', body: JSON.stringify({ workspace: ws }) })
+  ).json();
   assert.equal(created.status, 'running');
   const id = created.id;
 
@@ -175,10 +204,17 @@ test('session lifecycle + hook status/activityNote + WS replay', async () => {
   // 10 s, not 3 — a cold CI runner can be slow to complete the WS upgrade.
   const replay = await new Promise((resolve, reject) => {
     const sock = new WebSocket(`ws://127.0.0.1:${PORT}/ws?session=${id}&token=${TOKEN}`);
-    const timer = setTimeout(() => { sock.close(); reject(new Error('no replay within 10s')); }, 10000);
+    const timer = setTimeout(() => {
+      sock.close();
+      reject(new Error('no replay within 10s'));
+    }, 10000);
     sock.on('message', (raw) => {
       const m = JSON.parse(raw);
-      if (m.type === 'replay') { clearTimeout(timer); sock.close(); resolve(m); }
+      if (m.type === 'replay') {
+        clearTimeout(timer);
+        sock.close();
+        resolve(m);
+      }
     });
     sock.on('error', reject);
   });
@@ -190,19 +226,35 @@ test('session lifecycle + hook status/activityNote + WS replay', async () => {
 
 test('pane summary is derived from the first real user prompt', async () => {
   const ws = mkdir(path.join(tmp, 'sumproj'));
-  const created = await (await authed('/sessions', { method: 'POST', body: JSON.stringify({ workspace: ws }) })).json();
+  const created = await (
+    await authed('/sessions', { method: 'POST', body: JSON.stringify({ workspace: ws }) })
+  ).json();
   const id = created.id;
   // A transcript whose first user line is a meta/command wrapper (should be
   // skipped) followed by the real opening prompt. Must live inside the default
   // account's store — the server rejects hook paths outside it.
   const tpath = path.join(mkdir(path.join(tmp, '.claude', 'projects', 'sumproj')), 'sum-1.jsonl');
-  fs.writeFileSync(tpath, [
-    JSON.stringify({ type: 'user', isMeta: true, message: { content: '<command-name>/clear</command-name>' } }),
-    JSON.stringify({ type: 'user', message: { content: 'Fix the OAuth token refresh bug in the API' } }),
-    JSON.stringify({ type: 'assistant', message: { content: 'ok' } }),
-  ].join('\n'));
+  fs.writeFileSync(
+    tpath,
+    [
+      JSON.stringify({
+        type: 'user',
+        isMeta: true,
+        message: { content: '<command-name>/clear</command-name>' },
+      }),
+      JSON.stringify({
+        type: 'user',
+        message: { content: 'Fix the OAuth token refresh bug in the API' },
+      }),
+      JSON.stringify({ type: 'assistant', message: { content: 'ok' } }),
+    ].join('\n'),
+  );
   // A hook is how a real pane reports its transcript path to the server.
-  await hook(id, { hook_event_name: 'UserPromptSubmit', session_id: 'sum-1', transcript_path: tpath });
+  await hook(id, {
+    hook_event_name: 'UserPromptSubmit',
+    session_id: 'sum-1',
+    transcript_path: tpath,
+  });
   const s = (await (await authed('/sessions')).json()).find((x) => x.id === id);
   assert.equal(s.summary, 'Fix the OAuth token refresh bug in the API');
   await authed(`/sessions/${id}`, { method: 'DELETE' });
@@ -210,19 +262,27 @@ test('pane summary is derived from the first real user prompt', async () => {
 
 // Runs the REAL in-pane relay script (hook-post.mjs) as a child — the same way
 // claude invokes it — instead of POSTing /api/hook directly.
-const relay = (sessionId, event) => new Promise((resolve, reject) => {
-  const child = spawn(process.execPath, [path.join(serverDir, 'hook-post.mjs')], {
-    env: { ...process.env, HELM_SESSION_ID: sessionId, HELM_HOOK_TOKEN: HOOK_TOKEN, HELM_PORT: String(PORT) },
-    stdio: ['pipe', 'ignore', 'ignore'],
+const relay = (sessionId, event) =>
+  new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, [path.join(serverDir, 'hook-post.mjs')], {
+      env: {
+        ...process.env,
+        HELM_SESSION_ID: sessionId,
+        HELM_HOOK_TOKEN: HOOK_TOKEN,
+        HELM_PORT: String(PORT),
+      },
+      stdio: ['pipe', 'ignore', 'ignore'],
+    });
+    child.on('exit', resolve);
+    child.on('error', reject);
+    child.stdin.end(JSON.stringify(event));
   });
-  child.on('exit', resolve);
-  child.on('error', reject);
-  child.stdin.end(JSON.stringify(event));
-});
 
 test('hook relay (hook-post.mjs) + usage engine: dedupe, cost, incremental, partial lines', async () => {
   const wsDir = mkdir(path.join(tmp, 'usageproj'));
-  const created = await (await authed('/sessions', { method: 'POST', body: JSON.stringify({ workspace: wsDir }) })).json();
+  const created = await (
+    await authed('/sessions', { method: 'POST', body: JSON.stringify({ workspace: wsDir }) })
+  ).json();
   const id = created.id;
 
   // A realistic transcript in the DEFAULT account's store (~/.claude/projects,
@@ -231,13 +291,29 @@ test('hook relay (hook-post.mjs) + usage engine: dedupe, cost, incremental, part
   const tdir = mkdir(path.join(tmp, '.claude', 'projects', 'usageproj'));
   const tpath = path.join(tdir, `${claudeSid}.jsonl`);
   const now = new Date().toISOString();
-  const asst = (mid, usage) => JSON.stringify(
-    { type: 'assistant', timestamp: now, message: { id: mid, model: 'claude-sonnet-4-5', usage } });
-  fs.writeFileSync(tpath, [
-    JSON.stringify({ type: 'user', message: { content: 'Refactor the usage engine' }, timestamp: now }),
-    asst('m1', { input_tokens: 999999, output_tokens: 1 }),   // streaming: superseded…
-    asst('m1', { input_tokens: 1000, output_tokens: 500, cache_read_input_tokens: 2000, cache_creation_input_tokens: 100 }), // …by the final copy
-  ].join('\n') + '\n');
+  const asst = (mid, usage) =>
+    JSON.stringify({
+      type: 'assistant',
+      timestamp: now,
+      message: { id: mid, model: 'claude-sonnet-4-5', usage },
+    });
+  fs.writeFileSync(
+    tpath,
+    [
+      JSON.stringify({
+        type: 'user',
+        message: { content: 'Refactor the usage engine' },
+        timestamp: now,
+      }),
+      asst('m1', { input_tokens: 999999, output_tokens: 1 }), // streaming: superseded…
+      asst('m1', {
+        input_tokens: 1000,
+        output_tokens: 500,
+        cache_read_input_tokens: 2000,
+        cache_creation_input_tokens: 100,
+      }), // …by the final copy
+    ].join('\n') + '\n',
+  );
 
   // Report it through the real relay (exercises env wiring + POST /api/hook auth).
   // hook-post.mjs aborts its POST after 1.5 s and never blocks claude, so on a
@@ -246,7 +322,11 @@ test('hook relay (hook-post.mjs) + usage engine: dedupe, cost, incremental, part
   let s;
   const relayDeadline = Date.now() + 15000;
   do {
-    await relay(id, { hook_event_name: 'SessionStart', session_id: claudeSid, transcript_path: tpath });
+    await relay(id, {
+      hook_event_name: 'SessionStart',
+      session_id: claudeSid,
+      transcript_path: tpath,
+    });
     s = (await (await authed('/sessions')).json()).find((x) => x.id === id);
     if (s?.canResume) break;
     await sleep(500);
@@ -259,7 +339,13 @@ test('hook relay (hook-post.mjs) + usage engine: dedupe, cost, incremental, part
   assert.equal(u.available, true);
   let m = u.models['claude-sonnet-4-5'];
   assert.deepEqual(
-    { input: m.input, output: m.output, cacheRead: m.cacheRead, cacheWrite: m.cacheWrite, turns: m.turns },
+    {
+      input: m.input,
+      output: m.output,
+      cacheRead: m.cacheRead,
+      cacheWrite: m.cacheWrite,
+      turns: m.turns,
+    },
     { input: 1000, output: 500, cacheRead: 2000, cacheWrite: 100, turns: 1 },
   );
   assert.ok(m.cost > 0, 'known model must carry a $ estimate');
@@ -293,28 +379,41 @@ test('trust seams are validated: profile names + hook transcript paths', async (
   // A profile name becomes a directory under accounts\ — traversal must 400.
   const dir = mkdir(path.join(tmp, 'valproj'));
   let res = await authed('/workspaces', {
-    method: 'POST', body: JSON.stringify({ name: 'val', dir, profile: '..\\..\\evil' }),
+    method: 'POST',
+    body: JSON.stringify({ name: 'val', dir, profile: '..\\..\\evil' }),
   });
   assert.equal(res.status, 400);
-  const ws = await (await authed('/workspaces', {
-    method: 'POST', body: JSON.stringify({ name: 'val', dir }),
-  })).json();
+  const ws = await (
+    await authed('/workspaces', {
+      method: 'POST',
+      body: JSON.stringify({ name: 'val', dir }),
+    })
+  ).json();
   res = await authed(`/workspaces/${ws.id}`, {
-    method: 'PATCH', body: JSON.stringify({ profile: '../evil' }),
+    method: 'PATCH',
+    body: JSON.stringify({ profile: '../evil' }),
   });
   assert.equal(res.status, 400);
 
   // A hook-reported transcript path outside the session's account store is
   // ignored (the path is later fed to file reads/copies) and flagged as drift.
-  const created = await (await authed('/sessions', { method: 'POST', body: JSON.stringify({ workspace: dir }) })).json();
+  const created = await (
+    await authed('/sessions', { method: 'POST', body: JSON.stringify({ workspace: dir }) })
+  ).json();
   const evil = path.join(tmp, 'outside-the-store.jsonl');
   fs.writeFileSync(evil, JSON.stringify({ type: 'user', message: { content: 'nope' } }) + '\n');
-  await hook(created.id, { hook_event_name: 'SessionStart', session_id: 'val-1', transcript_path: evil });
+  await hook(created.id, {
+    hook_event_name: 'SessionStart',
+    session_id: 'val-1',
+    transcript_path: evil,
+  });
   const s = (await (await authed('/sessions')).json()).find((x) => x.id === created.id);
   assert.equal(s.hasTranscript, false, 'out-of-store transcript path must be ignored');
   const diag = await (await authed('/diagnostics')).json();
-  assert.ok(diag.warnings.some((w) => w.key === 'transcript-path-rejected'),
-    'rejection must surface as a loud drift warning, not silence');
+  assert.ok(
+    diag.warnings.some((w) => w.key === 'transcript-path-rejected'),
+    'rejection must surface as a loud drift warning, not silence',
+  );
   await authed(`/sessions/${created.id}`, { method: 'DELETE' });
 });
 
@@ -323,9 +422,12 @@ test('workspace git status reports branch + dirty', async () => {
   const git = (...args) => execFileSync('git', ['-C', repo, ...args], { stdio: 'ignore' });
   git('init', '-b', 'trunk');
   fs.writeFileSync(path.join(repo, 'file.txt'), 'hi'); // untracked → dirty
-  const ws = await (await authed('/workspaces', {
-    method: 'POST', body: JSON.stringify({ name: 'repo', dir: repo }),
-  })).json();
+  const ws = await (
+    await authed('/workspaces', {
+      method: 'POST',
+      body: JSON.stringify({ name: 'repo', dir: repo }),
+    })
+  ).json();
 
   const g = (await (await authed('/workspaces/git')).json()).find((x) => x.id === ws.id);
   assert.equal(g.branch, 'trunk');
@@ -342,29 +444,47 @@ test('workspace dev-server check reports up/down by port', async () => {
   const upDir = mkdir(path.join(tmp, 'srv-up'));
   const downDir = mkdir(path.join(tmp, 'srv-down'));
   const noneDir = mkdir(path.join(tmp, 'srv-none'));
-  const wsUp = await (await authed('/workspaces', {
-    method: 'POST', body: JSON.stringify({ name: 'up', dir: upDir, port: upPort }),
-  })).json();
-  const wsDown = await (await authed('/workspaces', {
-    method: 'POST', body: JSON.stringify({ name: 'down', dir: downDir, port: downPort }),
-  })).json();
-  const wsNone = await (await authed('/workspaces', {
-    method: 'POST', body: JSON.stringify({ name: 'none', dir: noneDir }),
-  })).json();
+  const wsUp = await (
+    await authed('/workspaces', {
+      method: 'POST',
+      body: JSON.stringify({ name: 'up', dir: upDir, port: upPort }),
+    })
+  ).json();
+  const wsDown = await (
+    await authed('/workspaces', {
+      method: 'POST',
+      body: JSON.stringify({ name: 'down', dir: downDir, port: downPort }),
+    })
+  ).json();
+  const wsNone = await (
+    await authed('/workspaces', {
+      method: 'POST',
+      body: JSON.stringify({ name: 'none', dir: noneDir }),
+    })
+  ).json();
   assert.equal(wsUp.port, upPort);
 
   const list = await (await authed('/workspaces/servers')).json();
   assert.equal(list.find((x) => x.id === wsUp.id)?.up, true);
   assert.equal(list.find((x) => x.id === wsDown.id)?.up, false);
   // Workspaces without a port aren't reported at all.
-  assert.equal(list.some((x) => x.id === wsNone.id), false);
+  assert.equal(
+    list.some((x) => x.id === wsNone.id),
+    false,
+  );
 
   // Bad port is rejected; clearing the port (null) drops it from the report.
-  const bad = await authed(`/workspaces/${wsUp.id}`, { method: 'PATCH', body: JSON.stringify({ port: 99999 }) });
+  const bad = await authed(`/workspaces/${wsUp.id}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ port: 99999 }),
+  });
   assert.equal(bad.status, 400);
   await authed(`/workspaces/${wsUp.id}`, { method: 'PATCH', body: JSON.stringify({ port: null }) });
   const list2 = await (await authed('/workspaces/servers')).json();
-  assert.equal(list2.some((x) => x.id === wsUp.id), false);
+  assert.equal(
+    list2.some((x) => x.id === wsUp.id),
+    false,
+  );
 
   await new Promise((r) => listener.close(r));
 });
@@ -372,14 +492,18 @@ test('workspace dev-server check reports up/down by port', async () => {
 test('PATCH workspace dir moves the root (and rejects a non-dir)', async () => {
   const dirA = mkdir(path.join(tmp, 'root-a'));
   const dirB = mkdir(path.join(tmp, 'root-b'));
-  const ws = await (await authed('/workspaces', {
-    method: 'POST', body: JSON.stringify({ name: 'movable', dir: dirA }),
-  })).json();
+  const ws = await (
+    await authed('/workspaces', {
+      method: 'POST',
+      body: JSON.stringify({ name: 'movable', dir: dirA }),
+    })
+  ).json();
   assert.equal(ws.dir, path.resolve(dirA));
 
   // Re-root onto a second real dir → the change sticks.
   const patched = await authed(`/workspaces/${ws.id}`, {
-    method: 'PATCH', body: JSON.stringify({ dir: dirB }),
+    method: 'PATCH',
+    body: JSON.stringify({ dir: dirB }),
   });
   assert.equal(patched.status, 200);
   const after = (await (await authed('/workspaces')).json()).find((w) => w.id === ws.id);
@@ -387,7 +511,8 @@ test('PATCH workspace dir moves the root (and rejects a non-dir)', async () => {
 
   // A path that isn't a real directory is refused (dir unchanged).
   const bad = await authed(`/workspaces/${ws.id}`, {
-    method: 'PATCH', body: JSON.stringify({ dir: path.join(tmp, 'does-not-exist') }),
+    method: 'PATCH',
+    body: JSON.stringify({ dir: path.join(tmp, 'does-not-exist') }),
   });
   assert.equal(bad.status, 400);
   const still = (await (await authed('/workspaces')).json()).find((w) => w.id === ws.id);
@@ -396,16 +521,25 @@ test('PATCH workspace dir moves the root (and rejects a non-dir)', async () => {
 
 test('PATCH workspace port sets then clears', async () => {
   const dir = mkdir(path.join(tmp, 'ported'));
-  const ws = await (await authed('/workspaces', {
-    method: 'POST', body: JSON.stringify({ name: 'ported', dir }),
-  })).json();
+  const ws = await (
+    await authed('/workspaces', {
+      method: 'POST',
+      body: JSON.stringify({ name: 'ported', dir }),
+    })
+  ).json();
   assert.equal(ws.port, undefined); // created without a port
 
-  const set = await authed(`/workspaces/${ws.id}`, { method: 'PATCH', body: JSON.stringify({ port: 4321 }) });
+  const set = await authed(`/workspaces/${ws.id}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ port: 4321 }),
+  });
   assert.equal(set.status, 200);
   assert.equal((await set.json()).port, 4321);
 
-  const cleared = await authed(`/workspaces/${ws.id}`, { method: 'PATCH', body: JSON.stringify({ port: null }) });
+  const cleared = await authed(`/workspaces/${ws.id}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ port: null }),
+  });
   assert.equal(cleared.status, 200);
   assert.equal((await cleared.json()).port, undefined);
 });
@@ -417,26 +551,39 @@ test('GET/POST /api/console reports shape and (Windows) toggles visibility', asy
   assert.equal(typeof state.supported, 'boolean');
   assert.equal(typeof state.visible, 'boolean');
 
-  if (!state.supported) { t.skip('console control unsupported off-Windows / detached'); return; }
+  if (!state.supported) {
+    t.skip('console control unsupported off-Windows / detached');
+    return;
+  }
 
   // Non-boolean body is rejected.
-  const bad = await authed('/console', { method: 'POST', body: JSON.stringify({ visible: 'yes' }) });
+  const bad = await authed('/console', {
+    method: 'POST',
+    body: JSON.stringify({ visible: 'yes' }),
+  });
   assert.equal(bad.status, 400);
 
   // Hide then show — the returned `visible` tracks the request. Ends visible so
   // the developer's server console is left restored.
-  const hidden = await (await authed('/console', { method: 'POST', body: JSON.stringify({ visible: false }) })).json();
+  const hidden = await (
+    await authed('/console', { method: 'POST', body: JSON.stringify({ visible: false }) })
+  ).json();
   assert.equal(hidden.visible, false);
-  const shown = await (await authed('/console', { method: 'POST', body: JSON.stringify({ visible: true }) })).json();
+  const shown = await (
+    await authed('/console', { method: 'POST', body: JSON.stringify({ visible: true }) })
+  ).json();
   assert.equal(shown.visible, true);
 });
 
 test('deleting a profile clears its workspace pins', async () => {
   mkdir(path.join(helmDir, 'accounts', 'acct1')); // pretend a profile exists
   const dir = mkdir(path.join(tmp, 'pinned'));
-  const ws = await (await authed('/workspaces', {
-    method: 'POST', body: JSON.stringify({ name: 'pinned', dir, profile: 'acct1' }),
-  })).json();
+  const ws = await (
+    await authed('/workspaces', {
+      method: 'POST',
+      body: JSON.stringify({ name: 'pinned', dir, profile: 'acct1' }),
+    })
+  ).json();
   assert.equal(ws.profile, 'acct1');
 
   const del = await authed('/profiles/acct1', { method: 'DELETE' });

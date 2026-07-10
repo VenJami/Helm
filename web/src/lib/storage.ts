@@ -30,18 +30,34 @@ const gridWeightsKey = (wsId: string) => `${GRID_WEIGHTS_PREFIX}${wsId}`;
 
 // --- low-level (every access is guarded: private mode / quota / denied) ---
 function getRaw(key: string): string | null {
-  try { return localStorage.getItem(key); } catch { return null; }
+  try {
+    return localStorage.getItem(key);
+  } catch {
+    return null;
+  }
 }
 function setRaw(key: string, val: string): void {
-  try { localStorage.setItem(key, val); } catch { /* quota / denied — UI pref, ignore */ }
+  try {
+    localStorage.setItem(key, val);
+  } catch {
+    /* quota / denied — UI pref, ignore */
+  }
 }
 function remove(key: string): void {
-  try { localStorage.removeItem(key); } catch { /* ignore */ }
+  try {
+    localStorage.removeItem(key);
+  } catch {
+    /* ignore */
+  }
 }
 function getJSON<T>(key: string, fallback: T): T {
   const raw = getRaw(key);
   if (raw == null) return fallback;
-  try { return JSON.parse(raw) as T; } catch { return fallback; }
+  try {
+    return JSON.parse(raw) as T;
+  } catch {
+    return fallback;
+  }
 }
 function setJSON(key: string, val: unknown): void {
   setRaw(key, JSON.stringify(val));
@@ -105,12 +121,18 @@ export const storage = {
         const stale: string[] = [];
         for (let i = 0; i < localStorage.length; i++) {
           const k = localStorage.key(i);
-          if (k && (k.startsWith(PANE_ORDER_PREFIX) || k.startsWith(GRID_WEIGHTS_PREFIX)) && !live.has(k)) {
+          if (
+            k &&
+            (k.startsWith(PANE_ORDER_PREFIX) || k.startsWith(GRID_WEIGHTS_PREFIX)) &&
+            !live.has(k)
+          ) {
             stale.push(k);
           }
         }
         for (const k of stale) localStorage.removeItem(k);
-      } catch { /* ignore */ }
+      } catch {
+        /* ignore */
+      }
     },
   },
   // one key per workspace: grid fr-weights per layout, e.g. {"c3":[1.4,1,0.6],
@@ -122,7 +144,10 @@ export const storage = {
       const out: Record<string, number[]> = {};
       if (raw && typeof raw === 'object') {
         for (const [k, v] of Object.entries(raw)) {
-          if (Array.isArray(v) && v.every((n) => typeof n === 'number' && Number.isFinite(n) && n > 0)) {
+          if (
+            Array.isArray(v) &&
+            v.every((n) => typeof n === 'number' && Number.isFinite(n) && n > 0)
+          ) {
             out[k] = v as number[];
           }
         }

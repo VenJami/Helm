@@ -299,7 +299,10 @@ export function TargetCursor({
           x: rect.right + borderWidth - cornerSize - offsetX,
           y: rect.bottom + borderWidth - cornerSize - offsetY,
         },
-        { x: rect.left - borderWidth - offsetX, y: rect.bottom + borderWidth - cornerSize - offsetY },
+        {
+          x: rect.left - borderWidth - offsetX,
+          y: rect.bottom + borderWidth - cornerSize - offsetY,
+        },
       ];
 
       isActiveRef.current = true;

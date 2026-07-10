@@ -11,7 +11,13 @@ import { Modal } from './Modal';
 import { toast } from './Toaster';
 import { IconGrip, IconMinimize, IconMinus, IconUserSwitch, IconX } from './Icons';
 import {
-  AnimateIcon, IconChart, IconChevronDown, IconChevronUp, IconMaximize, IconPaperclip, IconSearch,
+  AnimateIcon,
+  IconChart,
+  IconChevronDown,
+  IconChevronUp,
+  IconMaximize,
+  IconPaperclip,
+  IconSearch,
 } from './AnimatedIcons';
 import type { Profile, SessionInfo, UsageInfo, WsClientMsg, WsServerMsg } from '../types';
 
@@ -65,8 +71,16 @@ const elapsed = (iso: string) => {
 
 // Keep in sync with PANE_COLORS in server/index.mjs
 const PANE_COLORS = [
-  '#4fc3f7', '#81c784', '#ffb74d', '#f06292', '#ba68c8',
-  '#ffd54f', '#4dd0e1', '#ff8a65', '#90a4ae', '#aed581',
+  '#4fc3f7',
+  '#81c784',
+  '#ffb74d',
+  '#f06292',
+  '#ba68c8',
+  '#ffd54f',
+  '#4dd0e1',
+  '#ff8a65',
+  '#90a4ae',
+  '#aed581',
 ];
 
 // Pasted screenshots surface as `files` in most Chromium builds but only as
@@ -89,8 +103,20 @@ const clipFiles = (e: ClipboardEvent): File[] => {
 // unchanged pane skips re-rendering entirely instead of every pane's xterm
 // subtree reconciling on a wall-clock timer forever.
 function TerminalPaneImpl({
-  session, onKilled, onChanged, isMaximized, onToggleMax, onMinimize, onGripDragStart, onGripDragEnd,
-  onRegisterFocus, isPasteFallback, profiles, defaultEmail, mappedDefault, fontSize,
+  session,
+  onKilled,
+  onChanged,
+  isMaximized,
+  onToggleMax,
+  onMinimize,
+  onGripDragStart,
+  onGripDragEnd,
+  onRegisterFocus,
+  isPasteFallback,
+  profiles,
+  defaultEmail,
+  mappedDefault,
+  fontSize,
 }: Props) {
   // Read at terminal-creation time only; live changes go through the effect below.
   const fontSizeRef = useRef(fontSize);
@@ -195,7 +221,8 @@ function TerminalPaneImpl({
     const onDocPaste = (e: ClipboardEvent) => {
       if (!isPasteFallbackRef.current) return;
       const t = e.target as HTMLElement | null;
-      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.closest('.pane-term'))) return;
+      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.closest('.pane-term')))
+        return;
       const files = clipFiles(e);
       if (files.length === 0) return;
       e.preventDefault();
@@ -261,7 +288,10 @@ function TerminalPaneImpl({
   // terminal was built at this size already).
   const fontMounted = useRef(false);
   useEffect(() => {
-    if (!fontMounted.current) { fontMounted.current = true; return; }
+    if (!fontMounted.current) {
+      fontMounted.current = true;
+      return;
+    }
     const term = termRef.current;
     const fit = fitRef.current;
     if (!term || !fit) return;
@@ -416,7 +446,7 @@ function TerminalPaneImpl({
   // collapses onto a named profile (same login), show that profile.
   const effectiveProfile = session.profile || mappedDefault || '';
   const profileEmail = effectiveProfile
-    ? profiles.find((p) => p.name === effectiveProfile)?.email ?? null
+    ? (profiles.find((p) => p.name === effectiveProfile)?.email ?? null)
     : defaultEmail;
   const profileText = accountLabel(effectiveProfile, profileEmail, profiles);
 
@@ -432,7 +462,8 @@ function TerminalPaneImpl({
   // just keeps working. Tick our own re-render independent of the parent poll.
   const [, forceTick] = useState(0);
   useEffect(() => {
-    if (conn !== 'live' || (session.activity !== 'working' && session.activity !== 'waiting')) return;
+    if (conn !== 'live' || (session.activity !== 'working' && session.activity !== 'waiting'))
+      return;
     const t = setInterval(() => forceTick((n) => n + 1), 20_000);
     return () => clearInterval(t);
   }, [conn, session.activity]);
@@ -453,9 +484,10 @@ function TerminalPaneImpl({
     connecting: 'connecting…',
     // When blocked, show the hook's reason ("Claude needs permission to…") in
     // place of the profile so you can see why without opening the pane.
-    live: activity === 'waiting' && session.activityNote
-      ? `${activity}${since} · ${session.activityNote}`
-      : `${activity ?? 'live'}${since} · ${profileText}`,
+    live:
+      activity === 'waiting' && session.activityNote
+        ? `${activity}${since} · ${session.activityNote}`
+        : `${activity ?? 'live'}${since} · ${profileText}`,
     disconnected: 'disconnected',
     exited: `exited (${exitCode ?? session.exitCode})`,
     dead: 'dead — server restarted',
@@ -510,7 +542,9 @@ function TerminalPaneImpl({
           </span>
         )}
         {session.summary && (
-          <span className="pane-summary" title={session.summary}>{session.summary}</span>
+          <span className="pane-summary" title={session.summary}>
+            {session.summary}
+          </span>
         )}
         <span className="pane-title" title={session.workspace}>
           {label}
@@ -582,9 +616,11 @@ function TerminalPaneImpl({
             className="btn btn-small"
             onClick={revive}
             disabled={reviving}
-            title={session.canResume
-              ? 'Start claude again and resume this conversation'
-              : 'Start a fresh claude in this folder'}
+            title={
+              session.canResume
+                ? 'Start claude again and resume this conversation'
+                : 'Start a fresh claude in this folder'
+            }
           >
             {reviving ? 'Reviving…' : session.canResume ? 'Resume' : 'Restart'}
           </button>
@@ -688,7 +724,13 @@ function TerminalPaneImpl({
             ) : (
               <table>
                 <thead>
-                  <tr><th>model</th><th>in</th><th>out</th><th>cache⇢</th><th>turns</th></tr>
+                  <tr>
+                    <th>model</th>
+                    <th>in</th>
+                    <th>out</th>
+                    <th>cache⇢</th>
+                    <th>turns</th>
+                  </tr>
                 </thead>
                 <tbody>
                   {Object.entries(usage.models!).map(([model, m]) => (
@@ -714,7 +756,11 @@ function TerminalPaneImpl({
                 : ' No conversation id was captured — revive starts fresh in the same folder.'}
             </p>
             <button className="btn" onClick={revive} disabled={reviving}>
-              {reviving ? 'reviving…' : session.canResume ? 'Revive (resume conversation)' : 'Restart (fresh session)'}
+              {reviving
+                ? 'reviving…'
+                : session.canResume
+                  ? 'Revive (resume conversation)'
+                  : 'Restart (fresh session)'}
             </button>
           </div>
         )}
@@ -732,7 +778,10 @@ function TerminalPaneImpl({
       {switchOpen && (
         <Modal
           title={`Move "${session.name}" to another account`}
-          onClose={() => { setSwitchOpen(false); setSwitchTarget(null); }}
+          onClose={() => {
+            setSwitchOpen(false);
+            setSwitchTarget(null);
+          }}
         >
           {switchTarget === null ? (
             <>
@@ -742,40 +791,52 @@ function TerminalPaneImpl({
                   : 'No resumable conversation was captured for this pane — it restarts fresh on the account you pick.'}
               </p>
               <div className="manage-list">
-                {(mappedDefault ? profiles : [{ name: '', email: defaultEmail }, ...profiles]).map((p) => {
-                  const current = (effectiveProfile || '') === p.name;
-                  const signedOut = p.name !== '' && !p.email;
-                  return (
-                    <button
-                      key={p.name || '(default)'}
-                      className="account-row"
-                      disabled={current || signedOut || switching}
-                      onClick={() => pickAccount(p.name)}
-                      title={signedOut ? 'Not signed in — open a pane on this profile and sign in first' : undefined}
-                    >
-                      <span className="manage-row-info">
-                        <span className="manage-row-name">{accountLabel(p.name, p.email, profiles)}</span>
-                        <span className="manage-row-email">{p.email ?? 'not signed in'}</span>
-                      </span>
-                      {current && <span className="account-current">current</span>}
-                    </button>
-                  );
-                })}
+                {(mappedDefault ? profiles : [{ name: '', email: defaultEmail }, ...profiles]).map(
+                  (p) => {
+                    const current = (effectiveProfile || '') === p.name;
+                    const signedOut = p.name !== '' && !p.email;
+                    return (
+                      <button
+                        key={p.name || '(default)'}
+                        className="account-row"
+                        disabled={current || signedOut || switching}
+                        onClick={() => pickAccount(p.name)}
+                        title={
+                          signedOut
+                            ? 'Not signed in — open a pane on this profile and sign in first'
+                            : undefined
+                        }
+                      >
+                        <span className="manage-row-info">
+                          <span className="manage-row-name">
+                            {accountLabel(p.name, p.email, profiles)}
+                          </span>
+                          <span className="manage-row-email">{p.email ?? 'not signed in'}</span>
+                        </span>
+                        {current && <span className="account-current">current</span>}
+                      </button>
+                    );
+                  },
+                )}
               </div>
               {switchError && <div className="form-error">{switchError}</div>}
               <div className="modal-actions">
-                <button className="btn btn-ghost" onClick={() => setSwitchOpen(false)}>Cancel</button>
+                <button className="btn btn-ghost" onClick={() => setSwitchOpen(false)}>
+                  Cancel
+                </button>
               </div>
             </>
           ) : (
             <>
               <p className="modal-desc">
-                This pane is still working — switching restarts Claude and interrupts the
-                task in progress. The conversation itself moves along with the pane.
+                This pane is still working — switching restarts Claude and interrupts the task in
+                progress. The conversation itself moves along with the pane.
               </p>
               {switchError && <div className="form-error">{switchError}</div>}
               <div className="modal-actions">
-                <button className="btn btn-ghost" onClick={() => setSwitchTarget(null)}>Back</button>
+                <button className="btn btn-ghost" onClick={() => setSwitchTarget(null)}>
+                  Back
+                </button>
                 <button
                   className="btn btn-danger"
                   disabled={switching}
@@ -794,11 +855,13 @@ function TerminalPaneImpl({
             This pane is still working
             {session.activitySince && elapsed(session.activitySince)
               ? ` (${elapsed(session.activitySince).trim()} in)`
-              : ''}
-            {' '}— killing stops the Claude process immediately and removes the pane.
+              : ''}{' '}
+            — killing stops the Claude process immediately and removes the pane.
           </p>
           <div className="modal-actions">
-            <button className="btn btn-ghost" onClick={() => setConfirmKill(false)}>Cancel</button>
+            <button className="btn btn-ghost" onClick={() => setConfirmKill(false)}>
+              Cancel
+            </button>
             <button
               className="btn btn-danger"
               onClick={() => {

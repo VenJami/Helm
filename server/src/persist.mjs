@@ -14,7 +14,11 @@ export function writeFileAtomic(file, data) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   const tmp = `${file}.tmp`;
   fs.writeFileSync(tmp, data);
-  try { fs.copyFileSync(file, `${file}.bak`); } catch { /* first write — nothing to back up */ }
+  try {
+    fs.copyFileSync(file, `${file}.bak`);
+  } catch {
+    /* first write — nothing to back up */
+  }
   fs.renameSync(tmp, file);
 }
 
@@ -25,14 +29,25 @@ export function writeJsonAtomic(file, obj) {
 // undefined = file missing (a normal first run).
 export function readJsonWithBackup(file, label) {
   let raw;
-  try { raw = fs.readFileSync(file, 'utf8'); } catch { return undefined; } // first run
-  try { return JSON.parse(raw); } catch { /* corrupt — fall through to .bak */ }
+  try {
+    raw = fs.readFileSync(file, 'utf8');
+  } catch {
+    return undefined;
+  } // first run
+  try {
+    return JSON.parse(raw);
+  } catch {
+    /* corrupt — fall through to .bak */
+  }
   try {
     const val = JSON.parse(fs.readFileSync(`${file}.bak`, 'utf8'));
     dbg('error', `${label} file was corrupt — recovered from ${path.basename(file)}.bak`);
     return val;
   } catch {
-    dbg('error', `${label} file is corrupt with no usable .bak — starting empty (bad file left at ${file})`);
+    dbg(
+      'error',
+      `${label} file is corrupt with no usable .bak — starting empty (bad file left at ${file})`,
+    );
     return undefined;
   }
 }

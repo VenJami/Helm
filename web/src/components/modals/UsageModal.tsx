@@ -15,10 +15,13 @@ const fmt = (n: number) =>
 // Rough dollar figure — cents matter at the low end, so surface <$0.01 rather
 // than a flat $0.00 that reads as "free".
 const fmtCost = (n: number) =>
-  n <= 0 ? '$0'
-    : n < 0.01 ? '<$0.01'
-    : n < 100 ? '$' + n.toFixed(2)
-    : '$' + Math.round(n).toLocaleString();
+  n <= 0
+    ? '$0'
+    : n < 0.01
+      ? '<$0.01'
+      : n < 100
+        ? '$' + n.toFixed(2)
+        : '$' + Math.round(n).toLocaleString();
 
 // "just now" / "2h ago" / "3d ago" from an epoch-ms timestamp (null = never).
 const relTime = (ms: number | null): string => {
@@ -44,7 +47,11 @@ const USAGE_WINDOWS = [
   ['all', 'all'],
 ] as const;
 
-export function UsageModal({ profiles, defaultMapped, onClose }: {
+export function UsageModal({
+  profiles,
+  defaultMapped,
+  onClose,
+}: {
   profiles: Profile[];
   defaultMapped: string | null;
   onClose: () => void;
@@ -54,7 +61,10 @@ export function UsageModal({ profiles, defaultMapped, onClose }: {
   const [usageWindow, setUsageWindow] = useState('d7');
 
   useEffect(() => {
-    api.getGlobalUsage().then(setGlobalUsage).catch(() => setGlobalUsage([]));
+    api
+      .getGlobalUsage()
+      .then(setGlobalUsage)
+      .catch(() => setGlobalUsage([]));
   }, []);
 
   // When the bare default account is the same login as a named profile, fold
@@ -82,96 +92,124 @@ export function UsageModal({ profiles, defaultMapped, onClose }: {
         <p className="modal-desc">crunching transcripts…</p>
       ) : !usageRows.length ? (
         <p className="modal-desc">No usage data found.</p>
-      ) : (() => {
-        const windowLabel = USAGE_WINDOWS.find(([k]) => k === usageWindow)?.[1] ?? '';
-        const phrase = usageWindow === 'all' ? 'all time' : `last ${windowLabel}`;
-        const keyName = (a: AccountUsage) => (a.account === 'default' ? 'default' : a.account);
-        const total = usageRows.reduce(
-          (acc, a) => {
-            const w = a.windows[usageWindow];
-            if (w) { acc.tokens += w.input + w.output + w.cacheRead + w.cacheWrite; acc.cost += w.cost; }
-            return acc;
-          },
-          { tokens: 0, cost: 0 },
-        );
-        return (
-          <>
-            <div className="usage-total">
-              <span>All accounts · {phrase}</span>
-              <span className="usage-total-nums">
-                <b>{fmt(total.tokens)}</b> tokens · {fmtCost(total.cost)} est
-              </span>
-            </div>
-            {usageRows.map((a, i) => {
-              const label = accountLabel(a.account === 'default' ? '' : a.account, a.email, profiles);
-              const tag = a.account === 'default' ? 'default' : label !== a.account ? a.account : null;
-              const dupOf = a.email
-                ? usageRows.slice(0, i).find((o) => o.email === a.email)
-                : undefined;
+      ) : (
+        (() => {
+          const windowLabel = USAGE_WINDOWS.find(([k]) => k === usageWindow)?.[1] ?? '';
+          const phrase = usageWindow === 'all' ? 'all time' : `last ${windowLabel}`;
+          const keyName = (a: AccountUsage) => (a.account === 'default' ? 'default' : a.account);
+          const total = usageRows.reduce(
+            (acc, a) => {
               const w = a.windows[usageWindow];
-              const all = a.windows.all;
-              const allTokens = all ? all.input + all.output + all.cacheRead + all.cacheWrite : 0;
-              const winTokens = w ? w.input + w.output + w.cacheRead + w.cacheWrite : 0;
-              const models = w ? Object.entries(w.models).sort(([, x], [, y]) => y.output - x.output) : [];
-              const maxOut = Math.max(...models.map(([, m]) => m.output), 1);
-              return (
-                <div key={a.account} className="usage-account">
-                  <div className="usage-account-head">
-                    <b>{label}</b>
-                    {tag && <span className="usage-tag">{tag}</span>}
-                    <span className="usage-email">{a.email ?? 'not logged in'}</span>
-                  </div>
-                  <div className="usage-account-meta">
-                    {relTime(a.lastActive)}
-                    {allTokens > 0 && <> · {fmt(allTokens)} tokens · {fmtCost(all.cost)} all-time</>}
-                    {dupOf && <span className="usage-dup"> · same login as “{keyName(dupOf)}”</span>}
-                  </div>
-                  {models.length > 0 ? (
-                    <>
-                      <div className="usage-stats">
-                        <span><b>{fmt(winTokens)}</b> tokens</span>
-                        <span>{fmt(w.output)} out · {fmt(w.input)} in · {fmt(w.cacheRead + w.cacheWrite)} cache</span>
-                        <span>{w.turns} turns</span>
-                        <span className="usage-cost">{fmtCost(w.cost)} est</span>
-                      </div>
-                      <div className="usage-bars">
-                        {models.map(([model, m]) => (
-                          <div key={model} className="usage-bar-row">
-                            <span className="usage-bar-label" title={model}>
-                              {model.replace(/^claude-/, '')}
-                            </span>
-                            <span className="usage-bar-track">
-                              <span className="usage-bar-plot">
-                                <span
-                                  className="usage-bar-fill"
-                                  style={{ width: `${Math.max((m.output / maxOut) * 100, 1)}%` }}
-                                />
-                              </span>
-                              <span className="usage-bar-val">{fmt(m.output)}</span>
-                            </span>
-                            <span className="usage-tip">
-                              <b>{model}</b><br />
-                              {fmt(m.output)} out · {fmt(m.input)} in ·{' '}
-                              {fmt(m.cacheRead)} cache · {m.turns} turns<br />
-                              {fmtCost(m.cost ?? 0)} est
-                            </span>
-                          </div>
-                        ))}
-                      </div>
-                    </>
-                  ) : (
-                    <div className="usage-empty">
-                      {usageWindow === 'all' ? 'no usage recorded' : `no usage in the ${phrase}`}
+              if (w) {
+                acc.tokens += w.input + w.output + w.cacheRead + w.cacheWrite;
+                acc.cost += w.cost;
+              }
+              return acc;
+            },
+            { tokens: 0, cost: 0 },
+          );
+          return (
+            <>
+              <div className="usage-total">
+                <span>All accounts · {phrase}</span>
+                <span className="usage-total-nums">
+                  <b>{fmt(total.tokens)}</b> tokens · {fmtCost(total.cost)} est
+                </span>
+              </div>
+              {usageRows.map((a, i) => {
+                const label = accountLabel(
+                  a.account === 'default' ? '' : a.account,
+                  a.email,
+                  profiles,
+                );
+                const tag =
+                  a.account === 'default' ? 'default' : label !== a.account ? a.account : null;
+                const dupOf = a.email
+                  ? usageRows.slice(0, i).find((o) => o.email === a.email)
+                  : undefined;
+                const w = a.windows[usageWindow];
+                const all = a.windows.all;
+                const allTokens = all ? all.input + all.output + all.cacheRead + all.cacheWrite : 0;
+                const winTokens = w ? w.input + w.output + w.cacheRead + w.cacheWrite : 0;
+                const models = w
+                  ? Object.entries(w.models).sort(([, x], [, y]) => y.output - x.output)
+                  : [];
+                const maxOut = Math.max(...models.map(([, m]) => m.output), 1);
+                return (
+                  <div key={a.account} className="usage-account">
+                    <div className="usage-account-head">
+                      <b>{label}</b>
+                      {tag && <span className="usage-tag">{tag}</span>}
+                      <span className="usage-email">{a.email ?? 'not logged in'}</span>
                     </div>
-                  )}
-                </div>
-              );
-            })}
-          </>
-        );
-      })()}
+                    <div className="usage-account-meta">
+                      {relTime(a.lastActive)}
+                      {allTokens > 0 && (
+                        <>
+                          {' '}
+                          · {fmt(allTokens)} tokens · {fmtCost(all.cost)} all-time
+                        </>
+                      )}
+                      {dupOf && (
+                        <span className="usage-dup"> · same login as “{keyName(dupOf)}”</span>
+                      )}
+                    </div>
+                    {models.length > 0 ? (
+                      <>
+                        <div className="usage-stats">
+                          <span>
+                            <b>{fmt(winTokens)}</b> tokens
+                          </span>
+                          <span>
+                            {fmt(w.output)} out · {fmt(w.input)} in ·{' '}
+                            {fmt(w.cacheRead + w.cacheWrite)} cache
+                          </span>
+                          <span>{w.turns} turns</span>
+                          <span className="usage-cost">{fmtCost(w.cost)} est</span>
+                        </div>
+                        <div className="usage-bars">
+                          {models.map(([model, m]) => (
+                            <div key={model} className="usage-bar-row">
+                              <span className="usage-bar-label" title={model}>
+                                {model.replace(/^claude-/, '')}
+                              </span>
+                              <span className="usage-bar-track">
+                                <span className="usage-bar-plot">
+                                  <span
+                                    className="usage-bar-fill"
+                                    style={{ width: `${Math.max((m.output / maxOut) * 100, 1)}%` }}
+                                  />
+                                </span>
+                                <span className="usage-bar-val">{fmt(m.output)}</span>
+                              </span>
+                              <span className="usage-tip">
+                                <b>{model}</b>
+                                <br />
+                                {fmt(m.output)} out · {fmt(m.input)} in · {fmt(m.cacheRead)} cache ·{' '}
+                                {m.turns} turns
+                                <br />
+                                {fmtCost(m.cost ?? 0)} est
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      </>
+                    ) : (
+                      <div className="usage-empty">
+                        {usageWindow === 'all' ? 'no usage recorded' : `no usage in the ${phrase}`}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </>
+          );
+        })()
+      )}
       <div className="modal-actions">
-        <button className="btn" onClick={onClose}>Close</button>
+        <button className="btn" onClick={onClose}>
+          Close
+        </button>
       </div>
     </Modal>
   );

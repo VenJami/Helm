@@ -16,7 +16,15 @@ interface Props {
 // Themed replacement for the native <select> account picker. Closed it shows
 // just the profile name (keeps the toolbar clean); the open menu shows each
 // account's email underneath its name.
-export function ProfileSelect({ profiles, defaultEmail, mappedDefault, value, onChange, onNewProfile, onManageProfiles }: Props) {
+export function ProfileSelect({
+  profiles,
+  defaultEmail,
+  mappedDefault,
+  value,
+  onChange,
+  onNewProfile,
+  onManageProfiles,
+}: Props) {
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
 

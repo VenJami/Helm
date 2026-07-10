@@ -24,9 +24,7 @@ type AnimateIconContextValue = {
 const AnimateIconContext = React.createContext<AnimateIconContextValue | null>(null);
 
 export function useAnimateIconContext(): AnimateIconContextValue {
-  return (
-    React.useContext(AnimateIconContext) ?? { controls: undefined, animation: 'default' }
-  );
+  return React.useContext(AnimateIconContext) ?? { controls: undefined, animation: 'default' };
 }
 
 export type IconProps<T extends string = string> = Omit<
@@ -96,12 +94,15 @@ export function AnimateIcon({
   if (asChild && React.isValidElement(children)) {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const childProps = children.props as any;
-    content = React.cloneElement(children as React.ReactElement, {
-      onMouseEnter: compose(childProps.onMouseEnter, handlers.onMouseEnter),
-      onMouseLeave: compose(childProps.onMouseLeave, handlers.onMouseLeave),
-      onPointerDown: compose(childProps.onPointerDown, handlers.onPointerDown),
-      onPointerUp: compose(childProps.onPointerUp, handlers.onPointerUp),
-    } as React.HTMLAttributes<HTMLElement>);
+    content = React.cloneElement(
+      children as React.ReactElement,
+      {
+        onMouseEnter: compose(childProps.onMouseEnter, handlers.onMouseEnter),
+        onMouseLeave: compose(childProps.onMouseLeave, handlers.onMouseLeave),
+        onPointerDown: compose(childProps.onPointerDown, handlers.onPointerDown),
+        onPointerUp: compose(childProps.onPointerUp, handlers.onPointerUp),
+      } as React.HTMLAttributes<HTMLElement>,
+    );
   } else {
     content = (
       <motion.span style={{ display: 'inline-flex', lineHeight: 0 }} {...handlers}>

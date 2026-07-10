@@ -13,6 +13,9 @@ if (process.argv.includes('--version')) {
 process.stdout.write('fake-claude ready\r\n');
 process.stdin.resume(); // consume input + keep the event loop alive
 const keep = setInterval(() => {}, 1 << 30);
-const bye = () => { clearInterval(keep); process.exit(0); };
+const bye = () => {
+  clearInterval(keep);
+  process.exit(0);
+};
 process.on('SIGTERM', bye);
 process.on('SIGINT', bye);

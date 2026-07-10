@@ -12,13 +12,19 @@ const win = (input: number, models: Record<string, number> = {}): UsageWindow =>
   cacheWrite: 0,
   turns: 1,
   cost: input / 1e6,
-  models: Object.fromEntries(Object.entries(models).map(([name, mIn]) => [
-    name,
-    { input: mIn, output: mIn / 2, cacheRead: 0, cacheWrite: 0, turns: 1, cost: mIn / 1e6 },
-  ])),
+  models: Object.fromEntries(
+    Object.entries(models).map(([name, mIn]) => [
+      name,
+      { input: mIn, output: mIn / 2, cacheRead: 0, cacheWrite: 0, turns: 1, cost: mIn / 1e6 },
+    ]),
+  ),
 });
 
-const account = (name: string, windows: Record<string, UsageWindow>, lastActive: number | null = null): AccountUsage => ({
+const account = (
+  name: string,
+  windows: Record<string, UsageWindow>,
+  lastActive: number | null = null,
+): AccountUsage => ({
   account: name,
   email: `${name}@example.com`,
   lastActive,

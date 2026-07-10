@@ -12,7 +12,13 @@ import type { Axis } from '../hooks/useGridWeights';
 
 const MIN_W = 0.3; // no track can shrink below 0.3fr — keeps every pane usable
 
-export function GridResizers({ containerRef, colWeights, rowWeights, onDrag, onReset }: {
+export function GridResizers({
+  containerRef,
+  colWeights,
+  rowWeights,
+  onDrag,
+  onReset,
+}: {
   containerRef: RefObject<HTMLDivElement | null>;
   colWeights: number[];
   rowWeights: number[];
@@ -23,22 +29,28 @@ export function GridResizers({ containerRef, colWeights, rowWeights, onDrag, onR
   // Snapshot at drag start so movement is computed absolutely (no compounding);
   // `last` tracks the most recent live weights so release can persist them.
   const drag = useRef<{
-    axis: Axis; index: number; start: number[]; last: number[]; origin: number; span: number;
+    axis: Axis;
+    index: number;
+    start: number[];
+    last: number[];
+    origin: number;
+    span: number;
   } | null>(null);
 
-  const begin = (axis: Axis, index: number, weights: number[]) => (e: ReactPointerEvent<HTMLDivElement>) => {
-    const box = containerRef.current?.getBoundingClientRect();
-    if (!box) return;
-    drag.current = {
-      axis,
-      index,
-      start: [...weights],
-      last: [...weights],
-      origin: axis === 'c' ? e.clientX : e.clientY,
-      span: axis === 'c' ? box.width : box.height,
+  const begin =
+    (axis: Axis, index: number, weights: number[]) => (e: ReactPointerEvent<HTMLDivElement>) => {
+      const box = containerRef.current?.getBoundingClientRect();
+      if (!box) return;
+      drag.current = {
+        axis,
+        index,
+        start: [...weights],
+        last: [...weights],
+        origin: axis === 'c' ? e.clientX : e.clientY,
+        span: axis === 'c' ? box.width : box.height,
+      };
+      (e.target as HTMLElement).setPointerCapture(e.pointerId);
     };
-    (e.target as HTMLElement).setPointerCapture(e.pointerId);
-  };
 
   const move = (e: ReactPointerEvent<HTMLDivElement>) => {
     const d = drag.current;
@@ -74,30 +86,32 @@ export function GridResizers({ containerRef, colWeights, rowWeights, onDrag, onR
 
   return (
     <>
-      {colWeights.length > 1 && fractionsBefore(colWeights).map((frac, i) => (
-        <div
-          key={`c${i}`}
-          className="grid-gutter grid-gutter-col"
-          style={{ left: `calc(${(frac * 100).toFixed(3)}% - 5px)` }}
-          title="Drag to resize columns · double-click to reset"
-          onPointerDown={begin('c', i, colWeights)}
-          onPointerMove={move}
-          onPointerUp={end}
-          onDoubleClick={() => onReset('c', colWeights.length)}
-        />
-      ))}
-      {rowWeights.length > 1 && fractionsBefore(rowWeights).map((frac, i) => (
-        <div
-          key={`r${i}`}
-          className="grid-gutter grid-gutter-row"
-          style={{ top: `calc(${(frac * 100).toFixed(3)}% - 5px)` }}
-          title="Drag to resize rows · double-click to reset"
-          onPointerDown={begin('r', i, rowWeights)}
-          onPointerMove={move}
-          onPointerUp={end}
-          onDoubleClick={() => onReset('r', rowWeights.length)}
-        />
-      ))}
+      {colWeights.length > 1 &&
+        fractionsBefore(colWeights).map((frac, i) => (
+          <div
+            key={`c${i}`}
+            className="grid-gutter grid-gutter-col"
+            style={{ left: `calc(${(frac * 100).toFixed(3)}% - 5px)` }}
+            title="Drag to resize columns · double-click to reset"
+            onPointerDown={begin('c', i, colWeights)}
+            onPointerMove={move}
+            onPointerUp={end}
+            onDoubleClick={() => onReset('c', colWeights.length)}
+          />
+        ))}
+      {rowWeights.length > 1 &&
+        fractionsBefore(rowWeights).map((frac, i) => (
+          <div
+            key={`r${i}`}
+            className="grid-gutter grid-gutter-row"
+            style={{ top: `calc(${(frac * 100).toFixed(3)}% - 5px)` }}
+            title="Drag to resize rows · double-click to reset"
+            onPointerDown={begin('r', i, rowWeights)}
+            onPointerMove={move}
+            onPointerUp={end}
+            onDoubleClick={() => onReset('r', rowWeights.length)}
+          />
+        ))}
     </>
   );
 }

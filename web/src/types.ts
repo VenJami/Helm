@@ -10,7 +10,7 @@ export interface SessionInfo {
   activitySince: string | null; // ISO — when activity last changed ("working 7m")
   activityNote: string | null; // latest Notification message while waiting (why it's blocked)
   summary: string | null; // auto-title from the conversation's first prompt (search/palette)
-  canResume: boolean;    // claude session id captured → revive resumes it
+  canResume: boolean; // claude session id captured → revive resumes it
   hasTranscript: boolean;
   attached: number;
   createdAt: string;
@@ -57,7 +57,7 @@ export interface Workspace {
   name: string;
   dir: string;
   profile?: string; // pinned account name; absent = default account
-  port?: number;    // project's dev-server port; absent = no server check
+  port?: number; // project's dev-server port; absent = no server check
 }
 
 // Per-workspace dev-server liveness for the sidebar. Only workspaces with a
@@ -73,9 +73,9 @@ export interface ServerInfo {
 export interface GitInfo {
   id: string;
   branch: string | null;
-  dirty: boolean;   // uncommitted changes present
-  ahead: number;    // commits ahead of upstream
-  behind: number;   // commits behind upstream
+  dirty: boolean; // uncommitted changes present
+  ahead: number; // commits ahead of upstream
+  behind: number; // commits behind upstream
 }
 
 export interface LogEntry {
@@ -100,13 +100,13 @@ export interface LogsResponse {
 
 // server → client
 export type WsServerMsg =
-  | { type: 'replay'; data: string }          // ring-buffer snapshot on (re)attach
-  | { type: 'data'; data: string }            // live PTY output
-  | { type: 'exit'; code: number | null };    // process ended; socket closes after
+  | { type: 'replay'; data: string } // ring-buffer snapshot on (re)attach
+  | { type: 'data'; data: string } // live PTY output
+  | { type: 'exit'; code: number | null }; // process ended; socket closes after
 
 // client → server
 export type WsClientMsg =
-  | { type: 'input'; data: string }           // keystrokes/paste → PTY stdin
+  | { type: 'input'; data: string } // keystrokes/paste → PTY stdin
   | { type: 'resize'; cols: number; rows: number };
 
 export interface HelmSettings {
@@ -116,17 +116,17 @@ export interface HelmSettings {
 // claude-CLI drift diagnostics — Helm reads undocumented claude formats, so
 // when they change, features quietly return zeros. These surface it loudly.
 export interface DriftWarning {
-  key: string;     // stable id (dedupes repeats; also the dismiss key)
+  key: string; // stable id (dedupes repeats; also the dismiss key)
   message: string; // human-readable, plain language
-  since: string;   // ISO — first seen
-  count: number;   // times observed
+  since: string; // ISO — first seen
+  count: number; // times observed
 }
 
 export interface Diagnostics {
   claude: {
     version: string | null;
-    ok: boolean;      // false = not found or below the tested floor
-    floor: string;    // version Helm was verified against
+    ok: boolean; // false = not found or below the tested floor
+    floor: string; // version Helm was verified against
     checked: boolean; // has the boot-time `claude --version` returned yet
     error: string | null;
   };

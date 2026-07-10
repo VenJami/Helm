@@ -28,7 +28,11 @@ export function dbg(tag, msg) {
   console.log(`[${entry.level}] [${tag}] ${msg}`);
   if (LOG_FILE) {
     // Best-effort file sink — a logging failure must never break the server.
-    try { fs.appendFileSync(LOG_FILE, `${entry.t} [${entry.level}] [${tag}] ${msg}\n`); } catch { /* ignore */ }
+    try {
+      fs.appendFileSync(LOG_FILE, `${entry.t} [${entry.level}] [${tag}] ${msg}\n`);
+    } catch {
+      /* ignore */
+    }
   }
 }
 

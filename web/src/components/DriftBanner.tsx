@@ -32,12 +32,20 @@ export function DriftBanner() {
   useEffect(() => {
     let alive = true;
     const pull = () =>
-      api.getDiagnostics()
-        .then((d) => { if (alive) setWarnings(d.warnings); })
-        .catch(() => { /* server down / transient — banner just stays as-is */ });
+      api
+        .getDiagnostics()
+        .then((d) => {
+          if (alive) setWarnings(d.warnings);
+        })
+        .catch(() => {
+          /* server down / transient — banner just stays as-is */
+        });
     pull();
     const timer = setInterval(pull, 20_000); // drift is rare; a slow poll is plenty
-    return () => { alive = false; clearInterval(timer); };
+    return () => {
+      alive = false;
+      clearInterval(timer);
+    };
   }, []);
 
   const visible = warnings.filter((w) => !dismissed.has(w.key));
@@ -52,8 +60,18 @@ export function DriftBanner() {
 
   return (
     <div className="drift-banner" role="alert">
-      <svg className="drift-icon" width="16" height="16" viewBox="0 0 24 24" fill="none"
-        stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <svg
+        className="drift-icon"
+        width="16"
+        height="16"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        aria-hidden="true"
+      >
         <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0Z" />
         <line x1="12" y1="9" x2="12" y2="13" />
         <line x1="12" y1="17" x2="12.01" y2="17" />
@@ -63,7 +81,9 @@ export function DriftBanner() {
           claude compatibility warning{visible.length > 1 ? `s (${visible.length})` : ''}
         </div>
         {visible.map((w) => (
-          <div className="drift-msg" key={w.key}>{w.message}</div>
+          <div className="drift-msg" key={w.key}>
+            {w.message}
+          </div>
         ))}
       </div>
       <button className="drift-close" title="Dismiss" onClick={dismissAll}>

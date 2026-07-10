@@ -15,8 +15,15 @@ import ptyPkg from 'node-pty';
 import { dbg, logsSince, SERVER_STARTED_AT } from './src/log.mjs';
 import { readJsonWithBackup, writeFileAtomic, writeJsonAtomic } from './src/persist.mjs';
 import {
-  CLAUDE_CMD, accountEmail, checkClaudeVersion, diagnostics, firstPromptSummary,
-  noteDrift, parseTranscriptFile, tokenCost, transcriptFiles,
+  CLAUDE_CMD,
+  accountEmail,
+  checkClaudeVersion,
+  diagnostics,
+  firstPromptSummary,
+  noteDrift,
+  parseTranscriptFile,
+  tokenCost,
+  transcriptFiles,
 } from './src/claude.mjs';
 
 const { spawn } = ptyPkg;
@@ -37,7 +44,11 @@ function absorbProcessError(kind, err) {
   }
   if (!booted) throw err; // boot failure: crash loud
   const msg = `${kind} (server kept alive): ${err?.stack || err}`;
-  try { dbg('error', msg); } catch { console.error(msg); }
+  try {
+    dbg('error', msg);
+  } catch {
+    console.error(msg);
+  }
 }
 process.on('unhandledRejection', (err) => absorbProcessError('unhandled rejection', err));
 process.on('uncaughtException', (err) => absorbProcessError('uncaught exception', err));
@@ -51,9 +62,11 @@ const RING_BUFFER_MAX = 200 * 1024; // ~200 KB of output kept per session for re
 const IS_WIN = process.platform === 'win32';
 // HELM_DATA_DIR overrides the state dir wholesale — used by the e2e script to
 // isolate Helm state while the real ~/.claude login stays untouched.
-const HELM_DIR = process.env.HELM_DATA_DIR || (IS_WIN
-  ? path.join(process.env.LOCALAPPDATA || os.homedir(), 'Helm')
-  : path.join(os.homedir(), '.helm'));
+const HELM_DIR =
+  process.env.HELM_DATA_DIR ||
+  (IS_WIN
+    ? path.join(process.env.LOCALAPPDATA || os.homedir(), 'Helm')
+    : path.join(os.homedir(), '.helm'));
 const ACCOUNTS_DIR = path.join(HELM_DIR, 'accounts');
 const ATTACHMENTS_DIR = path.join(HELM_DIR, 'attachments');
 const WORKSPACES_FILE = path.join(HELM_DIR, 'workspaces.json');
@@ -72,7 +85,9 @@ function persistentToken(filename) {
   try {
     const t = fs.readFileSync(file, 'utf8').trim();
     if (/^[0-9a-f]{48}$/.test(t)) return t;
-  } catch { /* first run */ }
+  } catch {
+    /* first run */
+  }
   const t = crypto.randomBytes(24).toString('hex');
   writeFileAtomic(file, t);
   return t;
@@ -89,10 +104,7 @@ function safeEqual(a, b) {
   const bb = Buffer.from(String(b ?? ''));
   return ab.length === bb.length && crypto.timingSafeEqual(ab, bb);
 }
-const ALLOWED_ORIGINS = new Set([
-  `http://127.0.0.1:${PORT}`,
-  `http://localhost:${PORT}`,
-]);
+const ALLOWED_ORIGINS = new Set([`http://127.0.0.1:${PORT}`, `http://localhost:${PORT}`]);
 
 // Hook config injected into every pane via `claude --settings <file>` — no
 // permanent changes to any profile's settings.json. Each event relays to
@@ -101,14 +113,21 @@ function writeHookSettings() {
   const command = `"${process.execPath}" "${path.join(__dirname, 'hook-post.mjs')}"`;
   const relay = [{ hooks: [{ type: 'command', command, timeout: 10 }] }];
   fs.mkdirSync(HELM_DIR, { recursive: true });
-  fs.writeFileSync(HOOK_SETTINGS_FILE, JSON.stringify({
-    hooks: {
-      SessionStart: relay,
-      UserPromptSubmit: relay,
-      Stop: relay,
-      Notification: relay,
-    },
-  }, null, 2));
+  fs.writeFileSync(
+    HOOK_SETTINGS_FILE,
+    JSON.stringify(
+      {
+        hooks: {
+          SessionStart: relay,
+          UserPromptSubmit: relay,
+          Stop: relay,
+          Notification: relay,
+        },
+      },
+      null,
+      2,
+    ),
+  );
 }
 writeHookSettings();
 
@@ -153,14 +172,50 @@ const sessions = new Map();
 // Random pane identity — nautical/star names to match the Helm theme, and
 // accent colors picked to read well on the dark UI.
 const PANE_NAMES = [
-  'Polaris', 'Rigel', 'Vega', 'Altair', 'Sirius', 'Lyra', 'Orion', 'Atlas',
-  'Nova', 'Comet', 'Zephyr', 'Ember', 'Onyx', 'Jade', 'Indigo', 'Cobalt',
-  'Argo', 'Beacon', 'Compass', 'Anchor', 'Harbor', 'Tide', 'Reef', 'Gale',
-  'Drift', 'Sextant', 'Keel', 'Bosun', 'Sonar', 'Rudder', 'Lantern', 'Buoy',
+  'Polaris',
+  'Rigel',
+  'Vega',
+  'Altair',
+  'Sirius',
+  'Lyra',
+  'Orion',
+  'Atlas',
+  'Nova',
+  'Comet',
+  'Zephyr',
+  'Ember',
+  'Onyx',
+  'Jade',
+  'Indigo',
+  'Cobalt',
+  'Argo',
+  'Beacon',
+  'Compass',
+  'Anchor',
+  'Harbor',
+  'Tide',
+  'Reef',
+  'Gale',
+  'Drift',
+  'Sextant',
+  'Keel',
+  'Bosun',
+  'Sonar',
+  'Rudder',
+  'Lantern',
+  'Buoy',
 ];
 const PANE_COLORS = [
-  '#4fc3f7', '#81c784', '#ffb74d', '#f06292', '#ba68c8',
-  '#ffd54f', '#4dd0e1', '#ff8a65', '#90a4ae', '#aed581',
+  '#4fc3f7',
+  '#81c784',
+  '#ffb74d',
+  '#f06292',
+  '#ba68c8',
+  '#ffd54f',
+  '#4dd0e1',
+  '#ff8a65',
+  '#90a4ae',
+  '#aed581',
 ];
 
 function randomPaneIdentity() {
@@ -203,7 +258,8 @@ function spawnPty(session, extraArgs, { cols, rows }) {
     'CLAUDE_CODE_SESSION_ID',
     'CLAUDE_CODE_SSE_PORT',
     'CLAUDE_AGENT_SDK_VERSION',
-  ]) delete env[k];
+  ])
+    delete env[k];
   if (session.profile) {
     const profileDir = path.join(ACCOUNTS_DIR, session.profile);
     fs.mkdirSync(profileDir, { recursive: true });
@@ -222,8 +278,11 @@ function spawnPty(session, extraArgs, { cols, rows }) {
   session.pty = pty;
   session.status = 'running';
   session.exitCode = null;
-  dbg('spawn', `${session.name} (${session.id.slice(0, 8)}) pid=${pty.pid} cwd=${session.workspace}` +
-    `${session.profile ? ` profile=${session.profile}` : ''}${extraArgs.length ? ` args=${extraArgs.join(' ')}` : ''}`);
+  dbg(
+    'spawn',
+    `${session.name} (${session.id.slice(0, 8)}) pid=${pty.pid} cwd=${session.workspace}` +
+      `${session.profile ? ` profile=${session.profile}` : ''}${extraArgs.length ? ` args=${extraArgs.join(' ')}` : ''}`,
+  );
 
   // Both callbacks check `session.pty === pty`: an account switch kills this
   // process and respawns a new one on the same session, and the old process's
@@ -277,10 +336,12 @@ function createSession({ workspace, profile, cols, rows }) {
     const profileDir = path.join(ACCOUNTS_DIR, profile);
     let onboarded = false;
     try {
-      onboarded = JSON.parse(
-        fs.readFileSync(path.join(profileDir, '.claude.json'), 'utf8'),
-      ).hasCompletedOnboarding === true;
-    } catch { /* no config yet — fresh profile */ }
+      onboarded =
+        JSON.parse(fs.readFileSync(path.join(profileDir, '.claude.json'), 'utf8'))
+          .hasCompletedOnboarding === true;
+    } catch {
+      /* no config yet — fresh profile */
+    }
     const hasCreds = fs.existsSync(path.join(profileDir, '.credentials.json'));
     if (onboarded && !hasCreds) args.push('/login');
   }
@@ -291,16 +352,16 @@ function createSession({ workspace, profile, cols, rows }) {
     workspace,
     profile: profile || null,
     pty: null,
-    buffer: [],      // ring buffer of output chunks
+    buffer: [], // ring buffer of output chunks
     bufLen: 0,
     sockets: new Set(),
     status: 'running',
     exitCode: null,
-    activity: null,          // 'working' | 'waiting' | 'idle' (from hooks)
-    activitySince: null,     // when activity last changed — powers "working 7m"
-    activityNote: null,      // latest Notification message while waiting (why it's blocked)
-    claudeSessionId: null,   // claude's internal session id (from hooks)
-    transcriptPath: null,    // conversation JSONL (from hooks) — usage source
+    activity: null, // 'working' | 'waiting' | 'idle' (from hooks)
+    activitySince: null, // when activity last changed — powers "working 7m"
+    activityNote: null, // latest Notification message while waiting (why it's blocked)
+    claudeSessionId: null, // claude's internal session id (from hooks)
+    transcriptPath: null, // conversation JSONL (from hooks) — usage source
     createdAt: new Date().toISOString(),
   };
   spawnPty(session, args, { cols, rows });
@@ -320,7 +381,10 @@ function reviveSession(session, { cols, rows }) {
   // but never write the file — --resume would just die with "No conversation
   // found". Detect that up front and fall back to a fresh session.
   if (session.claudeSessionId && session.transcriptPath && !fs.existsSync(session.transcriptPath)) {
-    dbg('revive', `${session.name} (${session.id.slice(0, 8)}) transcript never written — cannot resume, starting fresh`);
+    dbg(
+      'revive',
+      `${session.name} (${session.id.slice(0, 8)}) transcript never written — cannot resume, starting fresh`,
+    );
     session.claudeSessionId = null;
     session.transcriptPath = null;
   }
@@ -369,7 +433,9 @@ try {
       fs.rmSync(path.join(ATTACHMENTS_DIR, d.name), { recursive: true, force: true });
     }
   }
-} catch { /* no attachments yet */ }
+} catch {
+  /* no attachments yet */
+}
 
 // Auto-revive (settings.autoRevive): respawn every dead session right at
 // server start instead of one revive click per pane. Panes send their real
@@ -379,8 +445,11 @@ if (settings.autoRevive) {
     if (session.status !== 'dead') continue;
     try {
       reviveSession(session, { cols: 80, rows: 24 });
-      dbg('revive', `auto-revived ${session.name} (${session.id.slice(0, 8)})` +
-        (session.claudeSessionId ? ' (resuming)' : ' (fresh)'));
+      dbg(
+        'revive',
+        `auto-revived ${session.name} (${session.id.slice(0, 8)})` +
+          (session.claudeSessionId ? ' (resuming)' : ' (fresh)'),
+      );
     } catch (err) {
       dbg('error', `auto-revive failed for ${session.name}: ${err.message}`);
     }
@@ -395,8 +464,12 @@ function persistSessions() {
   // running/dead sessions always survive a restart; exited ones only when a
   // conversation id was captured — they reload as revivable 'dead' entries.
   const list = [...sessions.values()]
-    .filter((s) => s.status === 'running' || s.status === 'dead' ||
-      (s.status === 'exited' && s.claudeSessionId))
+    .filter(
+      (s) =>
+        s.status === 'running' ||
+        s.status === 'dead' ||
+        (s.status === 'exited' && s.claudeSessionId),
+    )
     .map((s) => ({
       id: s.id,
       name: s.name,
@@ -448,8 +521,7 @@ function sessionInfo(s) {
     summary: firstPromptSummary(s.transcriptPath),
     // resumable = we have claude's session id AND its transcript actually
     // exists on disk (team-mode claude can report a path it never writes)
-    canResume: Boolean(s.claudeSessionId &&
-      (!s.transcriptPath || fs.existsSync(s.transcriptPath))),
+    canResume: Boolean(s.claudeSessionId && (!s.transcriptPath || fs.existsSync(s.transcriptPath))),
     hasTranscript: Boolean(s.transcriptPath),
     attached: s.sockets.size,
     createdAt: s.createdAt,
@@ -530,13 +602,18 @@ app.post('/api/hook', (req, res) => {
     if (validTranscriptPath(session, event.transcript_path)) {
       session.transcriptPath = event.transcript_path;
     } else {
-      noteDrift('transcript-path-rejected',
+      noteDrift(
+        'transcript-path-rejected',
         `a pane reported a transcript outside its account store (${event.transcript_path}) — ` +
-        'either claude moved its transcript dir (update Helm) or something in the pane is spoofing hooks');
+          'either claude moved its transcript dir (update Helm) or something in the pane is spoofing hooks',
+      );
     }
   }
-  dbg('hook', `${session.name} (${sessionId.slice(0, 8)}) ${event.hook_event_name}` +
-    (event.hook_event_name === 'Notification' && event.message ? `: ${event.message}` : ''));
+  dbg(
+    'hook',
+    `${session.name} (${sessionId.slice(0, 8)}) ${event.hook_event_name}` +
+      (event.hook_event_name === 'Notification' && event.message ? `: ${event.message}` : ''),
+  );
   const activity = {
     SessionStart: 'idle',
     UserPromptSubmit: 'working',
@@ -576,7 +653,11 @@ app.post('/api/sessions', (req, res) => {
     return res.status(400).json({ error: 'workspace (directory path) is required' });
   }
   let stat;
-  try { stat = fs.statSync(workspace); } catch { /* handled below */ }
+  try {
+    stat = fs.statSync(workspace);
+  } catch {
+    /* handled below */
+  }
   if (!stat?.isDirectory()) {
     return res.status(400).json({ error: `workspace is not a directory: ${workspace}` });
   }
@@ -585,7 +666,12 @@ app.post('/api/sessions', (req, res) => {
     return res.status(400).json({ error: 'profile must be alphanumeric/dash/underscore' });
   }
   try {
-    const session = createSession({ workspace, profile, cols: Number(cols) || 80, rows: Number(rows) || 24 });
+    const session = createSession({
+      workspace,
+      profile,
+      cols: Number(cols) || 80,
+      rows: Number(rows) || 24,
+    });
     res.status(201).json(sessionInfo(session));
   } catch (err) {
     res.status(500).json({ error: `failed to spawn: ${err.message}` });
@@ -596,14 +682,20 @@ app.delete('/api/sessions/:id', (req, res) => {
   const session = sessions.get(req.params.id);
   if (!session) return res.status(404).json({ error: 'no such session' });
   if (session.status === 'running' && session.pty) {
-    try { session.pty.kill(); } catch { /* already dead */ }
+    try {
+      session.pty.kill();
+    } catch {
+      /* already dead */
+    }
   }
   for (const ws of session.sockets) ws.close(1000, 'session killed');
   sessions.delete(session.id);
   // its uploaded attachments go with it
   try {
     fs.rmSync(path.join(ATTACHMENTS_DIR, session.id), { recursive: true, force: true });
-  } catch { /* none */ }
+  } catch {
+    /* none */
+  }
   dbg('kill', `${session.name} (${session.id.slice(0, 8)}) deleted (was ${session.status})`);
   persistSessions();
   res.json({ ok: true });
@@ -637,37 +729,41 @@ let attachSeq = 0;
 
 // keep a safe basename (+extension); never trust client-supplied paths
 function sanitizeFilename(name) {
-  const base = String(name || '').split(/[\\/]/).pop() || '';
-  const clean = base.replace(/[^\w. -]/g, '').replace(/^\.+/, '').trim();
+  const base =
+    String(name || '')
+      .split(/[\\/]/)
+      .pop() || '';
+  const clean = base
+    .replace(/[^\w. -]/g, '')
+    .replace(/^\.+/, '')
+    .trim();
   return clean.slice(0, 80) || 'paste.png';
 }
 
-app.post('/api/sessions/:id/attach',
-  express.raw({ type: '*/*', limit: '25mb' }),
-  (req, res) => {
-    const session = sessions.get(req.params.id);
-    if (!session) return res.status(404).json({ error: 'no such session' });
-    if (session.status !== 'running' || !session.pty) {
-      return res.status(409).json({ error: 'session is not running' });
-    }
-    if (!Buffer.isBuffer(req.body) || req.body.length === 0) {
-      return res.status(400).json({ error: 'empty file' });
-    }
-    const name = sanitizeFilename(req.query.name);
-    const dir = path.join(ATTACHMENTS_DIR, session.id);
-    const file = path.join(dir, `${++attachSeq}-${name}`);
-    try {
-      fs.mkdirSync(dir, { recursive: true });
-      fs.writeFileSync(file, req.body);
-    } catch (err) {
-      return res.status(500).json({ error: `failed to save: ${err.message}` });
-    }
-    // Type the path into the pane's input (quoted if it has spaces, trailing
-    // space, NO Enter — the user finishes their prompt and submits).
-    session.pty.write((/\s/.test(file) ? `"${file}"` : file) + ' ');
-    dbg('attach', `${session.name} (${session.id.slice(0, 8)}) ${name} (${req.body.length} bytes)`);
-    res.json({ ok: true, path: file });
-  });
+app.post('/api/sessions/:id/attach', express.raw({ type: '*/*', limit: '25mb' }), (req, res) => {
+  const session = sessions.get(req.params.id);
+  if (!session) return res.status(404).json({ error: 'no such session' });
+  if (session.status !== 'running' || !session.pty) {
+    return res.status(409).json({ error: 'session is not running' });
+  }
+  if (!Buffer.isBuffer(req.body) || req.body.length === 0) {
+    return res.status(400).json({ error: 'empty file' });
+  }
+  const name = sanitizeFilename(req.query.name);
+  const dir = path.join(ATTACHMENTS_DIR, session.id);
+  const file = path.join(dir, `${++attachSeq}-${name}`);
+  try {
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(file, req.body);
+  } catch (err) {
+    return res.status(500).json({ error: `failed to save: ${err.message}` });
+  }
+  // Type the path into the pane's input (quoted if it has spaces, trailing
+  // space, NO Enter — the user finishes their prompt and submits).
+  session.pty.write((/\s/.test(file) ? `"${file}"` : file) + ' ');
+  dbg('attach', `${session.name} (${session.id.slice(0, 8)}) ${name} (${req.body.length} bytes)`);
+  res.json({ ok: true, path: file });
+});
 
 // Revive a session that is no longer running: 'dead' (PTY died with a previous
 // server process) or 'exited' (claude ended or crashed). Resumes the same
@@ -676,7 +772,8 @@ app.post('/api/sessions/:id/attach',
 app.post('/api/sessions/:id/revive', (req, res) => {
   const session = sessions.get(req.params.id);
   if (!session) return res.status(404).json({ error: 'no such session' });
-  if (session.status === 'running') return res.status(409).json({ error: 'session is still running' });
+  if (session.status === 'running')
+    return res.status(409).json({ error: 'session is still running' });
   const { cols = 80, rows = 24 } = req.body || {};
   try {
     reviveSession(session, { cols: Number(cols) || 80, rows: Number(rows) || 24 });
@@ -684,8 +781,13 @@ app.post('/api/sessions/:id/revive', (req, res) => {
     dbg('error', `revive failed for ${session.id.slice(0, 8)}: ${err.message}`);
     return res.status(500).json({ error: `failed to respawn: ${err.message}` });
   }
-  dbg('revive', `${session.name} (${session.id.slice(0, 8)})` +
-    (session.claudeSessionId ? ` resuming claude session ${session.claudeSessionId.slice(0, 8)}` : ' fresh (no claude session id)'));
+  dbg(
+    'revive',
+    `${session.name} (${session.id.slice(0, 8)})` +
+      (session.claudeSessionId
+        ? ` resuming claude session ${session.claudeSessionId.slice(0, 8)}`
+        : ' fresh (no claude session id)'),
+  );
   persistSessions();
   res.json(sessionInfo(session));
 });
@@ -728,7 +830,9 @@ app.post('/api/sessions/:id/switch-profile', (req, res) => {
   // copy (not move) leaves the old account's history intact for its usage.
   if (session.claudeSessionId && session.transcriptPath && fs.existsSync(session.transcriptPath)) {
     const destDir = path.join(
-      configRoot(next), 'projects', path.basename(path.dirname(session.transcriptPath)),
+      configRoot(next),
+      'projects',
+      path.basename(path.dirname(session.transcriptPath)),
     );
     const dest = path.join(destDir, path.basename(session.transcriptPath));
     try {
@@ -747,7 +851,11 @@ app.post('/api/sessions/:id/switch-profile', (req, res) => {
 
   const from = session.profile || 'default';
   if (session.status === 'running' && session.pty) {
-    try { session.pty.kill(); } catch { /* already dead */ }
+    try {
+      session.pty.kill();
+    } catch {
+      /* already dead */
+    }
   }
   session.profile = next;
   try {
@@ -757,8 +865,11 @@ app.post('/api/sessions/:id/switch-profile', (req, res) => {
     persistSessions();
     return res.status(500).json({ error: `failed to respawn: ${err.message}` });
   }
-  dbg('switch', `${session.name} (${session.id.slice(0, 8)}) ${from} → ${next || 'default'}` +
-    (session.claudeSessionId ? ' (conversation carried over)' : ' (fresh start)'));
+  dbg(
+    'switch',
+    `${session.name} (${session.id.slice(0, 8)}) ${from} → ${next || 'default'}` +
+      (session.claudeSessionId ? ' (conversation carried over)' : ' (fresh start)'),
+  );
   persistSessions();
   res.json(sessionInfo(session));
 });
@@ -787,13 +898,20 @@ app.post('/api/broadcast', (req, res) => {
     session.pty.write(payload);
     setTimeout(() => {
       if (session.status === 'running' && session.pty) {
-        try { session.pty.write('\r'); } catch { /* exited in between */ }
+        try {
+          session.pty.write('\r');
+        } catch {
+          /* exited in between */
+        }
       }
     }, 250);
     results[id] = 'sent';
   }
   const sent = Object.values(results).filter((r) => r === 'sent').length;
-  dbg('broadcast', `"${text.slice(0, 60)}${text.length > 60 ? '…' : ''}" → ${sent}/${sessionIds.length} pane(s)`);
+  dbg(
+    'broadcast',
+    `"${text.slice(0, 60)}${text.length > 60 ? '…' : ''}" → ${sent}/${sessionIds.length} pane(s)`,
+  );
   res.json({ ok: true, results });
 });
 
@@ -838,9 +956,10 @@ const SW = { hide: 0, show: 9 }; // 9 = SW_RESTORE (un-minimise + activate)
 function controlConsole(action) {
   return new Promise((resolve) => {
     if (process.platform !== 'win32') return resolve({ supported: false, visible: false });
-    const set = action === 'show' || action === 'hide'
-      ? `if ($h -ne [IntPtr]::Zero) { [W.N]::ShowWindow($h, ${SW[action]}) | Out-Null }`
-      : '';
+    const set =
+      action === 'show' || action === 'hide'
+        ? `if ($h -ne [IntPtr]::Zero) { [W.N]::ShowWindow($h, ${SW[action]}) | Out-Null }`
+        : '';
     const script = `
 $s = @'
 [DllImport("kernel32.dll")] public static extern System.IntPtr GetConsoleWindow();
@@ -852,13 +971,16 @@ $h = [W.N]::GetConsoleWindow()
 ${set}
 $vis = if ($h -ne [IntPtr]::Zero) { [W.N]::IsWindowVisible($h) } else { $false }
 Write-Output ("{0}|{1}" -f ($h -ne [IntPtr]::Zero), $vis)`;
-    execFile('powershell', ['-NoProfile', '-NonInteractive', '-Command', script],
+    execFile(
+      'powershell',
+      ['-NoProfile', '-NonInteractive', '-Command', script],
       { timeout: 5000, windowsHide: false }, // inherit this console so the handle is ours
       (err, stdout) => {
         if (err) return resolve({ supported: false, visible: false });
         const [sup, vis] = String(stdout).trim().split('|');
         resolve({ supported: sup === 'True', visible: vis === 'True' });
-      });
+      },
+    );
   });
 }
 
@@ -866,7 +988,8 @@ app.get('/api/console', async (_req, res) => res.json(await controlConsole('quer
 
 app.post('/api/console', async (req, res) => {
   const visible = req.body?.visible;
-  if (typeof visible !== 'boolean') return res.status(400).json({ error: 'visible must be a boolean' });
+  if (typeof visible !== 'boolean')
+    return res.status(400).json({ error: 'visible must be a boolean' });
   res.json(await controlConsole(visible ? 'show' : 'hide'));
 });
 
@@ -909,7 +1032,15 @@ async function accountUsage(configDir) {
   const now = Date.now();
   // Every window (incl. 'all') carries totals + its own per-model breakdown,
   // so the UI's window selector re-slices the whole card, not just one number.
-  const blank = () => ({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0, turns: 0, cost: 0, models: {} });
+  const blank = () => ({
+    input: 0,
+    output: 0,
+    cacheRead: 0,
+    cacheWrite: 0,
+    turns: 0,
+    cost: 0,
+    models: {},
+  });
   const windows = { all: blank() };
   for (const [key] of USAGE_WINDOWS) windows[key] = blank();
 
@@ -964,7 +1095,9 @@ async function accountUsage(configDir) {
 // this server does. HELM_USAGE_TTL_MS overrides (0 = always fresh; tests).
 const USAGE_ROLLUP_TTL = Number(process.env.HELM_USAGE_TTL_MS ?? 15_000);
 let usageRollup = { at: 0, promise: null };
-function invalidateUsageRollup() { usageRollup = { at: 0, promise: null }; }
+function invalidateUsageRollup() {
+  usageRollup = { at: 0, promise: null };
+}
 
 async function buildUsageRollup() {
   const accounts = [];
@@ -981,7 +1114,9 @@ async function buildUsageRollup() {
       const dir = path.join(ACCOUNTS_DIR, d.name);
       accounts.push({ account: d.name, email: accountEmail(dir), ...(await accountUsage(dir)) });
     }
-  } catch { /* no profiles yet */ }
+  } catch {
+    /* no profiles yet */
+  }
   return accounts;
 }
 
@@ -1014,7 +1149,9 @@ app.get('/api/sessions/:id/usage', (req, res) => {
     for (const f of fs.readdirSync(subagentsDir)) {
       if (f.endsWith('.jsonl')) files.push(path.join(subagentsDir, f));
     }
-  } catch { /* no subagents */ }
+  } catch {
+    /* no subagents */
+  }
 
   const models = {};
   let available = false;
@@ -1063,7 +1200,9 @@ app.get('/api/workspaces', (_req, res) => {
 // literal 'git' segment isn't swallowed as an :id.
 function workspaceGit(dir) {
   return new Promise((resolve) => {
-    execFile('git', ['-C', dir, 'status', '--porcelain=v1', '--branch'],
+    execFile(
+      'git',
+      ['-C', dir, 'status', '--porcelain=v1', '--branch'],
       { timeout: 2000, windowsHide: true },
       (err, stdout) => {
         if (err) return resolve({ branch: null, dirty: false, ahead: 0, behind: 0 });
@@ -1078,7 +1217,8 @@ function workspaceGit(dir) {
         const behind = Number(head.match(/behind (\d+)/)?.[1]) || 0;
         const dirty = lines.slice(1).some((l) => l.trim() !== '');
         resolve({ branch, dirty, ahead, behind });
-      });
+      },
+    );
   });
 }
 
@@ -1135,7 +1275,11 @@ app.post('/api/workspaces', (req, res) => {
     return res.status(400).json({ error: 'name and dir are required' });
   }
   let stat;
-  try { stat = fs.statSync(dir); } catch { /* handled below */ }
+  try {
+    stat = fs.statSync(dir);
+  } catch {
+    /* handled below */
+  }
   if (!stat?.isDirectory()) {
     return res.status(400).json({ error: `not a directory: ${dir}` });
   }
@@ -1170,7 +1314,11 @@ app.patch('/api/workspaces/:id', (req, res) => {
   if (typeof name === 'string' && name.trim()) ws.name = name.trim();
   if (typeof dir === 'string' && dir.trim()) {
     let stat;
-    try { stat = fs.statSync(dir); } catch { /* handled below */ }
+    try {
+      stat = fs.statSync(dir);
+    } catch {
+      /* handled below */
+    }
     if (!stat?.isDirectory()) return res.status(400).json({ error: `not a directory: ${dir}` });
     const normalized = path.resolve(dir);
     const clash = workspaces.find((w) => w.id !== ws.id && path.resolve(w.dir) === normalized);
@@ -1217,22 +1365,29 @@ function mappedDefaultProfile() {
     for (const d of fs.readdirSync(ACCOUNTS_DIR, { withFileTypes: true })) {
       if (!d.isDirectory()) continue;
       const dir = path.join(ACCOUNTS_DIR, d.name);
-      if (accountEmail(dir) === defaultEmail
-        && fs.existsSync(path.join(dir, '.credentials.json'))) {
+      if (
+        accountEmail(dir) === defaultEmail &&
+        fs.existsSync(path.join(dir, '.credentials.json'))
+      ) {
         return d.name;
       }
     }
-  } catch { /* accounts dir doesn't exist yet */ }
+  } catch {
+    /* accounts dir doesn't exist yet */
+  }
   return null;
 }
 
 app.get('/api/profiles', (_req, res) => {
   let profiles = [];
   try {
-    profiles = fs.readdirSync(ACCOUNTS_DIR, { withFileTypes: true })
+    profiles = fs
+      .readdirSync(ACCOUNTS_DIR, { withFileTypes: true })
       .filter((d) => d.isDirectory())
       .map((d) => ({ name: d.name, email: accountEmail(path.join(ACCOUNTS_DIR, d.name)) }));
-  } catch { /* accounts dir doesn't exist yet */ }
+  } catch {
+    /* accounts dir doesn't exist yet */
+  }
   res.json({
     // default = whatever config dir spawned sessions inherit (~/.claude.json
     // unless the server itself was started with CLAUDE_CONFIG_DIR set).
@@ -1256,7 +1411,9 @@ app.delete('/api/profiles/:name', (req, res) => {
   if (!fs.existsSync(dir)) return res.status(404).json({ error: 'no such profile' });
   const inUse = [...sessions.values()].some((s) => s.profile === name && s.status === 'running');
   if (inUse) {
-    return res.status(409).json({ error: 'profile is in use by a running session — kill it first' });
+    return res
+      .status(409)
+      .json({ error: 'profile is in use by a running session — kill it first' });
   }
   try {
     fs.rmSync(dir, { recursive: true, force: true });
@@ -1267,9 +1424,13 @@ app.delete('/api/profiles/:name', (req, res) => {
   // handler). Non-running sessions fall back to the default account on revive;
   // workspaces lose the pin so new panes there don't re-create an empty,
   // logged-out account dir under the old name.
-  sessions.forEach((s) => { if (s.profile === name) s.profile = null; });
+  sessions.forEach((s) => {
+    if (s.profile === name) s.profile = null;
+  });
   persistSessions();
-  workspaces.forEach((w) => { if (w.profile === name) delete w.profile; });
+  workspaces.forEach((w) => {
+    if (w.profile === name) delete w.profile;
+  });
   saveWorkspaces();
   res.json({ ok: true });
 });
@@ -1285,25 +1446,34 @@ app.patch('/api/profiles/:name', (req, res) => {
     return res.status(400).json({ error: 'bad profile name' });
   }
   if (typeof nextName !== 'string' || !/^[\w-]+$/.test(nextName)) {
-    return res.status(400).json({ error: 'new name must be letters, numbers, dashes or underscores' });
+    return res
+      .status(400)
+      .json({ error: 'new name must be letters, numbers, dashes or underscores' });
   }
   if (nextName === name) return res.json({ ok: true });
   const dir = path.join(ACCOUNTS_DIR, name);
   const nextDir = path.join(ACCOUNTS_DIR, nextName);
   if (!fs.existsSync(dir)) return res.status(404).json({ error: 'no such profile' });
-  if (fs.existsSync(nextDir)) return res.status(409).json({ error: 'a profile with that name already exists' });
+  if (fs.existsSync(nextDir))
+    return res.status(409).json({ error: 'a profile with that name already exists' });
   const inUse = [...sessions.values()].some((s) => s.profile === name && s.status === 'running');
   if (inUse) {
-    return res.status(409).json({ error: 'profile is in use by a running session — kill it first' });
+    return res
+      .status(409)
+      .json({ error: 'profile is in use by a running session — kill it first' });
   }
   try {
     fs.renameSync(dir, nextDir);
   } catch (err) {
     return res.status(500).json({ error: `failed to rename: ${err.message}` });
   }
-  sessions.forEach((s) => { if (s.profile === name) s.profile = nextName; });
+  sessions.forEach((s) => {
+    if (s.profile === name) s.profile = nextName;
+  });
   persistSessions();
-  workspaces.forEach((w) => { if (w.profile === name) w.profile = nextName; });
+  workspaces.forEach((w) => {
+    if (w.profile === name) w.profile = nextName;
+  });
   saveWorkspaces();
   res.json({ ok: true });
 });
@@ -1318,9 +1488,17 @@ function gracefulShutdown(signal) {
   if (shuttingDown) return;
   shuttingDown = true;
   dbg('server', `${signal} received — persisting ${sessions.size} session(s), stopping panes`);
-  try { persistSessions(); } catch (err) { dbg('error', `shutdown persist failed: ${err.message}`); }
+  try {
+    persistSessions();
+  } catch (err) {
+    dbg('error', `shutdown persist failed: ${err.message}`);
+  }
   for (const s of sessions.values()) {
-    try { s.pty?.kill(); } catch { /* already gone / node-pty kill race */ }
+    try {
+      s.pty?.kill();
+    } catch {
+      /* already gone / node-pty kill race */
+    }
   }
   setTimeout(() => process.exit(0), 300).unref();
 }
@@ -1334,7 +1512,10 @@ const server = app.listen(PORT, HOST, () => {
   console.log(`Helm ⎈  http://${HOST}:${PORT}`);
   console.log(`token: ${TOKEN}`);
   const dead = [...sessions.values()].filter((s) => s.status === 'dead').length;
-  dbg('server', `started (pid ${process.pid})${dead ? ` — ${dead} dead session(s) loaded, revivable` : ''}`);
+  dbg(
+    'server',
+    `started (pid ${process.pid})${dead ? ` — ${dead} dead session(s) loaded, revivable` : ''}`,
+  );
   checkClaudeVersion(); // async; populates /api/diagnostics for the drift banner
 });
 
@@ -1346,9 +1527,9 @@ server.on('error', (/** @type {NodeJS.ErrnoException} */ err) => {
       : `  lsof -ti :${PORT} | xargs kill`;
     console.error(
       `\nHelm is already running (something is listening on port ${PORT}).\n` +
-      `Open http://${HOST}:${PORT} — or, to restart with new code, stop the old\n` +
-      `server first:\n${killTip}\n` +
-      `(Live panes die with it but come back as revivable.)\n`,
+        `Open http://${HOST}:${PORT} — or, to restart with new code, stop the old\n` +
+        `server first:\n${killTip}\n` +
+        `(Live panes die with it but come back as revivable.)\n`,
     );
     process.exit(1);
   }
@@ -1388,7 +1569,10 @@ server.on('upgrade', (req, socket, head) => {
 //   server → client: {type:'replay',data} | {type:'data',data} | {type:'exit',code}
 //   client → server: {type:'input',data}  | {type:'resize',cols,rows}
 function attach(ws, session) {
-  dbg('ws', `${session.name} (${session.id.slice(0, 8)}) attached (replay ${session.bufLen} bytes)`);
+  dbg(
+    'ws',
+    `${session.name} (${session.id.slice(0, 8)}) attached (replay ${session.bufLen} bytes)`,
+  );
   // Replay the ring buffer so the pane repaints instantly on (re)attach.
   ws.send(JSON.stringify({ type: 'replay', data: session.buffer.join('') }));
   if (session.status === 'exited') {
@@ -1401,12 +1585,20 @@ function attach(ws, session) {
 
   ws.on('message', (raw) => {
     let msg;
-    try { msg = JSON.parse(raw); } catch { return; }
+    try {
+      msg = JSON.parse(raw);
+    } catch {
+      return;
+    }
     if (session.status !== 'running') return;
     if (msg.type === 'input' && typeof msg.data === 'string') {
       session.pty.write(msg.data);
     } else if (msg.type === 'resize' && msg.cols > 0 && msg.rows > 0) {
-      try { session.pty.resize(Math.floor(msg.cols), Math.floor(msg.rows)); } catch { /* exited race */ }
+      try {
+        session.pty.resize(Math.floor(msg.cols), Math.floor(msg.rows));
+      } catch {
+        /* exited race */
+      }
     }
   });
 

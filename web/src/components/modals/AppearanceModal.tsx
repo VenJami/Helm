@@ -12,7 +12,13 @@ const SWATCH: Record<Accent, { dark: string; light: string }> = {
   rose: { dark: '#ef6d9b', light: '#db2777' },
 };
 
-export function AppearanceModal({ theme, accent, onTheme, onAccent, onClose }: {
+export function AppearanceModal({
+  theme,
+  accent,
+  onTheme,
+  onAccent,
+  onClose,
+}: {
   theme: Theme;
   accent: Accent;
   onTheme: (t: Theme) => void;
@@ -46,11 +52,13 @@ export function AppearanceModal({ theme, accent, onTheme, onAccent, onClose }: {
         ))}
       </div>
       <p className="modal-desc">
-        Terminals stay dark in the light theme — Claude's own output colors
-        assume a dark background.
+        Terminals stay dark in the light theme — Claude's own output colors assume a dark
+        background.
       </p>
       <div className="modal-actions">
-        <button className="btn" onClick={onClose}>Done</button>
+        <button className="btn" onClick={onClose}>
+          Done
+        </button>
       </div>
     </Modal>
   );

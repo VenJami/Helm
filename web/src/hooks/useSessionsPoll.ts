@@ -78,22 +78,29 @@ export function useSessionsPoll(notifyEnabled: boolean) {
   const profilesCacheRef = useRef<Profile[]>([]);
 
   const refresh = useCallback(() => {
-    api.listSessions().then((list) => {
-      maybeNotify(list);
-      setSessions(stabilizeSessions(list));
-    }).catch(() => {});
+    api
+      .listSessions()
+      .then((list) => {
+        maybeNotify(list);
+        setSessions(stabilizeSessions(list));
+      })
+      .catch(() => {});
     // Profiles too, so the email shows up right after /login in a pane
-    api.listProfiles().then((info) => {
-      const prevProfiles = profilesCacheRef.current;
-      const unchanged = prevProfiles.length === info.profiles.length
-        && info.profiles.every((p, i) => shallowEqual(p, prevProfiles[i]));
-      if (!unchanged) {
-        profilesCacheRef.current = info.profiles;
-        setProfiles(info.profiles);
-      }
-      setDefaultEmail(info.default.email);
-      setDefaultMapped(info.default.mapped);
-    }).catch(() => {});
+    api
+      .listProfiles()
+      .then((info) => {
+        const prevProfiles = profilesCacheRef.current;
+        const unchanged =
+          prevProfiles.length === info.profiles.length &&
+          info.profiles.every((p, i) => shallowEqual(p, prevProfiles[i]));
+        if (!unchanged) {
+          profilesCacheRef.current = info.profiles;
+          setProfiles(info.profiles);
+        }
+        setDefaultEmail(info.default.email);
+        setDefaultMapped(info.default.mapped);
+      })
+      .catch(() => {});
   }, [maybeNotify, stabilizeSessions]);
 
   useEffect(() => {
@@ -103,9 +110,12 @@ export function useSessionsPoll(notifyEnabled: boolean) {
   }, [refresh]);
 
   return {
-    sessions, setSessions,
-    profiles, setProfiles,
-    defaultEmail, defaultMapped,
+    sessions,
+    setSessions,
+    profiles,
+    setProfiles,
+    defaultEmail,
+    defaultMapped,
     refresh,
   };
 }

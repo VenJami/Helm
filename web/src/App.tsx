@@ -22,7 +22,14 @@ import { AddWorkspaceModal } from './components/modals/AddWorkspaceModal';
 import { AppearanceModal } from './components/modals/AppearanceModal';
 import { IconBug, IconMinus, IconPalette, IconPanelLeftOpen, IconPlus } from './components/Icons';
 import {
-  AnimateIcon, IconBellOff, IconBellRing, IconChart, IconNfc, IconRefreshCcw, IconSearch, IconTerminal,
+  AnimateIcon,
+  IconBellOff,
+  IconBellRing,
+  IconChart,
+  IconNfc,
+  IconRefreshCcw,
+  IconSearch,
+  IconTerminal,
 } from './components/AnimatedIcons';
 
 // Which modal is open. Each modal component owns its own draft state — App
@@ -71,9 +78,8 @@ export function App() {
   );
   // Data layer (extracted hooks): sessions+profiles poll w/ stable references
   // and edge-triggered notifications, plus per-workspace git/dev-server status.
-  const {
-    sessions, setSessions, profiles, setProfiles, defaultEmail, defaultMapped, refresh,
-  } = useSessionsPoll(notify);
+  const { sessions, setSessions, profiles, setProfiles, defaultEmail, defaultMapped, refresh } =
+    useSessionsPoll(notify);
   const { gitInfo, serverInfo, setServerInfo } = useWorkspaceStatus();
   // Theme + accent, applied as data attributes on <html> (persisted).
   const { theme, setTheme, accent, setAccent } = useTheme();
@@ -138,11 +144,15 @@ export function App() {
   const [autoRevive, setAutoRevive] = useState(false); // mirrors server settings
 
   // Server console window (start-helm.cmd terminal) show/hide toggle.
-  const [consoleState, setConsoleState] = useState<{ supported: boolean; visible: boolean }>(
-    { supported: false, visible: true },
-  );
+  const [consoleState, setConsoleState] = useState<{ supported: boolean; visible: boolean }>({
+    supported: false,
+    visible: true,
+  });
   useEffect(() => {
-    api.getConsole().then(setConsoleState).catch(() => {});
+    api
+      .getConsole()
+      .then(setConsoleState)
+      .catch(() => {});
   }, []);
   const toggleConsole = async () => {
     try {
@@ -163,15 +173,21 @@ export function App() {
     if (!debugOpen) return;
     let live = true;
     const pull = () =>
-      api.getLogs(logSeqRef.current).then(({ seq, entries, startedAt, pid }) => {
-        if (!live) return;
-        setServerMeta({ startedAt, pid });
-        logSeqRef.current = seq;
-        if (entries.length) setLogs((prev) => [...prev, ...entries].slice(-500));
-      }).catch(() => {});
+      api
+        .getLogs(logSeqRef.current)
+        .then(({ seq, entries, startedAt, pid }) => {
+          if (!live) return;
+          setServerMeta({ startedAt, pid });
+          logSeqRef.current = seq;
+          if (entries.length) setLogs((prev) => [...prev, ...entries].slice(-500));
+        })
+        .catch(() => {});
     pull();
     const timer = setInterval(pull, 2000);
-    return () => { live = false; clearInterval(timer); };
+    return () => {
+      live = false;
+      clearInterval(timer);
+    };
   }, [debugOpen]);
   useEffect(() => {
     logEndRef.current?.scrollIntoView({ block: 'end' });
@@ -207,7 +223,12 @@ export function App() {
   // Ctrl+K / Cmd+K toggles the command palette (quick pane/workspace switcher).
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && (e.key === 'k' || e.key === 'K')) {
+      if (
+        (e.ctrlKey || e.metaKey) &&
+        !e.shiftKey &&
+        !e.altKey &&
+        (e.key === 'k' || e.key === 'K')
+      ) {
         e.preventDefault();
         setPaletteOpen((o) => !o);
       }
@@ -239,8 +260,14 @@ export function App() {
 
   // One-shot boot fetches (session/profile/git/server polling lives in hooks).
   useEffect(() => {
-    api.listWorkspaces().then(setWorkspaces).catch(() => {});
-    api.getSettings().then((s) => setAutoRevive(s.autoRevive)).catch(() => {});
+    api
+      .listWorkspaces()
+      .then(setWorkspaces)
+      .catch(() => {});
+    api
+      .getSettings()
+      .then((s) => setAutoRevive(s.autoRevive))
+      .catch(() => {});
   }, []);
 
   const toggleAutoRevive = async () => {
@@ -315,7 +342,10 @@ export function App() {
   const [dragId, setDragId] = useState<string | null>(null);
   const [dragOverId, setDragOverId] = useState<string | null>(null);
   const onGripDragStart = useCallback((id: string) => setDragId(id), []);
-  const onGripDragEnd = useCallback(() => { setDragId(null); setDragOverId(null); }, []);
+  const onGripDragEnd = useCallback(() => {
+    setDragId(null);
+    setDragOverId(null);
+  }, []);
   const dropPane = (targetId: string) => {
     if (!dragId || !selected || dragId === targetId) return;
     const ids = panes.map((p) => p.id);
@@ -332,7 +362,8 @@ export function App() {
   const wsName = useCallback(
     (dir: string) =>
       workspaces.find((w) => w.dir === dir)?.name ??
-      dir.split(/[\\/]/).filter(Boolean).pop() ?? dir,
+      dir.split(/[\\/]/).filter(Boolean).pop() ??
+      dir,
     [workspaces],
   );
   const runningPanes = useMemo(
@@ -342,7 +373,8 @@ export function App() {
         .sort((a, b) =>
           a.workspace === b.workspace
             ? a.createdAt.localeCompare(b.createdAt)
-            : wsName(a.workspace).localeCompare(wsName(b.workspace))),
+            : wsName(a.workspace).localeCompare(wsName(b.workspace)),
+        ),
     [sessions, wsName],
   );
 
@@ -378,8 +410,14 @@ export function App() {
   const setWorkspacePort = async (id: string, port: number | null) => {
     const ws = await api.updateWorkspace(id, { port });
     setWorkspaces((prev) => prev.map((w) => (w.id === id ? ws : w)));
-    if (port === null) setServerInfo((prev) => { const next = { ...prev }; delete next[id]; return next; });
-    api.getWorkspacesServers()
+    if (port === null)
+      setServerInfo((prev) => {
+        const next = { ...prev };
+        delete next[id];
+        return next;
+      });
+    api
+      .getWorkspacesServers()
       .then((list) => setServerInfo(Object.fromEntries(list.map((s) => [s.id, s]))))
       .catch(() => {});
   };
@@ -423,16 +461,19 @@ export function App() {
 
   // Stable identities (empty deps — each only uses functional setState) so
   // they pass through React.memo(TerminalPane) as unchanged props every poll.
-  const onKilled = useCallback((id: string) => {
-    setSessions((prev) => prev.filter((s) => s.id !== id));
-    setMaximizedId((m) => (m === id ? null : m));
-    setMinimizedIds((prev) => {
-      if (!prev.has(id)) return prev;
-      const next = new Set(prev);
-      next.delete(id);
-      return next;
-    });
-  }, [setSessions]);
+  const onKilled = useCallback(
+    (id: string) => {
+      setSessions((prev) => prev.filter((s) => s.id !== id));
+      setMaximizedId((m) => (m === id ? null : m));
+      setMinimizedIds((prev) => {
+        if (!prev.has(id)) return prev;
+        const next = new Set(prev);
+        next.delete(id);
+        return next;
+      });
+    },
+    [setSessions],
+  );
 
   const minimizePane = useCallback((id: string) => {
     setMinimizedIds((prev) => new Set(prev).add(id));
@@ -446,10 +487,13 @@ export function App() {
     });
   }, []);
 
-  const toggleMaxPane = useCallback((id: string) => {
-    restorePane(id);
-    setMaximizedId((m) => (m === id ? null : id));
-  }, [restorePane]);
+  const toggleMaxPane = useCallback(
+    (id: string) => {
+      restorePane(id);
+      setMaximizedId((m) => (m === id ? null : id));
+    },
+    [restorePane],
+  );
 
   // Bring a pane front-and-center: scroll it into view, focus its terminal
   // (via its registered handle), and pulse it so the eye lands on it. The 60 ms
@@ -581,7 +625,10 @@ export function App() {
           onDragStart={setDragWsId}
           onDragOver={setDragOverWsId}
           onDrop={dropWorkspace}
-          onDragEnd={() => { setDragWsId(null); setDragOverWsId(null); }}
+          onDragEnd={() => {
+            setDragWsId(null);
+            setDragOverWsId(null);
+          }}
         />
       )}
       <main className="main">
@@ -680,9 +727,11 @@ export function App() {
                   <button
                     className={`tbtn ${autoRevive ? 'on' : ''}`}
                     onClick={toggleAutoRevive}
-                    title={autoRevive
-                      ? 'Auto-revive on: dead panes come back automatically when the server starts'
-                      : 'Auto-revive off — after a server restart, each dead pane needs a revive click'}
+                    title={
+                      autoRevive
+                        ? 'Auto-revive on: dead panes come back automatically when the server starts'
+                        : 'Auto-revive off — after a server restart, each dead pane needs a revive click'
+                    }
                   >
                     <IconRefreshCcw /> Auto-revive
                   </button>
@@ -692,9 +741,11 @@ export function App() {
                     <button
                       className={`tbtn ${consoleState.visible ? 'on' : ''}`}
                       onClick={toggleConsole}
-                      title={consoleState.visible
-                        ? 'Hide the Helm server console window'
-                        : 'Show the Helm server console window'}
+                      title={
+                        consoleState.visible
+                          ? 'Hide the Helm server console window'
+                          : 'Show the Helm server console window'
+                      }
                     >
                       <IconTerminal /> Console
                     </button>
@@ -711,9 +762,11 @@ export function App() {
                   <button
                     className={`tbtn ${notify ? 'on' : ''}`}
                     onClick={toggleNotify}
-                    title={notify
-                      ? 'Alerts on: you get a desktop notification when a pane needs input or finishes (while this tab is unfocused)'
-                      : 'Alerts off — click to get desktop notifications when a pane needs input or finishes'}
+                    title={
+                      notify
+                        ? 'Alerts on: you get a desktop notification when a pane needs input or finishes (while this tab is unfocused)'
+                        : 'Alerts off — click to get desktop notifications when a pane needs input or finishes'
+                    }
                   >
                     {notify ? <IconBellRing /> : <IconBellOff />} Alerts
                   </button>
@@ -746,12 +799,20 @@ export function App() {
               <div
                 ref={gridRef}
                 className={viewMax ? 'grid cols-1' : `grid cols-${gridCols}`}
-                style={viewMax ? undefined : {
-                  gridTemplateColumns: colWeights.map((w) => `${w}fr`).join(' '),
-                  ...(gridRows > 1
-                    ? { gridTemplateRows: rowWeights.map((w) => `minmax(280px, ${w}fr)`).join(' ') }
-                    : {}),
-                }}
+                style={
+                  viewMax
+                    ? undefined
+                    : {
+                        gridTemplateColumns: colWeights.map((w) => `${w}fr`).join(' '),
+                        ...(gridRows > 1
+                          ? {
+                              gridTemplateRows: rowWeights
+                                .map((w) => `minmax(280px, ${w}fr)`)
+                                .join(' '),
+                            }
+                          : {}),
+                      }
+                }
               >
                 {!viewMax && (gridCols > 1 || gridRows > 1) && (
                   <GridResizers
@@ -770,7 +831,9 @@ export function App() {
                       else paneSlotRefs.current.delete(s.id);
                     }}
                     className={`pane-slot ${dragOverId === s.id && dragId && dragId !== s.id ? 'drag-over' : ''}${flashId === s.id ? ' pane-flash' : ''}`}
-                    onFocusCapture={() => { activePaneRef.current = s.id; }}
+                    onFocusCapture={() => {
+                      activePaneRef.current = s.id;
+                    }}
                     onDragOver={(e) => {
                       if (!dragId) return;
                       e.preventDefault();
@@ -832,8 +895,12 @@ export function App() {
                 {serverMeta &&
                   ` — up since ${new Date(serverMeta.startedAt).toLocaleTimeString()} · pid ${serverMeta.pid}`}
               </span>
-              <button className="btn btn-small btn-ghost" onClick={() => setLogs([])}>Clear</button>
-              <button className="btn btn-small btn-ghost" onClick={() => setDebugOpen(false)}>Close</button>
+              <button className="btn btn-small btn-ghost" onClick={() => setLogs([])}>
+                Clear
+              </button>
+              <button className="btn btn-small btn-ghost" onClick={() => setDebugOpen(false)}>
+                Close
+              </button>
             </div>
             <div className="debug-body">
               {logs.length === 0 && <div className="debug-line muted">waiting for events…</div>}

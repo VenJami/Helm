@@ -1,4 +1,16 @@
-import type { AccountUsage, ConsoleState, Diagnostics, GitInfo, HelmSettings, LogsResponse, ProfilesInfo, ServerInfo, SessionInfo, UsageInfo, Workspace } from './types';
+import type {
+  AccountUsage,
+  ConsoleState,
+  Diagnostics,
+  GitInfo,
+  HelmSettings,
+  LogsResponse,
+  ProfilesInfo,
+  ServerInfo,
+  SessionInfo,
+  UsageInfo,
+  Workspace,
+} from './types';
 
 const TOKEN = (window as unknown as { __HELM_TOKEN__: string }).__HELM_TOKEN__;
 
@@ -22,7 +34,7 @@ async function req<T>(path: string, opts: RequestInit = {}): Promise<T> {
     throw new Error('session token expired — reloading page');
   }
   if (!res.ok) {
-    const body = await res.json().catch(() => ({} as { error?: string }));
+    const body = await res.json().catch(() => ({}) as { error?: string });
     throw new Error(body.error || res.statusText);
   }
   return res.json();
@@ -58,7 +70,7 @@ export const api = {
       body: file,
     });
     if (!res.ok) {
-      const body = await res.json().catch(() => ({} as { error?: string }));
+      const body = await res.json().catch(() => ({}) as { error?: string });
       throw new Error(body.error || res.statusText);
     }
     return res.json() as Promise<{ ok: boolean; path: string }>;
@@ -89,8 +101,7 @@ export const api = {
   updateWorkspace: (
     id: string,
     patch: { name?: string; dir?: string; profile?: string | null; port?: number | null },
-  ) =>
-    req<Workspace>(`/workspaces/${id}`, { method: 'PATCH', body: JSON.stringify(patch) }),
+  ) => req<Workspace>(`/workspaces/${id}`, { method: 'PATCH', body: JSON.stringify(patch) }),
   removeWorkspace: (id: string) => req<{ ok: boolean }>(`/workspaces/${id}`, { method: 'DELETE' }),
 
   listProfiles: () => req<ProfilesInfo>('/profiles'),

@@ -16,24 +16,33 @@ export function useGridWeights(wsId: string | null) {
   }, [wsId]);
 
   // Weights for an n-track axis; anything missing/mismatched = equal tracks.
-  const weightsFor = useCallback((axis: Axis, n: number): number[] => {
-    const w = all[axis + n];
-    return w && w.length === n ? w : Array(n).fill(1);
-  }, [all]);
+  const weightsFor = useCallback(
+    (axis: Axis, n: number): number[] => {
+      const w = all[axis + n];
+      return w && w.length === n ? w : Array(n).fill(1);
+    },
+    [all],
+  );
 
   // Live during a drag (persist=false), written to storage on release.
-  const setWeights = useCallback((axis: Axis, n: number, w: number[], persist: boolean) => {
-    setAll((prev) => {
-      const next = { ...prev, [axis + n]: w };
-      if (persist && wsId) storage.gridWeights.set(wsId, next);
-      return next;
-    });
-  }, [wsId]);
+  const setWeights = useCallback(
+    (axis: Axis, n: number, w: number[], persist: boolean) => {
+      setAll((prev) => {
+        const next = { ...prev, [axis + n]: w };
+        if (persist && wsId) storage.gridWeights.set(wsId, next);
+        return next;
+      });
+    },
+    [wsId],
+  );
 
   // Double-click a gutter → this axis back to equal tracks.
-  const resetAxis = useCallback((axis: Axis, n: number) => {
-    setWeights(axis, n, Array(n).fill(1), true);
-  }, [setWeights]);
+  const resetAxis = useCallback(
+    (axis: Axis, n: number) => {
+      setWeights(axis, n, Array(n).fill(1), true);
+    },
+    [setWeights],
+  );
 
   return { weightsFor, setWeights, resetAxis };
 }

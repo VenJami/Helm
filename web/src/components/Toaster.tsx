@@ -6,7 +6,11 @@ import { IconX } from './Icons';
 // bus lets any component raise a toast without prop-drilling.
 
 export type ToastKind = 'error' | 'success' | 'info';
-interface Toast { id: number; kind: ToastKind; message: string; }
+interface Toast {
+  id: number;
+  kind: ToastKind;
+  message: string;
+}
 
 let seq = 0;
 function emit(kind: ToastKind, message: string) {

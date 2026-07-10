@@ -6,10 +6,15 @@ import type { SessionInfo } from '../../types';
 // Type one instruction into several panes at once. Owns the draft text, the
 // target set (seeded by the parent — current workspace's non-waiting panes),
 // the busy flag, and the send call; failure shows inline, success closes.
-export function BroadcastModal({ panes, initialIds, wsName, onClose }: {
-  panes: SessionInfo[];               // every running pane, across workspaces
-  initialIds: Set<string>;            // default-checked targets
-  wsName: (dir: string) => string;    // pretty workspace label for a pane row
+export function BroadcastModal({
+  panes,
+  initialIds,
+  wsName,
+  onClose,
+}: {
+  panes: SessionInfo[]; // every running pane, across workspaces
+  initialIds: Set<string>; // default-checked targets
+  wsName: (dir: string) => string; // pretty workspace label for a pane row
   onClose: () => void;
 }) {
   const [text, setText] = useState('');
@@ -36,9 +41,9 @@ export function BroadcastModal({ panes, initialIds, wsName, onClose }: {
   return (
     <Modal title="Broadcast to panes" onClose={onClose}>
       <p className="modal-desc">
-        Types one instruction into every selected pane and presses Enter —
-        as if you'd typed it in each terminal yourself. Panes waiting on a
-        question start unchecked (Enter could answer their dialog).
+        Types one instruction into every selected pane and presses Enter — as if you'd typed it in
+        each terminal yourself. Panes waiting on a question start unchecked (Enter could answer
+        their dialog).
       </p>
       <input
         className="modal-input"
@@ -73,15 +78,21 @@ export function BroadcastModal({ panes, initialIds, wsName, onClose }: {
                 ]
               }`}
             />
-            <span className="bc-name" style={{ color: s.color }}>{s.name}</span>
-            <span className="bc-where" title={s.workspace}>{wsName(s.workspace)}</span>
+            <span className="bc-name" style={{ color: s.color }}>
+              {s.name}
+            </span>
+            <span className="bc-where" title={s.workspace}>
+              {wsName(s.workspace)}
+            </span>
             <span className="bc-activity">{s.activity ?? 'starting'}</span>
           </label>
         ))}
       </div>
       {error && <div className="form-error">{error}</div>}
       <div className="modal-actions">
-        <button className="btn btn-ghost" onClick={onClose}>Cancel</button>
+        <button className="btn btn-ghost" onClick={onClose}>
+          Cancel
+        </button>
         <button
           className="btn"
           onClick={() => void send()}

@@ -17,7 +17,8 @@ export default defineConfig({
           if (!id.includes('node_modules')) return;
           if (/[\\/]node_modules[\\/]@xterm[\\/]/.test(id)) return 'xterm';
           if (/[\\/]node_modules[\\/]gsap[\\/]/.test(id)) return 'gsap';
-          if (/[\\/]node_modules[\\/](framer-motion|motion|motion-dom|motion-utils)[\\/]/.test(id)) return 'motion';
+          if (/[\\/]node_modules[\\/](framer-motion|motion|motion-dom|motion-utils)[\\/]/.test(id))
+            return 'motion';
           if (/[\\/]node_modules[\\/](react|react-dom|scheduler)[\\/]/.test(id)) return 'react';
         },
       },

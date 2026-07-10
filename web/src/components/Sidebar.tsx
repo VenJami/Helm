@@ -1,7 +1,19 @@
 import { useEffect, useState } from 'react';
 import type { GitInfo, Profile, ServerInfo, SessionInfo, Workspace } from '../types';
 import { accountLabel } from '../accounts';
-import { IconFolder, IconGitBranch, IconGrip, IconHelm, IconPanelLeftClose, IconPencil, IconPlus, IconSearch, IconServer, IconTrash, IconX } from './Icons';
+import {
+  IconFolder,
+  IconGitBranch,
+  IconGrip,
+  IconHelm,
+  IconPanelLeftClose,
+  IconPencil,
+  IconPlus,
+  IconSearch,
+  IconServer,
+  IconTrash,
+  IconX,
+} from './Icons';
 
 interface Props {
   workspaces: Workspace[];
@@ -10,7 +22,7 @@ interface Props {
   servers: Record<string, ServerInfo>; // workspace id → dev-server up/down (configured ports only)
   selectedId: string | null;
   defaultEmail: string | null; // used to label workspaces on the default account
-  profiles: Profile[];         // to reuse a matching profile's name for the default
+  profiles: Profile[]; // to reuse a matching profile's name for the default
   onSelect: (id: string) => void;
   onAddClick: () => void;
   onRename: (id: string, name: string) => Promise<void>;
@@ -28,9 +40,26 @@ interface Props {
 }
 
 export function Sidebar({
-  workspaces, sessions, git, servers, selectedId, defaultEmail, profiles, onSelect, onAddClick,
-  onRename, onChangeDir, onSetPort, onRemove, onHide,
-  dragId, dragOverId, onDragStart, onDragOver, onDrop, onDragEnd,
+  workspaces,
+  sessions,
+  git,
+  servers,
+  selectedId,
+  defaultEmail,
+  profiles,
+  onSelect,
+  onAddClick,
+  onRename,
+  onChangeDir,
+  onSetPort,
+  onRemove,
+  onHide,
+  dragId,
+  dragOverId,
+  onDragStart,
+  onDragOver,
+  onDrop,
+  onDragEnd,
 }: Props) {
   const [query, setQuery] = useState('');
   const shown = query.trim()
@@ -38,14 +67,20 @@ export function Sidebar({
     : workspaces;
   // Right-click menu (rename / change root dir / remove) + the inline editor it opens.
   const [menu, setMenu] = useState<{ id: string; x: number; y: number } | null>(null);
-  const [edit, setEdit] = useState<{ id: string; field: 'name' | 'dir' | 'port'; value: string } | null>(null);
+  const [edit, setEdit] = useState<{
+    id: string;
+    field: 'name' | 'dir' | 'port';
+    value: string;
+  } | null>(null);
   const [editError, setEditError] = useState('');
 
   // Any click, scroll, or Escape dismisses the context menu.
   useEffect(() => {
     if (!menu) return;
     const close = () => setMenu(null);
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setMenu(null); };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setMenu(null);
+    };
     window.addEventListener('click', close);
     window.addEventListener('scroll', close, true);
     window.addEventListener('keydown', onKey);
@@ -84,7 +119,10 @@ export function Sidebar({
     if (!edit) return;
     const v = edit.value.trim();
     // Port is the one field where blank is meaningful — it clears the check.
-    if (!v && edit.field !== 'port') { setEdit(null); return; }
+    if (!v && edit.field !== 'port') {
+      setEdit(null);
+      return;
+    }
     try {
       if (edit.field === 'name') await onRename(edit.id, v);
       else if (edit.field === 'dir') await onChangeDir(edit.id, v);
@@ -129,15 +167,20 @@ export function Sidebar({
                 className="ws-edit-input"
                 value={edit.value}
                 placeholder={
-                  edit.field === 'dir' ? 'directory path'
-                    : edit.field === 'port' ? 'dev-server port (blank to clear)'
-                    : 'workspace name'
+                  edit.field === 'dir'
+                    ? 'directory path'
+                    : edit.field === 'port'
+                      ? 'dev-server port (blank to clear)'
+                      : 'workspace name'
                 }
                 autoFocus
                 onChange={(e) => setEdit({ ...edit, value: e.target.value })}
                 onKeyDown={(e) => {
                   if (e.key === 'Enter') void submitEdit();
-                  else if (e.key === 'Escape') { setEdit(null); setEditError(''); }
+                  else if (e.key === 'Escape') {
+                    setEdit(null);
+                    setEditError('');
+                  }
                 }}
                 onBlur={() => void submitEdit()}
               />
@@ -178,7 +221,9 @@ export function Sidebar({
               <IconFolder size={14} />
               <div className="ws-text">
                 <span className="ws-name">{ws.name}</span>
-                <span className="ws-account">{ws.profile || accountLabel('', defaultEmail, profiles)}</span>
+                <span className="ws-account">
+                  {ws.profile || accountLabel('', defaultEmail, profiles)}
+                </span>
                 {git[ws.id]?.branch && (
                   <span
                     className="ws-git"
@@ -186,18 +231,26 @@ export function Sidebar({
                   >
                     <IconGitBranch size={11} />
                     <span className="ws-git-branch">{git[ws.id].branch}</span>
-                    {git[ws.id].dirty && <span className="ws-git-dirty" title="uncommitted changes" />}
-                    {git[ws.id].ahead > 0 && <span className="ws-git-track">↑{git[ws.id].ahead}</span>}
-                    {git[ws.id].behind > 0 && <span className="ws-git-track">↓{git[ws.id].behind}</span>}
+                    {git[ws.id].dirty && (
+                      <span className="ws-git-dirty" title="uncommitted changes" />
+                    )}
+                    {git[ws.id].ahead > 0 && (
+                      <span className="ws-git-track">↑{git[ws.id].ahead}</span>
+                    )}
+                    {git[ws.id].behind > 0 && (
+                      <span className="ws-git-track">↓{git[ws.id].behind}</span>
+                    )}
                   </span>
                 )}
                 {ws.port && (
                   <span
                     className="ws-server"
                     title={
-                      !servers[ws.id] ? `checking dev server on :${ws.port}…`
-                        : servers[ws.id].up ? `dev server up on :${ws.port}`
-                        : `dev server down on :${ws.port}`
+                      !servers[ws.id]
+                        ? `checking dev server on :${ws.port}…`
+                        : servers[ws.id].up
+                          ? `dev server up on :${ws.port}`
+                          : `dev server down on :${ws.port}`
                     }
                   >
                     <span
@@ -213,13 +266,19 @@ export function Sidebar({
                 return (
                   <span className="ws-badges">
                     {p.working > 0 && (
-                      <span className="ws-badge ws-badge-working" title={`${p.working} working`}>{p.working}</span>
+                      <span className="ws-badge ws-badge-working" title={`${p.working} working`}>
+                        {p.working}
+                      </span>
                     )}
                     {p.waiting > 0 && (
-                      <span className="ws-badge ws-badge-waiting" title={`${p.waiting} waiting`}>{p.waiting}</span>
+                      <span className="ws-badge ws-badge-waiting" title={`${p.waiting} waiting`}>
+                        {p.waiting}
+                      </span>
                     )}
                     {p.working === 0 && p.waiting === 0 && (
-                      <span className="ws-badge" title={`${p.total} running`}>{p.total}</span>
+                      <span className="ws-badge" title={`${p.total} running`}>
+                        {p.total}
+                      </span>
                     )}
                   </span>
                 );
@@ -250,9 +309,15 @@ export function Sidebar({
           className="ws-menu"
           style={{ top: menu.y, left: menu.x }}
           onClick={(e) => e.stopPropagation()}
-          onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); }}
+          onContextMenu={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+          }}
         >
-          <button className="ws-menu-item" onClick={() => startEdit(menuWs.id, 'name', menuWs.name)}>
+          <button
+            className="ws-menu-item"
+            onClick={() => startEdit(menuWs.id, 'name', menuWs.name)}
+          >
             <IconPencil size={13} /> Rename
           </button>
           <button className="ws-menu-item" onClick={() => startEdit(menuWs.id, 'dir', menuWs.dir)}>
@@ -267,7 +332,10 @@ export function Sidebar({
           <div className="ws-menu-sep" />
           <button
             className="ws-menu-item ws-menu-danger"
-            onClick={() => { onRemove(menuWs.id); setMenu(null); }}
+            onClick={() => {
+              onRemove(menuWs.id);
+              setMenu(null);
+            }}
           >
             <IconTrash size={13} /> Remove workspace
           </button>

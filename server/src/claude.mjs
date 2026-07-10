@@ -27,15 +27,22 @@ export const diagnostics = {
 
 export function noteDrift(key, message) {
   const hit = diagnostics.warnings.get(key);
-  if (hit) { hit.count += 1; return; } // already surfaced — just count it
+  if (hit) {
+    hit.count += 1;
+    return;
+  } // already surfaced — just count it
   diagnostics.warnings.set(key, { key, message, since: new Date().toISOString(), count: 1 });
   dbg('drift', message);
 }
 
 // Numeric semver compare (major.minor.patch). Returns -1 / 0 / 1.
 function cmpVersion(a, b) {
-  const pa = String(a).split('.').map((n) => parseInt(n, 10) || 0);
-  const pb = String(b).split('.').map((n) => parseInt(n, 10) || 0);
+  const pa = String(a)
+    .split('.')
+    .map((n) => parseInt(n, 10) || 0);
+  const pb = String(b)
+    .split('.')
+    .map((n) => parseInt(n, 10) || 0);
   for (let i = 0; i < 3; i++) {
     if ((pa[i] || 0) !== (pb[i] || 0)) return (pa[i] || 0) < (pb[i] || 0) ? -1 : 1;
   }
@@ -44,27 +51,36 @@ function cmpVersion(a, b) {
 
 // Runs once after boot. shell:true so Windows can launch the `claude.cmd` shim.
 export function checkClaudeVersion() {
-  execFile(CLAUDE_CMD, ['--version'], { shell: true, windowsHide: true, timeout: 8000 }, (err, stdout) => {
-    diagnostics.claude.checked = true;
-    if (err) {
-      diagnostics.claude.ok = false;
-      diagnostics.claude.error = err.message;
-      noteDrift('claude-missing',
-        `Couldn't run \`${CLAUDE_CMD} --version\` — is the claude CLI installed and on PATH? ` +
-        `Panes, usage and revive all need it. (${err.message})`);
-      return;
-    }
-    const m = String(stdout).match(/(\d+\.\d+\.\d+)/);
-    diagnostics.claude.version = m ? m[1] : String(stdout).trim() || null;
-    if (m && cmpVersion(m[1], CLAUDE_VERSION_FLOOR) < 0) {
-      diagnostics.claude.ok = false;
-      noteDrift('claude-below-floor',
-        `claude ${m[1]} is below the version Helm was verified against (${CLAUDE_VERSION_FLOOR}). ` +
-        `Usage, status and revive may misbehave — update claude if these look wrong.`);
-    } else {
-      dbg('server', `claude version ${diagnostics.claude.version ?? '(unparsed)'}`);
-    }
-  });
+  execFile(
+    CLAUDE_CMD,
+    ['--version'],
+    { shell: true, windowsHide: true, timeout: 8000 },
+    (err, stdout) => {
+      diagnostics.claude.checked = true;
+      if (err) {
+        diagnostics.claude.ok = false;
+        diagnostics.claude.error = err.message;
+        noteDrift(
+          'claude-missing',
+          `Couldn't run \`${CLAUDE_CMD} --version\` — is the claude CLI installed and on PATH? ` +
+            `Panes, usage and revive all need it. (${err.message})`,
+        );
+        return;
+      }
+      const m = String(stdout).match(/(\d+\.\d+\.\d+)/);
+      diagnostics.claude.version = m ? m[1] : String(stdout).trim() || null;
+      if (m && cmpVersion(m[1], CLAUDE_VERSION_FLOOR) < 0) {
+        diagnostics.claude.ok = false;
+        noteDrift(
+          'claude-below-floor',
+          `claude ${m[1]} is below the version Helm was verified against (${CLAUDE_VERSION_FLOOR}). ` +
+            `Usage, status and revive may misbehave — update claude if these look wrong.`,
+        );
+      } else {
+        dbg('server', `claude version ${diagnostics.claude.version ?? '(unparsed)'}`);
+      }
+    },
+  );
 }
 
 // ------------------------------------------------------------ model pricing
@@ -88,14 +104,15 @@ export function tokenCost(model, { input = 0, output = 0, cacheRead = 0, cacheWr
     // A real model with real tokens that matches none of our price regexes =
     // claude shipped a new family; cost silently under-reports until we add it.
     if (model && model !== '<synthetic>' && (input || output || cacheRead || cacheWrite)) {
-      noteDrift(`unknown-model:${model}`,
+      noteDrift(
+        `unknown-model:${model}`,
         `Unknown model "${model}" — its cost isn't counted (add it to MODEL_PRICING). ` +
-        `A newer claude model family has probably shipped, so $ estimates read low.`);
+          `A newer claude model family has probably shipped, so $ estimates read low.`,
+      );
     }
     return 0;
   }
-  return (input * p.in + output * p.out
-    + cacheRead * p.in * 0.1 + cacheWrite * p.in * 1.25) / 1e6;
+  return (input * p.in + output * p.out + cacheRead * p.in * 0.1 + cacheWrite * p.in * 1.25) / 1e6;
 }
 
 // -------------------------------------------------------- transcript parsing
@@ -115,12 +132,15 @@ function readAppendedLines(file, from, pending, size) {
   const chunk = Buffer.alloc(size - from);
   try {
     fs.readSync(fd, chunk, 0, chunk.length, from);
-  } finally { fs.closeSync(fd); }
+  } finally {
+    fs.closeSync(fd);
+  }
   const data = pending?.length ? Buffer.concat([pending, chunk]) : chunk;
   const lines = [];
   let start = 0;
   for (let i = 0; i < data.length; i++) {
-    if (data[i] === 0x0a) { // '\n'
+    if (data[i] === 0x0a) {
+      // '\n'
       if (i > start) lines.push(data.subarray(start, i).toString('utf8'));
       start = i + 1;
     }
@@ -131,7 +151,11 @@ function readAppendedLines(file, from, pending, size) {
 
 export function parseTranscriptFile(file) {
   let stat;
-  try { stat = fs.statSync(file); } catch { return null; }
+  try {
+    stat = fs.statSync(file);
+  } catch {
+    return null;
+  }
   let entry = fileUsageCache.get(file);
   if (entry && entry.mtimeMs === stat.mtimeMs && entry.size === stat.size) {
     fileUsageCache.delete(file); // re-insert to mark most-recently-used
@@ -147,12 +171,22 @@ export function parseTranscriptFile(file) {
   if (!incremental) entry = { byMessage: new Map(), pending: Buffer.alloc(0), sawJson: false };
   let lines;
   try {
-    ({ lines, pending: entry.pending } =
-      readAppendedLines(file, incremental ? entry.size : 0, entry.pending, stat.size));
-  } catch { return null; }
+    ({ lines, pending: entry.pending } = readAppendedLines(
+      file,
+      incremental ? entry.size : 0,
+      entry.pending,
+      stat.size,
+    ));
+  } catch {
+    return null;
+  }
   for (const line of lines) {
     let e;
-    try { e = JSON.parse(line); } catch { continue; }
+    try {
+      e = JSON.parse(line);
+    } catch {
+      continue;
+    }
     entry.sawJson = true; // any JSON at all → drift signal below can trust "shape" verdicts
     const usage = e?.message?.usage;
     const model = e?.message?.model;
@@ -190,10 +224,12 @@ export function parseTranscriptFile(file) {
   // fields renamed or moved). Gated by size so fresh/short sessions with no
   // assistant turn yet don't false-alarm. (noteDrift dedupes by key.)
   if (entry.sawJson && events.length === 0 && stat.size > 16 * 1024) {
-    noteDrift('transcript-shape',
+    noteDrift(
+      'transcript-shape',
       `A ${Math.round(stat.size / 1024)} KB transcript parsed as JSON but produced 0 usage entries ` +
-      `(e.g. ${path.basename(file)}) — the claude transcript format may have changed, so usage reads low. ` +
-      `See docs/CLAUDE_INTERNALS.md.`);
+        `(e.g. ${path.basename(file)}) — the claude transcript format may have changed, so usage reads low. ` +
+        `See docs/CLAUDE_INTERNALS.md.`,
+    );
   }
   fileUsageCache.delete(file); // re-insert to mark most-recently-used
   fileUsageCache.set(file, entry);
@@ -211,10 +247,12 @@ export function transcriptFiles(configDir) {
   /** @type {string[]} */
   let entries = [];
   // recursive readdir returns string[] here (no Buffer encoding requested)
-  try { entries = /** @type {string[]} */ (fs.readdirSync(root, { recursive: true })); } catch { return []; }
-  return entries
-    .filter((f) => f.endsWith('.jsonl'))
-    .map((f) => path.join(root, f));
+  try {
+    entries = /** @type {string[]} */ (fs.readdirSync(root, { recursive: true }));
+  } catch {
+    return [];
+  }
+  return entries.filter((f) => f.endsWith('.jsonl')).map((f) => path.join(root, f));
 }
 
 // A short, human-readable title for a pane derived from its conversation: the
@@ -225,36 +263,61 @@ export function transcriptFiles(configDir) {
 // runs for every session on every 3 s /api/sessions poll — a full re-read of a
 // growing multi-MB transcript here used to stall the event loop).
 const summaryCache = new Map(); // transcript path → {mtimeMs, size, pending, summary}
-const SUMMARY_CACHE_MAX = 512;  // bound memory like fileUsageCache (sessions churn)
+const SUMMARY_CACHE_MAX = 512; // bound memory like fileUsageCache (sessions churn)
 
 export function firstPromptSummary(file) {
   if (!file) return null;
   let stat;
-  try { stat = fs.statSync(file); } catch { return null; }
+  try {
+    stat = fs.statSync(file);
+  } catch {
+    return null;
+  }
   let c = summaryCache.get(file);
-  if (c && c.summary) return c.summary;                       // first prompt never changes
+  if (c && c.summary) return c.summary; // first prompt never changes
   if (c && c.mtimeMs === stat.mtimeMs && c.size === stat.size) return null; // unchanged, still none
   const grew = Boolean(c && stat.size > c.size); // append-only → incremental; else full scan
   if (!grew) c = { size: 0, pending: Buffer.alloc(0), summary: null };
   let lines;
   try {
-    ({ lines, pending: c.pending } = readAppendedLines(file, grew ? c.size : 0, c.pending, stat.size));
-  } catch { return null; }
+    ({ lines, pending: c.pending } = readAppendedLines(
+      file,
+      grew ? c.size : 0,
+      c.pending,
+      stat.size,
+    ));
+  } catch {
+    return null;
+  }
   for (const line of lines) {
     let e;
-    try { e = JSON.parse(line); } catch { continue; }
+    try {
+      e = JSON.parse(line);
+    } catch {
+      continue;
+    }
     if (e?.type !== 'user' || e.isMeta) continue;
     const content = e.message?.content;
-    let str = typeof content === 'string'
-      ? content
-      : Array.isArray(content)
-        ? content.filter((b) => b?.type === 'text' && typeof b.text === 'string').map((b) => b.text).join(' ')
-        : '';
+    let str =
+      typeof content === 'string'
+        ? content
+        : Array.isArray(content)
+          ? content
+              .filter((b) => b?.type === 'text' && typeof b.text === 'string')
+              .map((b) => b.text)
+              .join(' ')
+          : '';
     str = str.replace(/\s+/g, ' ').trim();
     // Skip tool results (no text), slash-command wrappers, and system-reminder
     // injections — we want the human's actual opening ask.
-    if (!str || str.startsWith('<command-') || str.startsWith('<local-command') ||
-        str.startsWith('<system-reminder') || str.startsWith('Caveat:')) continue;
+    if (
+      !str ||
+      str.startsWith('<command-') ||
+      str.startsWith('<local-command') ||
+      str.startsWith('<system-reminder') ||
+      str.startsWith('Caveat:')
+    )
+      continue;
     c.summary = str.slice(0, 100);
     break;
   }

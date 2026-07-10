@@ -4,7 +4,11 @@ import type { Profile } from '../../types';
 
 // Create an isolated account profile. Owns its own draft state — closing the
 // dialog discards it (no parent-level field resets to forget).
-export function NewProfileModal({ profiles, onClose, onCreate }: {
+export function NewProfileModal({
+  profiles,
+  onClose,
+  onCreate,
+}: {
   profiles: Profile[];
   onClose: () => void;
   // Called with a validated, unique name; the parent pins it + opens the login pane.
@@ -30,8 +34,8 @@ export function NewProfileModal({ profiles, onClose, onCreate }: {
   return (
     <Modal title="New account profile" onClose={onClose}>
       <p className="modal-desc">
-        Each profile is an isolated Claude Code account. A pane will open with
-        Claude's setup — sign in there with the account this profile is for.
+        Each profile is an isolated Claude Code account. A pane will open with Claude's setup — sign
+        in there with the account this profile is for.
       </p>
       <input
         className="modal-input"
@@ -48,7 +52,9 @@ export function NewProfileModal({ profiles, onClose, onCreate }: {
       />
       {error && <div className="form-error">{error}</div>}
       <div className="modal-actions">
-        <button className="btn btn-ghost" onClick={onClose}>Cancel</button>
+        <button className="btn btn-ghost" onClick={onClose}>
+          Cancel
+        </button>
         <button className="btn" onClick={submit} disabled={!name.trim()}>
           Create &amp; open login pane
         </button>

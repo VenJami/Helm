@@ -15,7 +15,8 @@ export function useWorkspaceStatus() {
   // and working-tree state change on a human timescale, and it spawns git.
   useEffect(() => {
     const pull = () =>
-      api.getWorkspacesGit()
+      api
+        .getWorkspacesGit()
         .then((list) => setGitInfo(Object.fromEntries(list.map((g) => [g.id, g]))))
         .catch(() => {});
     pull();
@@ -27,7 +28,8 @@ export function useWorkspaceStatus() {
   // starting/stopping a project server reflects quickly. Just a TCP connect.
   useEffect(() => {
     const pull = () =>
-      api.getWorkspacesServers()
+      api
+        .getWorkspacesServers()
         .then((list) => setServerInfo(Object.fromEntries(list.map((s) => [s.id, s]))))
         .catch(() => {});
     pull();

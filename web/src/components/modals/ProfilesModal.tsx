@@ -8,11 +8,14 @@ import type { Profile } from '../../types';
 // with an internal view state — the flow never leaves this component, and the
 // rename draft lives here.
 type View =
-  | { mode: 'list' }
-  | { mode: 'rename'; profile: Profile }
-  | { mode: 'delete'; profile: Profile };
+  { mode: 'list' } | { mode: 'rename'; profile: Profile } | { mode: 'delete'; profile: Profile };
 
-export function ProfilesModal({ profiles, onClose, renameProfile, onDelete }: {
+export function ProfilesModal({
+  profiles,
+  onClose,
+  renameProfile,
+  onDelete,
+}: {
   profiles: Profile[];
   onClose: () => void;
   // Performs the rename (API + state sync) — throws on failure so the error
@@ -70,7 +73,9 @@ export function ProfilesModal({ profiles, onClose, renameProfile, onDelete }: {
         />
         {error && <div className="form-error">{error}</div>}
         <div className="modal-actions">
-          <button className="btn btn-ghost" onClick={backToList}>Back</button>
+          <button className="btn btn-ghost" onClick={backToList}>
+            Back
+          </button>
           <button
             className="btn"
             onClick={() => void submitRename(view.profile.name)}
@@ -88,18 +93,25 @@ export function ProfilesModal({ profiles, onClose, renameProfile, onDelete }: {
       <Modal title={`Delete profile "${view.profile.name}"?`} onClose={onClose}>
         <p className="modal-desc">
           {view.profile.email ? (
-            <>Signed in as <b>{view.profile.email}</b>. </>
+            <>
+              Signed in as <b>{view.profile.email}</b>.{' '}
+            </>
           ) : (
             <>This profile was never signed in. </>
           )}
-          Deleting removes its stored login from this PC — the Claude account
-          itself is untouched, and you can add the profile again later.
+          Deleting removes its stored login from this PC — the Claude account itself is untouched,
+          and you can add the profile again later.
         </p>
         <div className="modal-actions">
-          <button className="btn btn-ghost" onClick={backToList}>Cancel</button>
+          <button className="btn btn-ghost" onClick={backToList}>
+            Cancel
+          </button>
           <button
             className="btn btn-danger"
-            onClick={() => { onClose(); onDelete(view.profile.name); }}
+            onClick={() => {
+              onClose();
+              onDelete(view.profile.name);
+            }}
           >
             Delete profile
           </button>
@@ -143,7 +155,9 @@ export function ProfilesModal({ profiles, onClose, renameProfile, onDelete }: {
         </div>
       )}
       <div className="modal-actions">
-        <button className="btn btn-ghost" onClick={onClose}>Close</button>
+        <button className="btn btn-ghost" onClick={onClose}>
+          Close
+        </button>
       </div>
     </Modal>
   );

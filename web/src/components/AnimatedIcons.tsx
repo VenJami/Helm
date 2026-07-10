@@ -89,10 +89,30 @@ function MaximizeIcon({ size, ...props }: IconProps<keyof typeof maximizeAnim>) 
       strokeLinejoin="round"
       {...props}
     >
-      <motion.path d="M8 3H5a2 2 0 0 0-2 2v3" variants={variants.path1} initial="initial" animate={controls} />
-      <motion.path d="M21 8V5a2 2 0 0 0-2-2h-3" variants={variants.path2} initial="initial" animate={controls} />
-      <motion.path d="M3 16v3a2 2 0 0 0 2 2h3" variants={variants.path3} initial="initial" animate={controls} />
-      <motion.path d="M16 21h3a2 2 0 0 0 2-2v-3" variants={variants.path4} initial="initial" animate={controls} />
+      <motion.path
+        d="M8 3H5a2 2 0 0 0-2 2v3"
+        variants={variants.path1}
+        initial="initial"
+        animate={controls}
+      />
+      <motion.path
+        d="M21 8V5a2 2 0 0 0-2-2h-3"
+        variants={variants.path2}
+        initial="initial"
+        animate={controls}
+      />
+      <motion.path
+        d="M3 16v3a2 2 0 0 0 2 2h3"
+        variants={variants.path3}
+        initial="initial"
+        animate={controls}
+      />
+      <motion.path
+        d="M16 21h3a2 2 0 0 0 2-2v-3"
+        variants={variants.path4}
+        initial="initial"
+        animate={controls}
+      />
     </motion.svg>
   );
 }
@@ -137,7 +157,12 @@ function ChartColumnIcon({ size, ...props }: IconProps<keyof typeof chartAnim>) 
       <motion.path d="M8 17V13" variants={variants.path1} initial="initial" animate={controls} />
       <motion.path d="M13 17V5" variants={variants.path2} initial="initial" animate={controls} />
       <motion.path d="M18 17V9" variants={variants.path3} initial="initial" animate={controls} />
-      <motion.path d="M3 3v16a2 2 0 0 0 2 2h16" variants={variants.path4} initial="initial" animate={controls} />
+      <motion.path
+        d="M3 3v16a2 2 0 0 0 2 2h16"
+        variants={variants.path4}
+        initial="initial"
+        animate={controls}
+      />
     </motion.svg>
   );
 }
@@ -196,10 +221,30 @@ function NfcIcon({ size, ...props }: IconProps<keyof typeof nfcAnim>) {
       strokeLinejoin="round"
       {...props}
     >
-      <motion.path d="M6 8.32a7.43 7.43 0 0 1 0 7.36" variants={variants.path1} initial="initial" animate={controls} />
-      <motion.path d="M9.46 6.21a11.76 11.76 0 0 1 0 11.58" variants={variants.path2} initial="initial" animate={controls} />
-      <motion.path d="M12.91 4.1a15.91 15.91 0 0 1 .01 15.8" variants={variants.path3} initial="initial" animate={controls} />
-      <motion.path d="M16.37 2a20.16 20.16 0 0 1 0 20" variants={variants.path4} initial="initial" animate={controls} />
+      <motion.path
+        d="M6 8.32a7.43 7.43 0 0 1 0 7.36"
+        variants={variants.path1}
+        initial="initial"
+        animate={controls}
+      />
+      <motion.path
+        d="M9.46 6.21a11.76 11.76 0 0 1 0 11.58"
+        variants={variants.path2}
+        initial="initial"
+        animate={controls}
+      />
+      <motion.path
+        d="M12.91 4.1a15.91 15.91 0 0 1 .01 15.8"
+        variants={variants.path3}
+        initial="initial"
+        animate={controls}
+      />
+      <motion.path
+        d="M16.37 2a20.16 20.16 0 0 1 0 20"
+        variants={variants.path4}
+        initial="initial"
+        animate={controls}
+      />
     </motion.svg>
   );
 }
@@ -242,8 +287,20 @@ function SearchIcon({ size, ...props }: IconProps<keyof typeof searchAnim>) {
       animate={controls}
       {...props}
     >
-      <motion.path d="m21 21-4.34-4.34" variants={variants.path} initial="initial" animate={controls} />
-      <motion.circle cx={11} cy={11} r={8} variants={variants.circle} initial="initial" animate={controls} />
+      <motion.path
+        d="m21 21-4.34-4.34"
+        variants={variants.path}
+        initial="initial"
+        animate={controls}
+      />
+      <motion.circle
+        cx={11}
+        cy={11}
+        r={8}
+        variants={variants.circle}
+        initial="initial"
+        animate={controls}
+      />
     </motion.svg>
   );
 }
@@ -312,7 +369,12 @@ function ChevronUpIcon({ size, ...props }: IconProps<keyof typeof chevronUpAnim>
       strokeLinejoin="round"
       {...props}
     >
-      <motion.path d="m18 15-6-6-6 6" variants={variants.path} initial="initial" animate={controls} />
+      <motion.path
+        d="m18 15-6-6-6 6"
+        variants={variants.path}
+        initial="initial"
+        animate={controls}
+      />
     </motion.svg>
   );
 }
@@ -353,9 +415,19 @@ function RefreshCcwIcon({ size, ...props }: IconProps<keyof typeof refreshCcwAni
       animate={controls}
       {...props}
     >
-      <motion.path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" variants={variants.path1} initial="initial" animate={controls} />
+      <motion.path
+        d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"
+        variants={variants.path1}
+        initial="initial"
+        animate={controls}
+      />
       <motion.path d="M3 3v5h5" variants={variants.path2} initial="initial" animate={controls} />
-      <motion.path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16" variants={variants.path3} initial="initial" animate={controls} />
+      <motion.path
+        d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16"
+        variants={variants.path3}
+        initial="initial"
+        animate={controls}
+      />
       <motion.path d="M16 16h5v5" variants={variants.path4} initial="initial" animate={controls} />
     </motion.svg>
   );
@@ -400,10 +472,25 @@ function BellOffIcon({ size, ...props }: IconProps<keyof typeof bellOffAnim>) {
       animate={controls}
       {...props}
     >
-      <motion.path d="M10.268 21a2 2 0 0 0 3.464 0" variants={variants.path1} initial="initial" animate={controls} />
-      <motion.path d="M17 17H4a1 1 0 0 1-.74-1.673C4.59 13.956 6 12.499 6 8a6 6 0 0 1 .258-1.742" variants={variants.path2} initial="initial" animate={controls} />
+      <motion.path
+        d="M10.268 21a2 2 0 0 0 3.464 0"
+        variants={variants.path1}
+        initial="initial"
+        animate={controls}
+      />
+      <motion.path
+        d="M17 17H4a1 1 0 0 1-.74-1.673C4.59 13.956 6 12.499 6 8a6 6 0 0 1 .258-1.742"
+        variants={variants.path2}
+        initial="initial"
+        animate={controls}
+      />
       <motion.path d="m2 2 20 20" variants={variants.path3} initial="initial" animate={controls} />
-      <motion.path d="M8.668 3.01A6 6 0 0 1 18 8c0 2.687.77 4.653 1.707 6.05" variants={variants.path4} initial="initial" animate={controls} />
+      <motion.path
+        d="M8.668 3.01A6 6 0 0 1 18 8c0 2.687.77 4.653 1.707 6.05"
+        variants={variants.path4}
+        initial="initial"
+        animate={controls}
+      />
     </motion.svg>
   );
 }
@@ -468,10 +555,30 @@ function BellRingIcon({ size, ...props }: IconProps<keyof typeof bellRingAnim>) 
       animate={controls}
       {...props}
     >
-      <motion.path d="M10.268 21a2 2 0 0 0 3.464 0" variants={variants.path1} initial="initial" animate={controls} />
-      <motion.path d="M22 8c0-2.3-.8-4.3-2-6" variants={variants.path2} initial="initial" animate={controls} />
-      <motion.path d="M4 2C2.8 3.7 2 5.7 2 8" variants={variants.path3} initial="initial" animate={controls} />
-      <motion.path d="M3.262 15.326A1 1 0 0 0 4 17h16a1 1 0 0 0 .74-1.673C19.41 13.956 18 12.499 18 8A6 6 0 0 0 6 8c0 4.499-1.411 5.956-2.738 7.326" variants={variants.path4} initial="initial" animate={controls} />
+      <motion.path
+        d="M10.268 21a2 2 0 0 0 3.464 0"
+        variants={variants.path1}
+        initial="initial"
+        animate={controls}
+      />
+      <motion.path
+        d="M22 8c0-2.3-.8-4.3-2-6"
+        variants={variants.path2}
+        initial="initial"
+        animate={controls}
+      />
+      <motion.path
+        d="M4 2C2.8 3.7 2 5.7 2 8"
+        variants={variants.path3}
+        initial="initial"
+        animate={controls}
+      />
+      <motion.path
+        d="M3.262 15.326A1 1 0 0 0 4 17h16a1 1 0 0 0 .74-1.673C19.41 13.956 18 12.499 18 8A6 6 0 0 0 6 8c0 4.499-1.411 5.956-2.738 7.326"
+        variants={variants.path4}
+        initial="initial"
+        animate={controls}
+      />
     </motion.svg>
   );
 }
@@ -509,8 +616,21 @@ function TerminalIcon({ size, ...props }: IconProps<keyof typeof terminalAnim>) 
       strokeLinejoin="round"
       {...props}
     >
-      <motion.polyline points="4 17 10 11 4 5" variants={variants.polyline} initial="initial" animate={controls} />
-      <motion.line x1={12} x2={20} y1={19} y2={19} variants={variants.line} initial="initial" animate={controls} />
+      <motion.polyline
+        points="4 17 10 11 4 5"
+        variants={variants.polyline}
+        initial="initial"
+        animate={controls}
+      />
+      <motion.line
+        x1={12}
+        x2={20}
+        y1={19}
+        y2={19}
+        variants={variants.line}
+        initial="initial"
+        animate={controls}
+      />
     </motion.svg>
   );
 }
