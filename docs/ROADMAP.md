@@ -212,7 +212,7 @@ split rows. Client-side only (`foldMappedDefault` in web/src/accounts.ts sums
 windows+models; App uses it via a `usageRows` memo) so no server restart / no
 pane deaths; grand total is unchanged (fold only moves numbers between rows).
 Owner context: their default account is heavily used by the VS Code Claude
-extension (dev work) and shares the redacted login with the Claude-2
+extension (dev work) and shares its login with the Claude-2
 profile — folding gives Claude-2 the true combined total (~978M tokens E2E-
 verified: default row gone, "same login" tag gone, Claude-2 carries the sum).
 
@@ -430,6 +430,16 @@ The whole-codebase reformat is its own commit, listed in
 .git-blame-ignore-revs so blame skips it. `npm run lint / format /
 format:check` in both packages; CI enforces lint + format. Verified: web
 tsc/vitest 21/build, server typecheck/smoke 13, real-claude e2e 10/10.
+
+Public-release polish (2026-07-10) — README overhauled around high-ROI
+tactics (badges, "Why Helm?", FAQ, keyboard list); hero screenshot re-staged
+on an isolated server with real claude panes but generic project names (the
+old shot leaked the owner's real project/client list, and the ROADMAP leaked
+an account username — both scrubbed; note both remain in old git history).
+CHANGELOG cut to v0.2.0 + package versions bumped. Staging recipe (fake
+workspaces on a subst drive, hook-event status pinning at zero token cost,
+headless-Edge capture at deviceScaleFactor 1) lives in auto-memory, script in
+the session scratchpad.
 
 ## Short-term backlog (rough priority order, owner-approved direction)
 (empty — next items to be chosen with the owner)

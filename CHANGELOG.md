@@ -6,6 +6,8 @@ All notable changes to Helm are documented here. Format follows
 
 ## [Unreleased]
 
+## [0.2.0] — 2026-07-10
+
 ### Added
 - **Theme settings** — Appearance dialog (palette button in the toolbar):
   dark/light theme plus five accent presets (amber, blue, green, violet, rose),
@@ -34,6 +36,9 @@ All notable changes to Helm are documented here. Format follows
 - Dev tooling: ESLint (correctness rules, zero warnings) + Prettier across both
   packages, enforced in CI; one mechanical reformat commit, listed in
   `.git-blame-ignore-revs` so blame skips it.
+- README overhauled for the public release: badges, a "Why Helm?" section, an
+  FAQ, and a new hero screenshot staged on an isolated server with generic
+  project names (the old one showed the author's real project list).
 
 ## [0.1.0] — 2026-07-05
 
@@ -87,5 +92,6 @@ PTYs), each with a status badge, name/color, and usage.
 - Windows is the tested platform. macOS/Linux are supported in code but not yet
   verified on hardware.
 
-[Unreleased]: https://github.com/VenJami/Helm/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/VenJami/Helm/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/VenJami/Helm/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/VenJami/Helm/releases/tag/v0.1.0
