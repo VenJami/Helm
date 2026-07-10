@@ -1,0 +1,37 @@
+name: Feature request
+description: Suggest an idea or improvement for Helm
+labels: ['enhancement']
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Helm is intentionally small, local, and dependency-light. Ideas that fit
+        that grain are most likely to land — see the ground rules in
+        [CONTRIBUTING.md](../blob/main/CONTRIBUTING.md).
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem does this solve?
+      description: The use case or pain point — what are you trying to do that's hard today?
+      placeholder: When I have 8 panes open I can't tell at a glance which project each belongs to without reading the sidebar.
+    validations:
+      required: true
+  - type: textarea
+    id: solution
+    attributes:
+      label: Proposed solution
+      description: What would you like to see? Rough sketches are fine.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered (optional)
+      description: Anything you've already tried, or other ways this could work.
+  - type: checkboxes
+    id: fit
+    attributes:
+      label: Fit with the project
+      options:
+        - label: This keeps Helm local and $0 (no new cloud services or paid tools).
+        - label: I've considered whether an existing `claude` CLI flag/hook or a stdlib feature already covers this.

@@ -1,0 +1,58 @@
+name: Bug report
+description: Something in Helm isn't working as expected
+labels: ['bug']
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a bug! A few quick things first:
+
+        - **Security issue?** Don't post it here — use private reporting under the
+          repo's **Security** tab (see [SECURITY.md](../blob/main/SECURITY.md)).
+        - **Feature doesn't work at all?** The #1 cause is a **stale server on
+          port 7777** — an old server silently missing new endpoints. Restart the
+          server (and rebuild `web/` if you changed the frontend) before filing.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What went wrong, and what did you expect instead?
+      placeholder: I clicked "New pane" and the pane spawned but the status badge stayed grey forever. I expected it to show "working" once Claude started.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: The exact sequence, so it can be reproduced.
+      value: |
+        1.
+        2.
+        3.
+    validations:
+      required: true
+  - type: input
+    id: versions
+    attributes:
+      label: Versions
+      description: 'Run `claude --version` and `node --version`, and note your OS.'
+      placeholder: 'claude 2.1.205 · node 22.12.0 · Windows 11'
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Server log / diagnostics (optional)
+      description: >
+        Anything relevant from the 🐞 Debug drawer, the server console, or
+        `GET /api/diagnostics`. If a drift banner is showing, paste its text.
+      render: text
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before filing
+      options:
+        - label: I restarted the server (and rebuilt `web/` if the frontend changed) and the issue persists.
+          required: true
+        - label: This is not a security vulnerability (those go through the Security tab).
+          required: true
