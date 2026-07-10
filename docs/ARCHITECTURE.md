@@ -16,13 +16,21 @@ Browser (React + xterm.js grid) <--WS/REST--> Node server <--PTY--> claude.cmd
   endpoint, usage parsing, persistence.
 - `server/hook-post.mjs` — runs *inside* panes as a Claude Code hook; relays
   hook payloads to `POST /api/hook`. No-ops outside Helm (exits 0 always).
-- `web/src/App.tsx` — top bar (profile picker, usage 📊, alerts 🔔), grid,
-  modals (new/delete profile, usage roll-up), notifications, maximize state.
-- `web/src/components/TerminalPane.tsx` — one pane: xterm (+fit/webgl), WS
-  attach/replay, name/color editing, per-pane usage, revive overlay.
-- `web/src/components/Sidebar.tsx` — workspaces. `Modal.tsx` — dialog shell.
+- `web/src/App.tsx` — composition root: top bar, pane grid (weights +
+  resize gutters), workspace selection, jump/cycle focus (pane ref map).
+- `web/src/hooks/` — `useSessionsPoll` (3 s session+profile poll, stable
+  references, desktop notifications) · `useWorkspaceStatus` (git/dev-server
+  dots) · `useTheme` (dark/light + accent → `data-*` attrs) ·
+  `useGridWeights` (per-workspace pane sizing).
+- `web/src/lib/storage.ts` — ALL localStorage behind typed, validated
+  accessors (corrupt values fall back; per-workspace keys pruned on removal).
+- `web/src/components/` — `TerminalPane.tsx` (xterm +fit/webgl, WS
+  attach/replay, per-pane usage, revive overlay) · `Sidebar.tsx` ·
+  `GridResizers.tsx` (drag gutters) · `modals/` (each dialog owns its draft
+  state: NewProfile, AddWorkspace, Profiles, Usage, Broadcast, Appearance) ·
+  `Modal.tsx` (shell) · `Toaster.tsx` · `CommandPalette.tsx` · `DriftBanner.tsx`.
 - `web/src/api.ts` — token + fetch wrapper (auto-reloads page once on 401),
-  `types.ts` — shared shapes.
+  `types.ts` — shared shapes incl. the typed WS protocol union.
 
 ## REST API (Bearer token on everything except /api/hook)
 - `GET/POST /api/sessions`, `DELETE /api/sessions/:id` — lifecycle.

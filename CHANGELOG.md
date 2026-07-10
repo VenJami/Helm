@@ -6,7 +6,23 @@ All notable changes to Helm are documented here. Format follows
 
 ## [Unreleased]
 
-_Nothing yet._
+### Added
+- **Theme settings** — Appearance dialog (palette button in the toolbar):
+  dark/light theme plus five accent presets (amber, blue, green, violet, rose),
+  applied instantly and persisted. Terminal panes stay dark in light mode by
+  design (claude's TUI colors assume a dark background).
+- **Drag-resize panes** — gutters between grid columns/rows trade space between
+  adjacent panes; double-click resets an axis. Sizes persist per workspace and
+  per layout (3-column proportions survive independently of 2-column).
+
+### Changed
+- Frontend internals decomposed (no behavior change): typed localStorage module
+  with orphan-key pruning, data-polling extracted to hooks, all five dialogs
+  extracted to modal components owning their draft state, and pane focus
+  addressed via a ref map instead of a window event. `App.tsx` ~1,379 → ~840
+  lines.
+- CI: the windows-latest smoke step retries once (cold-runner flake; a real
+  regression still fails twice).
 
 ## [0.1.0] — 2026-07-05
 

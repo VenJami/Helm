@@ -32,9 +32,13 @@ see their working at a glance instead of juggling terminal windows.
 - **Usage tracking** — tokens per pane and a per-account roll-up (rolling
   windows from 1 h to 30 d plus all time, broken down by model).
 - **Pane identity & comfort** — names and accent colors (random, editable),
-  drag panes to reorder the grid, maximize (Ctrl+Shift+M; Esc restores),
+  drag panes to reorder the grid, drag the gutters between panes to resize
+  them (sizes persist per workspace), maximize (Ctrl+Shift+M; Esc restores),
   find-in-scrollback (Ctrl+Shift+F), copy-on-select, clickable links, and a
   live server debug drawer.
+- **Make it yours** — dark or light theme with five accent colors (Appearance
+  dialog), plus a global terminal font-size stepper. Terminals stay dark in
+  light mode so Claude's output remains readable.
 - **Install as an app** — a PWA manifest lets Chrome/Edge install Helm as a
   desktop app, no Electron involved.
 
