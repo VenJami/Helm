@@ -31,6 +31,9 @@ All notable changes to Helm are documented here. Format follows
   lines.
 - CI: the windows-latest smoke step retries once (cold-runner flake; a real
   regression still fails twice).
+- Dev tooling: ESLint (correctness rules, zero warnings) + Prettier across both
+  packages, enforced in CI; one mechanical reformat commit, listed in
+  `.git-blame-ignore-revs` so blame skips it.
 
 ## [0.1.0] — 2026-07-05
 

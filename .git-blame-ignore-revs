@@ -1,0 +1,6 @@
+# Commits git blame should skip (mechanical, no-behavior-change churn).
+# GitHub's blame view reads this file automatically; locally, enable with:
+#   git config blame.ignoreRevsFile .git-blame-ignore-revs
+
+# Prettier reformat of the whole codebase (2026-07-10)
+b2c9f829c5ae4888fa548a41a7e567da2b03a0ba

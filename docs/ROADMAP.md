@@ -418,6 +418,19 @@ choice: per-session hook tokens (a malicious local process is out of scope —
 SECURITY.md; it can read the UI token file directly), the console toggle's
 Add-Type recompile (M7, cost smell only), one-frame replay gap (L2, cosmetic).
 
+ESLint + Prettier (2026-07-10, owner-approved deps) — the tooling pass
+deferred since P1-5: flat ESLint configs in both packages (correctness rules
+only — js/ts recommended + react-hooks; vendor animate-ui/ excluded; zero
+warnings enforced) and Prettier owning style (single quotes, 100 cols; scoped
+to code files — CSS left alone). Lint findings were few and real: unused
+import, expression-as-statement, two mechanical hook-deps gaps fixed, one
+load-bearing deps omission kept + documented with a targeted disable
+(TerminalPane's build-once-per-session effect), dead e2e collector removed.
+The whole-codebase reformat is its own commit, listed in
+.git-blame-ignore-revs so blame skips it. `npm run lint / format /
+format:check` in both packages; CI enforces lint + format. Verified: web
+tsc/vitest 21/build, server typecheck/smoke 13, real-claude e2e 10/10.
+
 ## Short-term backlog (rough priority order, owner-approved direction)
 (empty — next items to be chosen with the owner)
 

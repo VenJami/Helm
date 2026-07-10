@@ -56,15 +56,18 @@ cd ../server && npm start # → http://127.0.0.1:7777
 
 ## Before you open a PR
 
-1. **Frontend typechecks, tests, builds:** `cd web && npx tsc --noEmit && npm test && npm run build`
-2. **Server parses + typechecks:** `node --check` on `server/index.mjs`,
+1. **Lint + format are clean** in both packages: `npm run lint` and
+   `npm run format:check` (run `npm run format` to auto-fix formatting).
+   ESLint is correctness-only (zero warnings enforced); Prettier owns style.
+2. **Frontend typechecks, tests, builds:** `cd web && npx tsc --noEmit && npm test && npm run build`
+3. **Server parses + typechecks:** `node --check` on `server/index.mjs`,
    `server/hook-post.mjs`, and every `server/src/*.mjs`, then
    `cd server && npm run typecheck` (JSDoc + `tsc --checkJs`; ships as plain
    `.mjs`, so add types via JSDoc — see the `@typedef`s in index.mjs/src)
-3. **Smoke test passes:** `cd server && npm test` (boots a real server on an
+4. **Smoke test passes:** `cd server && npm test` (boots a real server on an
    isolated data dir against a keep-alive `claude` stand-in; drives REST + WS +
    the hook relay).
-4. **Verify user-facing behavior against a real `claude` pane.** The smoke test
+5. **Verify user-facing behavior against a real `claude` pane.** The smoke test
    and a green build are necessary but not sufficient — Helm depends on
    undocumented `claude` internals (see `docs/CLAUDE_INTERNALS.md`), so
    **"build passing" ≠ "working."** For spawn/hook/usage/revive changes (and
@@ -82,14 +85,17 @@ cd ../server && npm start # → http://127.0.0.1:7777
    claude-side looks off, `HELM_DEBUG_HOOKS=1` dumps raw hook payloads to the
    🐞 log.
 
-CI (`.github/workflows/ci.yml`) runs the server syntax check, frontend
-typecheck + build, `npm audit`, and the Windows smoke test on every push/PR.
+CI (`.github/workflows/ci.yml`) runs lint + format check, the server syntax
+check, frontend typecheck + build, `npm audit`, and the Windows smoke test on
+every push/PR.
 
 ## Style
 
-Match the surrounding code — same naming, comment density, and idiom. Comments
-should explain *why* (a constraint or a non-obvious trap), not narrate *what*.
-The codebase favors small, direct functions over abstraction; please don't add
+Formatting is Prettier's (config in `.prettierrc.json` — just run
+`npm run format`); ESLint enforces correctness only. Beyond that, match the
+surrounding code — same naming, comment density, and idiom. Comments should
+explain *why* (a constraint or a non-obvious trap), not narrate *what*. The
+codebase favors small, direct functions over abstraction; please don't add
 speculative layers ahead of a concrete need.
 
 ## Reporting bugs / security issues
