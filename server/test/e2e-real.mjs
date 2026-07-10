@@ -118,13 +118,6 @@ check('pane spawned (status running)', created.status === 'running');
 
 // WS attach: watch output + type into the pane like the browser does.
 const ws = new WebSocket(`ws://127.0.0.1:${PORT}/ws?session=${id}&token=${TOKEN}`);
-let paneOutput = '';
-ws.on('message', (raw) => {
-  try {
-    const m = JSON.parse(raw);
-    if (m.type === 'data' || m.type === 'replay') paneOutput += m.data;
-  } catch { /* ignore */ }
-});
 const type = (data) => ws.send(JSON.stringify({ type: 'input', data }));
 await new Promise((res, rej) => { ws.once('open', res); ws.once('error', rej); });
 

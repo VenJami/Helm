@@ -5,7 +5,7 @@ import { useSessionsPoll } from './hooks/useSessionsPoll';
 import { useWorkspaceStatus } from './hooks/useWorkspaceStatus';
 import { useTheme } from './hooks/useTheme';
 import { useGridWeights } from './hooks/useGridWeights';
-import type { LogEntry, Profile, SessionInfo, Workspace } from './types';
+import type { LogEntry, SessionInfo, Workspace } from './types';
 import { Sidebar } from './components/Sidebar';
 import { TerminalPane } from './components/TerminalPane';
 import { ProfileSelect } from './components/ProfileSelect';
@@ -95,7 +95,10 @@ export function App() {
     setMinimizedIds((prev) => {
       let changed = false;
       const next = new Set<string>();
-      for (const id of prev) (live.has(id) ? next.add(id) : (changed = true));
+      for (const id of prev) {
+        if (live.has(id)) next.add(id);
+        else changed = true;
+      }
       return changed ? next : prev;
     });
     setMaximizedId((prev) => (prev && !live.has(prev) ? null : prev));
@@ -260,9 +263,12 @@ export function App() {
   // Pane order per workspace — presentational, kept in localStorage.
   // Unlisted panes (new ones) fall to the end in creation order.
   const [paneOrder, setPaneOrder] = useState<string[]>([]);
+  // selected?.id, not selectedId: only a RESOLVED workspace has a pane order
+  // (selectedId may briefly point at a deleted workspace).
+  const selectedWsId = selected?.id;
   useEffect(() => {
-    if (selected) setPaneOrder(storage.paneOrder.get(selected.id));
-  }, [selected?.id]);
+    if (selectedWsId) setPaneOrder(storage.paneOrder.get(selectedWsId));
+  }, [selectedWsId]);
 
   const panes = useMemo(() => {
     const idx = new Map(paneOrder.map((id, i) => [id, i]));
@@ -426,7 +432,7 @@ export function App() {
       next.delete(id);
       return next;
     });
-  }, []);
+  }, [setSessions]);
 
   const minimizePane = useCallback((id: string) => {
     setMinimizedIds((prev) => new Set(prev).add(id));

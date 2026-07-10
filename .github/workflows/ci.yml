@@ -28,6 +28,12 @@ jobs:
       - name: Audit frontend deps
         working-directory: web
         run: npm audit --audit-level=high
+      - name: Lint frontend
+        working-directory: web
+        run: npm run lint
+      - name: Format-check frontend
+        working-directory: web
+        run: npm run format:check
       - name: Typecheck frontend
         working-directory: web
         run: npx tsc --noEmit
@@ -53,6 +59,12 @@ jobs:
       - name: Audit server deps
         working-directory: server
         run: npm audit --audit-level=high
+      - name: Lint server
+        working-directory: server
+        run: npm run lint
+      - name: Format-check server
+        working-directory: server
+        run: npm run format:check
       - name: Typecheck server (JSDoc + tsc --checkJs)
         working-directory: server
         run: npm run typecheck

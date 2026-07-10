@@ -250,6 +250,10 @@ function TerminalPaneImpl({
       termRef.current = null;
       searchRef.current = null;
     };
+    // Deliberately keyed on session.id ONLY: this effect builds the terminal
+    // once per session, and re-running it (e.g. when uploadFiles' identity
+    // changes) would tear down and rebuild the live xterm.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [session.id]);
 
   // Live font-size changes: resize the glyph grid, re-fit, and tell the PTY the
