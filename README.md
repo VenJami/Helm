@@ -33,6 +33,12 @@ alt-tab hell: which one is stuck on a permission prompt? Which one finished
 - **Your subscription, not an API bill.** Helm spawns the `claude` CLI you
   already pay for. No API keys, no per-token billing, no custom agent loop —
   the panes *are* Claude Code.
+- **Juggle multiple accounts without the login dance.** Point different panes
+  at different Claude subscriptions and they run side by side — no
+  logout/login churn. When one account hits its usage limit, keep working on
+  another; pin a default account per project; even move a live pane to a
+  different account mid-conversation. Per-account usage roll-ups keep it all
+  straight.
 - **Sessions outlive everything.** Closing the tab or refreshing never kills
   a session — panes repaint from a replay buffer. After a server restart,
   one click revives the same conversation (`claude --resume`), or auto-revive
