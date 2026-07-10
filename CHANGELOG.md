@@ -15,6 +15,14 @@ All notable changes to Helm are documented here. Format follows
   adjacent panes; double-click resets an axis. Sizes persist per workspace and
   per layout (3-column proportions survive independently of 2-column).
 
+### Security
+- Hardening pass on the trust seams: token compares are constant-time (REST
+  bearer, hook header, WS query token); profile names are validated everywhere
+  they enter the API (a workspace's pinned profile could previously carry a
+  path); and a pane's hooks can no longer point the server at a transcript file
+  outside that pane's own account store — a rejected path surfaces as a drift
+  warning instead of being read/copied.
+
 ### Changed
 - Frontend internals decomposed (no behavior change): typed localStorage module
   with orphan-key pruning, data-polling extracted to hooks, all five dialogs

@@ -24,6 +24,18 @@ any website. Helm's defenses:
 4. **No command injection surface** in Helm's own shell-outs: git status and the
    console toggle use `execFile` with argument arrays (no shell string), PTYs are
    spawned with argv arrays, and uploaded filenames are sanitized.
+5. **Validated trust seams.** Token compares are constant-time (no timing
+   oracle). Profile names are restricted to letters/digits/dash/underscore
+   everywhere they enter the API — they become directory names under
+   `accounts\`. And a pane's hooks can only point the server at a transcript
+   file inside that pane's own account store (the hook token is visible to
+   every process running inside a pane, and the reported path is later fed to
+   file reads/copies).
+
+   On WebSocket upgrades the Origin header is only enforced when present —
+   browsers always send it, so a cross-origin page can't dodge the check by
+   omitting it; an absent Origin means a non-browser client, which the bearer
+   token alone gates.
 
 ## What is explicitly out of scope
 

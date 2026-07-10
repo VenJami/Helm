@@ -193,8 +193,9 @@ test('pane summary is derived from the first real user prompt', async () => {
   const created = await (await authed('/sessions', { method: 'POST', body: JSON.stringify({ workspace: ws }) })).json();
   const id = created.id;
   // A transcript whose first user line is a meta/command wrapper (should be
-  // skipped) followed by the real opening prompt.
-  const tpath = path.join(tmp, 'summary.jsonl');
+  // skipped) followed by the real opening prompt. Must live inside the default
+  // account's store — the server rejects hook paths outside it.
+  const tpath = path.join(mkdir(path.join(tmp, '.claude', 'projects', 'sumproj')), 'sum-1.jsonl');
   fs.writeFileSync(tpath, [
     JSON.stringify({ type: 'user', isMeta: true, message: { content: '<command-name>/clear</command-name>' } }),
     JSON.stringify({ type: 'user', message: { content: 'Fix the OAuth token refresh bug in the API' } }),
@@ -286,6 +287,35 @@ test('hook relay (hook-post.mjs) + usage engine: dedupe, cost, incremental, part
   assert.equal(u.models['claude-sonnet-4-5'].turns, 3, 'completed tail must be counted');
 
   await authed(`/sessions/${id}`, { method: 'DELETE' });
+});
+
+test('trust seams are validated: profile names + hook transcript paths', async () => {
+  // A profile name becomes a directory under accounts\ — traversal must 400.
+  const dir = mkdir(path.join(tmp, 'valproj'));
+  let res = await authed('/workspaces', {
+    method: 'POST', body: JSON.stringify({ name: 'val', dir, profile: '..\\..\\evil' }),
+  });
+  assert.equal(res.status, 400);
+  const ws = await (await authed('/workspaces', {
+    method: 'POST', body: JSON.stringify({ name: 'val', dir }),
+  })).json();
+  res = await authed(`/workspaces/${ws.id}`, {
+    method: 'PATCH', body: JSON.stringify({ profile: '../evil' }),
+  });
+  assert.equal(res.status, 400);
+
+  // A hook-reported transcript path outside the session's account store is
+  // ignored (the path is later fed to file reads/copies) and flagged as drift.
+  const created = await (await authed('/sessions', { method: 'POST', body: JSON.stringify({ workspace: dir }) })).json();
+  const evil = path.join(tmp, 'outside-the-store.jsonl');
+  fs.writeFileSync(evil, JSON.stringify({ type: 'user', message: { content: 'nope' } }) + '\n');
+  await hook(created.id, { hook_event_name: 'SessionStart', session_id: 'val-1', transcript_path: evil });
+  const s = (await (await authed('/sessions')).json()).find((x) => x.id === created.id);
+  assert.equal(s.hasTranscript, false, 'out-of-store transcript path must be ignored');
+  const diag = await (await authed('/diagnostics')).json();
+  assert.ok(diag.warnings.some((w) => w.key === 'transcript-path-rejected'),
+    'rejection must surface as a loud drift warning, not silence');
+  await authed(`/sessions/${created.id}`, { method: 'DELETE' });
 });
 
 test('workspace git status reports branch + dirty', async () => {

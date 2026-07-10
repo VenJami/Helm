@@ -402,6 +402,22 @@ Verified via CDP: dragged a column and a row on a 4-pane grid (template
 0.53fr/1.47fr/1fr…), asserted persistence + restore across reload, screenshot.
 Backlog item #2 done — the short-term backlog is now EMPTY.
 
+Hardening pass 2 (2026-07-10) — closed the critique's remaining security soft
+spots (improvement-plan finding M3): constant-time token compares
+(bearer/hook/WS — no timing oracle for a drive-by page); profile names now
+regex-validated on the workspace pin routes too (the one unvalidated entry
+point — latent path traversal into `accounts\`); hook-reported transcript
+paths accepted only when inside the session's own account store (`.jsonl`
+under `configRoot/projects`; the path is later fed to file reads/copies), with
+rejections surfacing as a loud drift warning since a claude update that moves
+its transcript dir must not fail silent; WS Origin-absent decision documented
+in code + SECURITY.md (browsers always send Origin; absent = non-browser
+client, gated by the token alone). Smoke suite grown to 13 (trust-seams test);
+verified with the real-claude e2e 10/10 on claude 2.1.205. Left open by
+choice: per-session hook tokens (a malicious local process is out of scope —
+SECURITY.md; it can read the UI token file directly), the console toggle's
+Add-Type recompile (M7, cost smell only), one-frame replay gap (L2, cosmetic).
+
 ## Short-term backlog (rough priority order, owner-approved direction)
 (empty — next items to be chosen with the owner)
 

@@ -16,7 +16,7 @@ import { dbg, logsSince, SERVER_STARTED_AT } from './src/log.mjs';
 import { readJsonWithBackup, writeFileAtomic, writeJsonAtomic } from './src/persist.mjs';
 import {
   CLAUDE_CMD, accountEmail, checkClaudeVersion, diagnostics, firstPromptSummary,
-  parseTranscriptFile, tokenCost, transcriptFiles,
+  noteDrift, parseTranscriptFile, tokenCost, transcriptFiles,
 } from './src/claude.mjs';
 
 const { spawn } = ptyPkg;
@@ -80,6 +80,15 @@ function persistentToken(filename) {
 const TOKEN = persistentToken('token');
 // Separate token for the hook relay: passed to each spawned claude via env.
 const HOOK_TOKEN = persistentToken('hook-token');
+// Constant-time token compare — a plain === bails at the first wrong char, so
+// a cross-origin page hammering the API could in principle recover the token
+// byte-by-byte from response timing. Length mismatch short-circuits, which
+// leaks only the length (fixed and public: 48 hex chars).
+function safeEqual(a, b) {
+  const ab = Buffer.from(String(a ?? ''));
+  const bb = Buffer.from(String(b ?? ''));
+  return ab.length === bb.length && crypto.timingSafeEqual(ab, bb);
+}
 const ALLOWED_ORIGINS = new Set([
   `http://127.0.0.1:${PORT}`,
   `http://localhost:${PORT}`,
@@ -489,10 +498,24 @@ app.get('/health', (_req, res) => {
   });
 });
 
+// A pane's hooks are the only writer of session.transcriptPath, and that path
+// is later fed to file reads/copies (usage, summary, revive check,
+// switch-profile). Every child process inside a pane inherits the hook token,
+// so don't trust the reported path blindly: accept only a .jsonl inside the
+// session's own account store. A rejection is surfaced as claude drift — if a
+// claude update moves its transcript dir, this must be loud, not silent zeros.
+function validTranscriptPath(session, p) {
+  if (typeof p !== 'string' || !p.toLowerCase().endsWith('.jsonl')) return false;
+  const root = path.resolve(configRoot(session.profile), 'projects') + path.sep;
+  const resolved = path.resolve(p);
+  const fold = (s) => (IS_WIN ? s.toLowerCase() : s); // win paths are case-insensitive
+  return fold(resolved).startsWith(fold(root));
+}
+
 // Hook relay from inside panes — authed by HOOK_TOKEN (spawn env), not the UI
 // token, so it must be registered before the bearer-auth middleware below.
 app.post('/api/hook', (req, res) => {
-  if (req.get('x-helm-hook') !== HOOK_TOKEN) {
+  if (!safeEqual(req.get('x-helm-hook'), HOOK_TOKEN)) {
     return res.status(401).json({ error: 'bad hook token' });
   }
   const { sessionId, event } = req.body || {};
@@ -503,7 +526,15 @@ app.post('/api/hook', (req, res) => {
   // status/usage/revive stop working. Off by default.
   if (process.env.HELM_DEBUG_HOOKS) dbg('hook-raw', JSON.stringify(event));
   if (typeof event.session_id === 'string') session.claudeSessionId = event.session_id;
-  if (typeof event.transcript_path === 'string') session.transcriptPath = event.transcript_path;
+  if (typeof event.transcript_path === 'string') {
+    if (validTranscriptPath(session, event.transcript_path)) {
+      session.transcriptPath = event.transcript_path;
+    } else {
+      noteDrift('transcript-path-rejected',
+        `a pane reported a transcript outside its account store (${event.transcript_path}) — ` +
+        'either claude moved its transcript dir (update Helm) or something in the pane is spoofing hooks');
+    }
+  }
   dbg('hook', `${session.name} (${sessionId.slice(0, 8)}) ${event.hook_event_name}` +
     (event.hook_event_name === 'Notification' && event.message ? `: ${event.message}` : ''));
   const activity = {
@@ -531,8 +562,7 @@ app.post('/api/hook', (req, res) => {
 });
 
 app.use('/api', (req, res, next) => {
-  const auth = req.get('authorization') || '';
-  if (auth === `Bearer ${TOKEN}`) return next();
+  if (safeEqual(req.get('authorization'), `Bearer ${TOKEN}`)) return next();
   res.status(401).json({ error: 'bad or missing token' });
 });
 
@@ -1114,7 +1144,14 @@ app.post('/api/workspaces', (req, res) => {
   if (existing) return res.status(409).json({ error: `already added as "${existing.name}"` });
   const workspace = { id: crypto.randomUUID(), name, dir: normalized };
   // Optional pinned account — panes made in this workspace default to it.
-  if (typeof profile === 'string' && profile) workspace.profile = profile;
+  // Same name rule as everywhere a profile enters (it becomes a dir under
+  // accounts\, so a stray ..\ would be a path traversal).
+  if (typeof profile === 'string' && profile) {
+    if (!/^[\w-]+$/.test(profile)) {
+      return res.status(400).json({ error: 'profile must be alphanumeric/dash/underscore' });
+    }
+    workspace.profile = profile;
+  }
   // Optional dev-server port for the sidebar's up/down check.
   const wsPort = parsePort(port);
   if (wsPort === undefined) return res.status(400).json({ error: 'port must be 1–65535' });
@@ -1143,8 +1180,12 @@ app.patch('/api/workspaces/:id', (req, res) => {
     ws.dir = normalized;
   }
   if (profile !== undefined) {
-    if (typeof profile === 'string' && profile) ws.profile = profile;
-    else delete ws.profile;
+    if (typeof profile === 'string' && profile) {
+      if (!/^[\w-]+$/.test(profile)) {
+        return res.status(400).json({ error: 'profile must be alphanumeric/dash/underscore' });
+      }
+      ws.profile = profile;
+    } else delete ws.profile;
   }
   if (port !== undefined) {
     const wsPort = parsePort(port);
@@ -1330,8 +1371,12 @@ server.on('upgrade', (req, socket, head) => {
     socket.destroy();
   };
   if (url.pathname !== '/ws') return reject('unknown path');
+  // Origin is only checked when present — deliberate: browsers ALWAYS send
+  // Origin on WS upgrades, so a cross-origin page can't dodge this by omitting
+  // it. An absent Origin means a non-browser client (node script, curl), which
+  // the token alone gates; requiring the header would only break local tooling.
   if (origin && !ALLOWED_ORIGINS.has(origin)) return reject('bad origin');
-  if (url.searchParams.get('token') !== TOKEN) return reject('bad token');
+  if (!safeEqual(url.searchParams.get('token'), TOKEN)) return reject('bad token');
   if (!session) return reject('no such session');
 
   wss.handleUpgrade(req, socket, head, (ws) => attach(ws, session));
