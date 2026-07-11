@@ -435,11 +435,22 @@ Public-release polish (2026-07-10) — README overhauled around high-ROI
 tactics (badges, "Why Helm?", FAQ, keyboard list); hero screenshot re-staged
 on an isolated server with real claude panes but generic project names (the
 old shot leaked the owner's real project/client list, and the ROADMAP leaked
-an account username — both scrubbed; note both remain in old git history).
-CHANGELOG cut to v0.2.0 + package versions bumped. Staging recipe (fake
-workspaces on a subst drive, hook-event status pinning at zero token cost,
-headless-Edge capture at deviceScaleFactor 1) lives in auto-memory, script in
-the session scratchpad.
+an account username — both scrubbed at HEAD). CHANGELOG cut to v0.2.0 +
+package versions bumped. Staging recipe (fake workspaces on a subst drive,
+hook-event status pinning at zero token cost, headless-Edge capture at
+deviceScaleFactor 1) lives in auto-memory, script in the session scratchpad.
+
+Git history scrub (2026-07-11) — the two leaks above also lived in old
+history (the `jaminaraven` username in prior ROADMAP versions; the leaky
+screenshot blob from its first commit onward). Rewrote all 35 commits with
+`git filter-repo` (username → `redacted`, old screenshot blob → the safe one)
+and force-pushed `main` + both tags. HEAD tree unchanged (content preserved
+byte-for-byte); every author/committer name+email+date+message identical to a
+pre-rewrite backup bundle, so the contribution graph is intact. Old commit
+hashes (≤ `e8ef2d6`) are dead. Residual: force-push doesn't purge GitHub's
+dangling objects immediately — old blobs may linger by direct SHA until GitHub
+GC; low-stakes here (username + project-name pixels), contact GH Support to
+purge if it ever matters.
 
 ## Short-term backlog (rough priority order, owner-approved direction)
 (empty — next items to be chosen with the owner)
