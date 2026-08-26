@@ -72,6 +72,30 @@ export interface ServerInfo {
   up: boolean;
 }
 
+// A public share link for a workspace's dev server (Cloudflare quick tunnel).
+// These URLs are UNAUTHENTICATED — anyone holding one reaches the dev server —
+// so the UI warns before creating one, flags it loudly while live, and the
+// server expires it. See server/src/tunnel.mjs.
+export interface TunnelInfo {
+  workspaceId: string;
+  port: number;
+  status: 'starting' | 'live' | 'error';
+  url: string | null; // https://<random>.trycloudflare.com once cloudflared reports it
+  error: string | null;
+  startedAt: number; // ms epoch
+  expiresAt: number; // ms epoch — server self-kills the tunnel at this point
+}
+
+export interface TunnelsResponse {
+  available: boolean; // is cloudflared on PATH? false → show installHint, no share button
+  version: string | null;
+  installHint: string; // platform-specific install command (short, for tooltips)
+  installCommand: string | null; // what "Install it for me" runs; null = no one-liner here
+  installDocs: string; // Cloudflare's download page, for platforms without one
+  ttlMs: number; // how long a link lives, and what "extend" adds
+  tunnels: TunnelInfo[];
+}
+
 // Per-workspace git status for the sidebar. branch null = not a git repo
 // (or git unavailable). Best-effort, refreshed on a slow poll.
 export interface GitInfo {

@@ -20,7 +20,17 @@ import { UsageModal } from './components/modals/UsageModal';
 import { BroadcastModal } from './components/modals/BroadcastModal';
 import { AddWorkspaceModal } from './components/modals/AddWorkspaceModal';
 import { AppearanceModal } from './components/modals/AppearanceModal';
-import { IconBug, IconMinus, IconPalette, IconPanelLeftOpen, IconPlus } from './components/Icons';
+import { ShareModal } from './components/modals/ShareModal';
+import { InstallCloudflaredModal } from './components/modals/InstallCloudflaredModal';
+import { SharesModal } from './components/modals/SharesModal';
+import {
+  IconBug,
+  IconGlobe,
+  IconMinus,
+  IconPalette,
+  IconPanelLeftOpen,
+  IconPlus,
+} from './components/Icons';
 import {
   AnimateIcon,
   IconBellOff,
@@ -41,6 +51,15 @@ type Dialog =
   | { kind: 'broadcast'; initialIds: Set<string> }
   | { kind: 'add-workspace' }
   | { kind: 'appearance' }
+  // Public-share confirmation. Carries the workspace being shared so the
+  // dialog can name it and its port; there is no "don't ask again".
+  | { kind: 'share'; workspace: Workspace; port: number }
+  // Explains what cloudflared is and offers to install it — replaces the old
+  // dead-end "not found" error toast.
+  | { kind: 'install-cloudflared' }
+  // The live public links: full URLs, copy/open/extend/stop. A share URL needs
+  // somewhere permanent to live — a toast and a tooltip weren't it.
+  | { kind: 'shares' }
   | null;
 
 // ⌘K on Mac, Ctrl K elsewhere — for the command-palette hint.
@@ -80,7 +99,8 @@ export function App() {
   // and edge-triggered notifications, plus per-workspace git/dev-server status.
   const { sessions, setSessions, profiles, setProfiles, defaultEmail, defaultMapped, refresh } =
     useSessionsPoll(notify);
-  const { gitInfo, serverInfo, setServerInfo } = useWorkspaceStatus();
+  const { gitInfo, serverInfo, setServerInfo, tunnels, tunnelState, refreshTunnels } =
+    useWorkspaceStatus();
   // Theme + accent, applied as data attributes on <html> (persisted).
   const { theme, setTheme, accent, setAccent } = useTheme();
   // Maximize/minimize layout survives a reload — restored from localStorage,
@@ -485,6 +505,120 @@ export function App() {
     return commands;
   };
 
+  // ---- public share links (Cloudflare quick tunnels) --------------------
+  // These URLs are unauthenticated, so sharing is always a two-step: the
+  // globe button only OPENS the warning dialog, and `share` is what the
+  // dialog's confirm button calls. Don't collapse them into one click.
+  const askToShare = (id: string) => {
+    const ws = workspaces.find((w) => w.id === id);
+    if (!ws) return;
+    if (!ws.port) {
+      toast.error('Set this project’s dev-server port first (right-click → Set dev-server port…)');
+      return;
+    }
+    if (!tunnelState.available) {
+      // Explain what the missing program IS and offer to install it, rather
+      // than dead-ending on an error naming something they've never heard of.
+      setDialog({ kind: 'install-cloudflared' });
+      return;
+    }
+    setDialog({ kind: 'share', workspace: ws, port: ws.port });
+  };
+
+  // Install cloudflared in a visible pane, so a package manager writing to the
+  // machine is something the owner watches rather than something Helm hides.
+  // The pane is NOT minimized (unlike project dev panes) — it's the whole point.
+  const installCloudflared = async () => {
+    try {
+      const pane = await api.installCloudflared(120, 30);
+      closeDialog();
+      setSessions((prev) => [...prev.filter((s) => s.id !== pane.id), pane]);
+      toast.info('Installing cloudflared — watch the pane; the share button lights up when done');
+      // Poll a little harder than usual so the button un-greys promptly.
+      const until = Date.now() + 180_000;
+      const tick = setInterval(async () => {
+        const state = await api.getTunnels().catch(() => null);
+        if (state?.available || Date.now() > until) {
+          clearInterval(tick);
+          if (state?.available) toast.success('cloudflared is installed — you can share now');
+        }
+      }, 5000);
+    } catch (err) {
+      toast.error((err as Error).message);
+    }
+  };
+
+  const share = async (ws: Workspace, port: number) => {
+    try {
+      const tunnel = await api.shareWorkspace(ws.id, port);
+      closeDialog();
+      await refreshTunnels();
+      if (tunnel.url) {
+        void navigator.clipboard?.writeText(tunnel.url).catch(() => {});
+        toast.success(`${ws.name} is public at ${tunnel.url} — link copied`);
+      } else {
+        toast.info(`${ws.name}: opening the tunnel…`);
+      }
+    } catch (err) {
+      toast.error((err as Error).message);
+    }
+  };
+
+  const unshare = async (id: string) => {
+    try {
+      await api.unshareWorkspace(id);
+      await refreshTunnels();
+      const ws = workspaces.find((w) => w.id === id);
+      toast.success(`${ws?.name ?? 'Project'} is no longer public`);
+    } catch (err) {
+      toast.error((err as Error).message);
+    }
+  };
+
+  // The toolbar's "N public" pill: push every live link out by another full
+  // TTL. One button because the answer to "my demo is about to drop" is
+  // always "keep them all alive a bit longer".
+  const liveTunnels = useMemo(
+    () => tunnelState.tunnels.filter((t) => t.status === 'live'),
+    [tunnelState],
+  );
+
+  // Time left on whichever link expires first — the number that actually
+  // matters when several are open.
+  const shareCountdown = (live: { expiresAt: number }[]) => {
+    const soonest = Math.min(...live.map((t) => t.expiresAt)) - Date.now();
+    if (soonest <= 0) return 'expiring';
+    const mins = Math.floor(soonest / 60_000);
+    return mins >= 1 ? `${mins}m left` : `${Math.floor(soonest / 1000)}s left`;
+  };
+
+  const extendShare = async (workspaceId: string) => {
+    try {
+      await api.extendShare(workspaceId);
+      await refreshTunnels();
+      toast.success('Share link extended');
+    } catch (err) {
+      toast.error((err as Error).message);
+    }
+  };
+
+  // Nag once when a link is within 5 minutes of expiry, so it never just
+  // vanishes mid-demo. Keyed per deadline, so extending re-arms the warning.
+  const warnedExpiry = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    for (const t of tunnelState.tunnels) {
+      const key = `${t.workspaceId}:${t.expiresAt}`;
+      const left = t.expiresAt - Date.now();
+      if (t.status !== 'live' || left > 5 * 60_000 || warnedExpiry.current.has(key)) continue;
+      warnedExpiry.current.add(key);
+      const ws = workspaces.find((w) => w.id === t.workspaceId);
+      toast.info(
+        `${ws?.name ?? 'A project'}’s public link expires in ` +
+          `${Math.max(1, Math.round(left / 60_000))} min — click “public” in the toolbar to extend it`,
+      );
+    }
+  }, [tunnelState, workspaces]);
+
   const devPanesFor = (id: string) => {
     const ws = workspaces.find((w) => w.id === id);
     return ws ? sessions.filter((s) => s.kind === 'dev' && s.workspace === ws.dir) : [];
@@ -708,6 +842,9 @@ export function App() {
           sessions={sessions}
           git={gitInfo}
           servers={serverInfo}
+          tunnels={tunnels}
+          tunnelsAvailable={tunnelState.available}
+          installHint={tunnelState.installHint}
           selectedId={selected?.id ?? null}
           defaultEmail={defaultEmail}
           profiles={profiles}
@@ -724,6 +861,9 @@ export function App() {
           onShowDev={toggleDevPanes}
           devPanesOpen={devPanesOpen}
           onSuggestStart={suggestStart}
+          onShare={askToShare}
+          onUnshare={unshare}
+          onShowShares={() => setDialog({ kind: 'shares' })}
           dragId={dragWsId}
           dragOverId={dragOverWsId}
           onDragStart={setDragWsId}
@@ -816,6 +956,23 @@ export function App() {
                     title="Jump to a pane waiting on you (repeat to cycle through them)"
                   >
                     <span className="dot dot-waiting" /> {waiting} waiting
+                  </button>
+                )}
+                {liveTunnels.length > 0 && (
+                  // Deliberately loud and always visible, from any workspace:
+                  // the danger with an unauthenticated link isn't creating it,
+                  // it's forgetting it's still open. Click = extend them all.
+                  <button
+                    className="tbtn public-pill"
+                    onClick={() => setDialog({ kind: 'shares' })}
+                    title={
+                      `${liveTunnels.length} dev server(s) are PUBLIC on the internet:\n` +
+                      liveTunnels.map((t) => `  :${t.port} → ${t.url}`).join('\n') +
+                      '\n\nClick to extend them. Stop one from its project in the sidebar.'
+                    }
+                  >
+                    <IconGlobe size={13} /> {liveTunnels.length} public ·{' '}
+                    {shareCountdown(liveTunnels)}
                   </button>
                 )}
                 <AnimateIcon asChild>
@@ -1031,6 +1188,36 @@ export function App() {
           accent={accent}
           onTheme={setTheme}
           onAccent={setAccent}
+          onClose={closeDialog}
+        />
+      )}
+
+      {dialog?.kind === 'share' && (
+        <ShareModal
+          workspace={dialog.workspace}
+          port={dialog.port}
+          ttlMs={tunnelState.ttlMs}
+          serverUp={serverInfo[dialog.workspace.id]?.up}
+          onClose={closeDialog}
+          onConfirm={() => share(dialog.workspace, dialog.port)}
+        />
+      )}
+
+      {dialog?.kind === 'shares' && (
+        <SharesModal
+          tunnels={tunnelState.tunnels}
+          workspaces={workspaces}
+          onExtend={extendShare}
+          onStop={unshare}
+          onClose={closeDialog}
+        />
+      )}
+
+      {dialog?.kind === 'install-cloudflared' && (
+        <InstallCloudflaredModal
+          installCommand={tunnelState.installCommand}
+          installDocs={tunnelState.installDocs}
+          onInstall={installCloudflared}
           onClose={closeDialog}
         />
       )}

@@ -26,6 +26,19 @@ import {
   tokenCost,
   transcriptFiles,
 } from './src/claude.mjs';
+import {
+  INSTALL_COMMAND,
+  INSTALL_DOCS,
+  INSTALL_HINT,
+  TUNNEL_TTL_MS,
+  checkCloudflared,
+  extendTunnel,
+  listTunnels,
+  startTunnel,
+  stopAllTunnels,
+  stopTunnel,
+  tunnelInfo,
+} from './src/tunnel.mjs';
 
 const { spawn } = ptyPkg;
 
@@ -1725,10 +1738,97 @@ app.post('/api/workspaces/:id/stop', (req, res) => {
   res.json({ stopped: live.length, sessions: live.map(sessionInfo) });
 });
 
+// ------------------------------------------------------- public share links
+// A workspace's dev server, exposed to the internet through a Cloudflare quick
+// tunnel. See server/src/tunnel.mjs for the security model — the short version
+// is that these links are UNAUTHENTICATED, so they self-expire and Helm's own
+// port can never be one of them.
+
+app.get('/api/tunnels', async (_req, res) => {
+  const { available, version } = await checkCloudflared();
+  res.json({
+    available, // false → the UI shows the install hint instead of a share button
+    version,
+    installHint: INSTALL_HINT,
+    installCommand: INSTALL_COMMAND, // null = no one-liner on this platform
+    installDocs: INSTALL_DOCS,
+    ttlMs: TUNNEL_TTL_MS,
+    tunnels: listTunnels(),
+  });
+});
+
+// Install cloudflared on the user's behalf — but in a REAL, VISIBLE pane
+// rather than silently in the background: it can ask for elevation or a
+// package agreement, and a package manager writing to their machine is
+// something they should watch happen. Reuses the dev-pane machinery.
+app.post('/api/tunnels/install', async (req, res) => {
+  if (!INSTALL_COMMAND) {
+    return res
+      .status(501)
+      .json({ error: 'no one-line installer for this platform', docs: INSTALL_DOCS });
+  }
+  const { available } = await checkCloudflared();
+  if (available) return res.status(409).json({ error: 'cloudflared is already installed' });
+  const { cols = 120, rows = 30 } = req.body || {};
+  try {
+    const session = createDevSession({
+      workspace: os.homedir(),
+      command: INSTALL_COMMAND,
+      name: 'install cloudflared',
+      cols: Number(cols) || 120,
+      rows: Number(rows) || 30,
+    });
+    dbg('tunnel', `installing cloudflared in a pane: ${INSTALL_COMMAND}`);
+    res.status(201).json(sessionInfo(session));
+  } catch (err) {
+    dbg('error', `cloudflared install pane failed: ${err.message}`);
+    res.status(500).json({ error: `couldn't start the installer: ${err.message}` });
+  }
+});
+
+app.post('/api/workspaces/:id/tunnel', async (req, res) => {
+  const ws = workspaces.find((w) => w.id === req.params.id);
+  if (!ws) return res.status(404).json({ error: 'no such workspace' });
+  const port = parsePort(req.body?.port ?? ws.port);
+  if (port === undefined) return res.status(400).json({ error: 'port must be 1–65535' });
+  if (port === null) {
+    return res.status(400).json({ error: 'set this project’s dev-server port first' });
+  }
+  try {
+    const tunnel = await startTunnel({
+      workspaceId: ws.id,
+      port,
+      label: ws.name,
+      blockedPorts: [PORT], // Helm's own port — its pages carry the auth token
+    });
+    if (tunnel.status === 'error') {
+      stopTunnel(ws.id);
+      return res.status(502).json({ error: tunnel.error || 'cloudflared failed' });
+    }
+    res.status(201).json(tunnelInfo(tunnel));
+  } catch (err) {
+    const status = err.code === 'NO_CLOUDFLARED' ? 501 : err.code === 'ALREADY_SHARED' ? 409 : 400;
+    if (err.code === 'BLOCKED_PORT') dbg('error', `blocked share attempt: ${err.message}`);
+    res.status(status).json({ error: err.message, code: err.code || null });
+  }
+});
+
+app.post('/api/workspaces/:id/tunnel/extend', (req, res) => {
+  const tunnel = extendTunnel(req.params.id);
+  if (!tunnel) return res.status(404).json({ error: 'not shared' });
+  res.json(tunnelInfo(tunnel));
+});
+
+app.delete('/api/workspaces/:id/tunnel', (req, res) => {
+  if (!stopTunnel(req.params.id)) return res.status(404).json({ error: 'not shared' });
+  res.json({ ok: true });
+});
+
 app.delete('/api/workspaces/:id', (req, res) => {
   const before = workspaces.length;
   workspaces = workspaces.filter((w) => w.id !== req.params.id);
   if (workspaces.length === before) return res.status(404).json({ error: 'no such workspace' });
+  stopTunnel(req.params.id); // never leave a public link pointing at a removed project
   saveWorkspaces();
   res.json({ ok: true });
 });
@@ -1868,6 +1968,10 @@ function gracefulShutdown(signal) {
   if (shuttingDown) return;
   shuttingDown = true;
   dbg('server', `${signal} received — persisting ${sessions.size} session(s), stopping panes`);
+  // Public links die with the server — they're never persisted, so a restart
+  // always fails closed (server/src/tunnel.mjs).
+  const shared = stopAllTunnels();
+  if (shared) dbg('tunnel', `closed ${shared} public share link(s)`);
   try {
     persistSessions();
   } catch (err) {

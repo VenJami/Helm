@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react';
-import type { GitInfo, Profile, ServerInfo, SessionInfo, Workspace } from '../types';
+import type { GitInfo, Profile, ServerInfo, SessionInfo, TunnelInfo, Workspace } from '../types';
 import { accountLabel } from '../accounts';
 import {
   IconFolder,
   IconGitBranch,
+  IconGlobe,
   IconGrip,
   IconHelm,
   IconPanelLeftClose,
@@ -24,6 +25,12 @@ interface Props {
   sessions: SessionInfo[];
   git: Record<string, GitInfo>; // workspace id → git status (branch/dirty/ahead/behind)
   servers: Record<string, ServerInfo>; // workspace id → dev-server up/down (configured ports only)
+  // Public share links. `tunnels` is keyed by workspace id; absent = not shared.
+  // tunnelsAvailable false = cloudflared isn't installed, so sharing is offered
+  // only as an install hint (Helm never installs it — owner's call).
+  tunnels: Record<string, TunnelInfo>;
+  tunnelsAvailable: boolean;
+  installHint: string;
   selectedId: string | null;
   defaultEmail: string | null; // used to label workspaces on the default account
   profiles: Profile[]; // to reuse a matching profile's name for the default
@@ -45,6 +52,11 @@ interface Props {
   devPanesOpen: (id: string) => boolean; // false = minimized/not on screen
   // Ask claude how the project starts (headless, read-only, costs a few cents).
   onSuggestStart: (id: string) => Promise<string[]>;
+  // Share this project's dev server publicly (opens the warning dialog first),
+  // or take an existing link down.
+  onShare: (id: string) => void;
+  onUnshare: (id: string) => void;
+  onShowShares: () => void; // open the panel listing every live public link
   // Drag-to-reorder: grip on each row → drop on another row's slot.
   dragId: string | null;
   dragOverId: string | null;
@@ -54,11 +66,23 @@ interface Props {
   onDragEnd: () => void;
 }
 
+// "in 27m" / "in 40s" — how long a share link has left. Refreshed by the 4 s
+// tunnel poll re-rendering the sidebar, so it doesn't need its own timer.
+function expiryLabel(expiresAt: number) {
+  const left = expiresAt - Date.now();
+  if (left <= 0) return 'now';
+  const mins = Math.floor(left / 60000);
+  return mins >= 1 ? `${mins}m` : `${Math.floor(left / 1000)}s`;
+}
+
 export function Sidebar({
   workspaces,
   sessions,
   git,
   servers,
+  tunnels,
+  tunnelsAvailable,
+  installHint,
   selectedId,
   defaultEmail,
   profiles,
@@ -75,6 +99,9 @@ export function Sidebar({
   onShowDev,
   devPanesOpen,
   onSuggestStart,
+  onShare,
+  onUnshare,
+  onShowShares,
   dragId,
   dragOverId,
   onDragStart,
@@ -376,6 +403,36 @@ export function Sidebar({
                     <span className="ws-server-port">:{ws.port}</span>
                   </span>
                 )}
+                {tunnels[ws.id] && (
+                  <span
+                    className={`ws-public ws-public-${tunnels[ws.id].status}`}
+                    title={
+                      tunnels[ws.id].status === 'live'
+                        ? `PUBLIC on the internet — ${tunnels[ws.id].url}
+Click to open the link panel. Expires in ${expiryLabel(tunnels[ws.id].expiresAt)}.`
+                        : tunnels[ws.id].status === 'starting'
+                          ? 'opening the public tunnel…'
+                          : tunnels[ws.id].error || 'the tunnel failed'
+                    }
+                    onClick={(e) => {
+                      // Opens the panel rather than copying silently: a click
+                      // that does something invisible reads as a dead button.
+                      e.stopPropagation();
+                      onShowShares();
+                    }}
+                  >
+                    <IconGlobe size={10} />
+                    {tunnels[ws.id].status === 'live' ? (
+                      // Just the flag here: the sidebar column is ~60px, so
+                      // the countdown lives in the toolbar pill (which has the
+                      // room and is visible from every workspace) and in the
+                      // tooltip below.
+                      <b>PUBLIC</b>
+                    ) : (
+                      <b>{tunnels[ws.id].status === 'starting' ? 'OPENING…' : 'FAILED'}</b>
+                    )}
+                  </span>
+                )}
               </div>
               {(() => {
                 const p = panesIn(ws);
@@ -440,6 +497,21 @@ export function Sidebar({
                         {panes.length > 1 && <span className="ws-run-count">{panes.length}</span>}
                       </button>
                     )}
+                    {ws.port && (
+                      <button
+                        className={`ws-run-btn ${tunnels[ws.id] ? 'public' : ''}`}
+                        title={
+                          tunnels[ws.id]
+                            ? `Stop sharing :${ws.port} publicly`
+                            : tunnelsAvailable
+                              ? `Share :${ws.port} on the internet (unauthenticated — warns first)`
+                              : `Public sharing needs cloudflared. Install it with: ${installHint}`
+                        }
+                        onClick={() => (tunnels[ws.id] ? onUnshare(ws.id) : onShare(ws.id))}
+                      >
+                        <IconGlobe size={16} />
+                      </button>
+                    )}
                   </span>
                 );
               })()}
@@ -489,6 +561,19 @@ export function Sidebar({
           >
             <IconServer size={13} /> Set dev-server port…
           </button>
+          {menuWs.port && (
+            <button
+              className={`ws-menu-item ${tunnels[menuWs.id] ? '' : 'ws-menu-danger'}`}
+              onClick={() => {
+                if (tunnels[menuWs.id]) onUnshare(menuWs.id);
+                else onShare(menuWs.id);
+                setMenu(null);
+              }}
+            >
+              <IconGlobe size={13} />{' '}
+              {tunnels[menuWs.id] ? 'Stop sharing publicly' : 'Share on the internet…'}
+            </button>
+          )}
           <button
             className="ws-menu-item"
             onClick={() => startEdit(menuWs.id, 'start', (menuWs.startCommands ?? []).join('\n'))}

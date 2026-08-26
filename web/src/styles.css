@@ -1656,3 +1656,170 @@ input::placeholder { color: var(--faint); }
 }
 .accent-swatch:hover { transform: scale(1.1); }
 .accent-swatch.active { border-color: var(--text); }
+
+/* ---- public share links (Cloudflare quick tunnels) ---------------------
+   Styled to be conspicuous rather than tasteful: an unauthenticated public
+   link should never blend into the chrome. Red, not the amber accent. */
+.ws-public {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  margin-top: 2px;
+  padding: 1px 5px;
+  border-radius: 4px;
+  font-size: 9.5px;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+  background: var(--danger-dim);
+  color: var(--danger);
+  border: 1px solid var(--danger);
+  /* The sidebar column is narrow: hug the content rather than stretching, and
+     clip rather than letting the label spill outside its own border. */
+  align-self: flex-start;
+  max-width: 100%;
+  min-width: 0;
+  overflow: hidden;
+}
+.ws-public svg { flex-shrink: 0; }
+.ws-public b { font-weight: 700; }
+.ws-public:hover { filter: brightness(1.15); }
+/* Not live yet (or failed): same shape, muted, and not a copy target. */
+.ws-public-starting,
+.ws-public-error {
+  background: transparent;
+  color: var(--faint);
+  border-color: var(--border);
+  cursor: default;
+}
+.ws-public-error { color: var(--danger); border-color: var(--danger); }
+
+/* The globe button in a workspace row turns red once that project is live. */
+.ws-run-btn.public { color: var(--danger); }
+.ws-run-btn.public:hover { background: var(--danger-dim); }
+
+/* Toolbar "N public" counter — visible from every workspace by design. */
+.public-pill {
+  font-variant-numeric: tabular-nums;
+  color: var(--danger);
+  border-color: var(--danger);
+  background: var(--danger-dim);
+  font-weight: 600;
+}
+.public-pill:hover { filter: brightness(1.15); }
+
+/* The warning list inside the share dialog. */
+.share-warnings {
+  margin: 10px 0 14px;
+  padding-left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+.share-warnings b { color: var(--text); }
+
+/* "nothing is listening on that port yet" note in the share dialog. */
+.share-note {
+  margin: 0 0 12px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--surface-2, transparent);
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+
+/* The copyable install command in the cloudflared explainer dialog. */
+.install-cmd {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 14px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--raised);
+}
+.install-cmd code {
+  flex: 1;
+  min-width: 0;
+  overflow-x: auto;
+  white-space: nowrap;
+  font-size: 11.5px;
+  color: var(--text);
+}
+
+/* ---- the public-links panel ------------------------------------------- */
+.share-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 0 0 14px;
+}
+.share-row {
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--danger);
+  background: var(--danger-dim);
+}
+.share-row-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 6px;
+}
+.share-row-name {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-weight: 600;
+  font-size: 12.5px;
+  color: var(--text);
+}
+.share-row-port {
+  font-variant-numeric: tabular-nums;
+  font-weight: 400;
+  color: var(--muted);
+}
+.share-row-ttl {
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+  color: var(--danger);
+  white-space: nowrap;
+}
+/* The URL itself: the point of the whole panel, so make it big enough to read
+   and select, and let a long hostname scroll instead of blowing out the card. */
+.share-url {
+  display: block;
+  /* Wrap rather than scroll: the entire job of this panel is letting you READ
+     the link, and a horizontally-scrolled URL hides its own ending. */
+  white-space: normal;
+  word-break: break-all;
+  line-height: 1.45;
+  padding: 6px 8px;
+  margin-bottom: 8px;
+  border-radius: 5px;
+  background: var(--raised);
+  border: 1px solid var(--border);
+  font-family: var(--mono, ui-monospace, monospace);
+  font-size: 12px;
+  color: var(--text);
+  user-select: all;
+}
+a.share-url:hover { border-color: var(--border-hover); }
+.share-url-pending {
+  color: var(--muted);
+  font-style: italic;
+  user-select: none;
+}
+.share-row-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+.share-row-actions .btn { display: inline-flex; align-items: center; gap: 4px; }
