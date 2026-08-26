@@ -8,9 +8,13 @@ import {
   IconHelm,
   IconPanelLeftClose,
   IconPencil,
+  IconPlay,
   IconPlus,
   IconSearch,
   IconServer,
+  IconSparkle,
+  IconStop,
+  IconTerminal,
   IconTrash,
   IconX,
 } from './Icons';
@@ -28,8 +32,19 @@ interface Props {
   onRename: (id: string, name: string) => Promise<void>;
   onChangeDir: (id: string, dir: string) => Promise<void>;
   onSetPort: (id: string, port: number | null) => Promise<void>;
+  onSetStartCommands: (id: string, commands: string[] | null) => Promise<void>;
   onRemove: (id: string) => void;
   onHide: () => void;
+  // ▶ / ■ on the workspace card: run (or stop) the project's start commands —
+  // one dev pane each, hidden in the tray until `onShowDev` opens them.
+  // onStartDev resolves to 'needs-command' when the project has none and none
+  // could be detected, which opens the editor pre-filled by claude.
+  onStartDev: (id: string) => Promise<'started' | 'needs-command' | 'failed'>;
+  onStopDev: (id: string) => void;
+  onShowDev: (id: string) => void; // open this project's dev panes (or send them back)
+  devPanesOpen: (id: string) => boolean; // false = minimized/not on screen
+  // Ask claude how the project starts (headless, read-only, costs a few cents).
+  onSuggestStart: (id: string) => Promise<string[]>;
   // Drag-to-reorder: grip on each row → drop on another row's slot.
   dragId: string | null;
   dragOverId: string | null;
@@ -52,8 +67,14 @@ export function Sidebar({
   onRename,
   onChangeDir,
   onSetPort,
+  onSetStartCommands,
   onRemove,
   onHide,
+  onStartDev,
+  onStopDev,
+  onShowDev,
+  devPanesOpen,
+  onSuggestStart,
   dragId,
   dragOverId,
   onDragStart,
@@ -69,10 +90,48 @@ export function Sidebar({
   const [menu, setMenu] = useState<{ id: string; x: number; y: number } | null>(null);
   const [edit, setEdit] = useState<{
     id: string;
-    field: 'name' | 'dir' | 'port';
+    field: 'name' | 'dir' | 'port' | 'start';
     value: string;
+    // Set when the editor was opened by ▶ rather than the right-click menu:
+    // accepting the commands then starts the project straight away.
+    run?: boolean;
   } | null>(null);
   const [editError, setEditError] = useState('');
+  // Workspace id whose start command claude is currently working out.
+  const [asking, setAsking] = useState<string | null>(null);
+
+  // Ask claude how this project starts and drop the answer into the editor —
+  // the owner still has to accept it, so nothing runs unreviewed.
+  const askClaude = async (id: string) => {
+    setAsking(id);
+    setEditError('');
+    try {
+      const commands = await onSuggestStart(id);
+      if (!commands.length) {
+        setEditError("claude couldn't work out how to start this one — type it yourself");
+      } else {
+        setEdit((prev) => ({
+          id,
+          field: 'start',
+          value: commands.join('\n'),
+          run: prev?.id === id ? prev.run : undefined,
+        }));
+      }
+    } catch (err) {
+      setEditError((err as Error).message);
+    } finally {
+      setAsking(null);
+    }
+  };
+
+  // ▶: start the project; if it has no command (and none could be detected),
+  // fall straight into asking claude and open the editor pre-filled.
+  const startOrAsk = async (id: string) => {
+    if ((await onStartDev(id)) === 'needs-command') {
+      setEdit({ id, field: 'start', value: '', run: true });
+      await askClaude(id);
+    }
+  };
 
   // Any click, scroll, or Escape dismisses the context menu.
   useEffect(() => {
@@ -95,7 +154,9 @@ export function Sidebar({
   // sidebar badges: working (green) + waiting (amber) called out separately;
   // `total` covers all running panes (idle included).
   const panesIn = (ws: Workspace) => {
-    const running = sessions.filter((s) => s.workspace === ws.dir && s.status === 'running');
+    const running = sessions.filter(
+      (s) => s.workspace === ws.dir && s.status === 'running' && s.kind !== 'dev',
+    );
     return {
       total: running.length,
       working: running.filter((s) => s.activity === 'working').length,
@@ -109,7 +170,11 @@ export function Sidebar({
     setMenu({ id, x: e.clientX, y: e.clientY });
   };
 
-  const startEdit = (id: string, field: 'name' | 'dir' | 'port', value: string) => {
+  // A workspace's dev panes (one per start command).
+  const devPanesFor = (ws: Workspace) =>
+    sessions.filter((s) => s.kind === 'dev' && s.workspace === ws.dir);
+
+  const startEdit = (id: string, field: 'name' | 'dir' | 'port' | 'start', value: string) => {
     setEditError('');
     setEdit({ id, field, value });
     setMenu(null);
@@ -118,15 +183,24 @@ export function Sidebar({
   const submitEdit = async () => {
     if (!edit) return;
     const v = edit.value.trim();
-    // Port is the one field where blank is meaningful — it clears the check.
-    if (!v && edit.field !== 'port') {
+    // Port and start command are the fields where blank is meaningful — it
+    // clears them.
+    if (!v && edit.field !== 'port' && edit.field !== 'start') {
       setEdit(null);
       return;
     }
     try {
       if (edit.field === 'name') await onRename(edit.id, v);
       else if (edit.field === 'dir') await onChangeDir(edit.id, v);
-      else {
+      else if (edit.field === 'start') {
+        const lines = v
+          .split('\n')
+          .map((l) => l.trim())
+          .filter(Boolean);
+        await onSetStartCommands(edit.id, lines.length ? lines : null);
+        // Opened by ▶: the owner has now seen the commands, so run them.
+        if (edit.run && lines.length) void onStartDev(edit.id);
+      } else {
         const port = v ? Number(v) : null;
         if (port !== null && (!Number.isInteger(port) || port < 1 || port > 65535)) {
           throw new Error('port must be 1–65535');
@@ -163,27 +237,70 @@ export function Sidebar({
         {shown.map((ws) =>
           edit && edit.id === ws.id ? (
             <div key={ws.id} className="ws-item ws-editing">
-              <input
-                className="ws-edit-input"
-                value={edit.value}
-                placeholder={
-                  edit.field === 'dir'
-                    ? 'directory path'
-                    : edit.field === 'port'
-                      ? 'dev-server port (blank to clear)'
-                      : 'workspace name'
-                }
-                autoFocus
-                onChange={(e) => setEdit({ ...edit, value: e.target.value })}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') void submitEdit();
-                  else if (e.key === 'Escape') {
-                    setEdit(null);
-                    setEditError('');
+              {edit.field === 'start' ? (
+                // Start commands are a LIST (one per line) — a project can need
+                // a backend and a frontend watcher. Enter adds a line here, so
+                // Ctrl+Enter (or clicking away) saves.
+                <>
+                  <textarea
+                    className="ws-edit-input ws-edit-area"
+                    value={edit.value}
+                    rows={Math.min(Math.max(edit.value.split('\n').length, 2), 6)}
+                    placeholder={
+                      'one command per line, e.g.\ncd server && npm start\ncd web && npm run watch'
+                    }
+                    autoFocus
+                    disabled={asking === edit.id}
+                    onChange={(e) => setEdit({ ...edit, value: e.target.value })}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) void submitEdit();
+                      else if (e.key === 'Escape') {
+                        setEdit(null);
+                        setEditError('');
+                      }
+                    }}
+                    onBlur={() => void submitEdit()}
+                  />
+                  <div className="ws-edit-row">
+                    <button
+                      className="ws-edit-ask"
+                      disabled={asking === edit.id}
+                      // onMouseDown, not onClick: the textarea's blur would
+                      // save-and-close the editor before a click landed.
+                      onMouseDown={(e) => {
+                        e.preventDefault();
+                        void askClaude(edit.id);
+                      }}
+                    >
+                      <IconSparkle size={12} />
+                      {asking === edit.id ? 'asking Claude…' : 'Ask Claude'}
+                    </button>
+                    <span className="ws-edit-hint">Ctrl+Enter saves · Esc cancels</span>
+                  </div>
+                </>
+              ) : (
+                <input
+                  className="ws-edit-input"
+                  value={edit.value}
+                  placeholder={
+                    edit.field === 'dir'
+                      ? 'directory path'
+                      : edit.field === 'port'
+                        ? 'dev-server port (blank to clear)'
+                        : 'workspace name'
                   }
-                }}
-                onBlur={() => void submitEdit()}
-              />
+                  autoFocus
+                  onChange={(e) => setEdit({ ...edit, value: e.target.value })}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') void submitEdit();
+                    else if (e.key === 'Escape') {
+                      setEdit(null);
+                      setEditError('');
+                    }
+                  }}
+                  onBlur={() => void submitEdit()}
+                />
+              )}
               {editError && <div className="form-error ws-edit-error">{editError}</div>}
             </div>
           ) : (
@@ -283,6 +400,49 @@ export function Sidebar({
                   </span>
                 );
               })()}
+              {(() => {
+                // Start / stop the project itself. The dev pane's output opens
+                // from the terminal button next to it.
+                const panes = devPanesFor(ws);
+                const liveCount = panes.filter((p) => p.status === 'running').length;
+                const live = liveCount > 0;
+                const cmds = ws.startCommands ?? [];
+                const busy = asking === ws.id;
+                return (
+                  <span className="ws-run" onClick={(e) => e.stopPropagation()}>
+                    <button
+                      className={`ws-run-btn ${live ? 'live' : ''}`}
+                      disabled={busy}
+                      title={
+                        busy
+                          ? 'asking Claude how this project starts…'
+                          : live
+                            ? `Stop ${liveCount > 1 ? `${liveCount} processes` : `"${cmds[0] ?? 'dev server'}"`}`
+                            : cmds.length
+                              ? `Start: ${cmds.join(' · ')}`
+                              : 'Start project (Helm works out the command)'
+                      }
+                      onClick={() => (live ? onStopDev(ws.id) : void startOrAsk(ws.id))}
+                    >
+                      {live ? <IconStop size={16} /> : <IconPlay size={16} />}
+                    </button>
+                    {panes.length > 0 && (
+                      <button
+                        className={`ws-run-btn ${devPanesOpen(ws.id) ? 'open' : live ? 'live' : ''}`}
+                        title={
+                          devPanesOpen(ws.id)
+                            ? `Hide the dev output (${panes.length} pane${panes.length > 1 ? 's' : ''})`
+                            : `Show the dev output (${panes.length} pane${panes.length > 1 ? 's' : ''})`
+                        }
+                        onClick={() => onShowDev(ws.id)}
+                      >
+                        <IconTerminal size={16} />
+                        {panes.length > 1 && <span className="ws-run-count">{panes.length}</span>}
+                      </button>
+                    )}
+                  </span>
+                );
+              })()}
               <button
                 className="ws-remove"
                 title="Remove workspace (sessions keep running)"
@@ -328,6 +488,22 @@ export function Sidebar({
             onClick={() => startEdit(menuWs.id, 'port', menuWs.port ? String(menuWs.port) : '')}
           >
             <IconServer size={13} /> Set dev-server port…
+          </button>
+          <button
+            className="ws-menu-item"
+            onClick={() => startEdit(menuWs.id, 'start', (menuWs.startCommands ?? []).join('\n'))}
+          >
+            <IconPlay size={13} /> Set start command(s)…
+          </button>
+          <button
+            className="ws-menu-item"
+            onClick={() => {
+              setMenu(null);
+              setEdit({ id: menuWs.id, field: 'start', value: '' });
+              void askClaude(menuWs.id);
+            }}
+          >
+            <IconSparkle size={13} /> Ask Claude how to start it…
           </button>
           <div className="ws-menu-sep" />
           <button

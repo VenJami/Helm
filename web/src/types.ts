@@ -4,6 +4,8 @@ export interface SessionInfo {
   color: string; // #rrggbb accent
   workspace: string;
   profile: string | null;
+  kind: 'claude' | 'dev'; // 'dev' = the workspace's dev-server pane, not a claude session
+  command: string | null; // dev panes: the shell command they run
   status: 'running' | 'exited' | 'dead'; // dead = PTY lost to a server restart
   exitCode: number | null;
   activity: 'working' | 'waiting' | 'idle' | null; // from Claude Code hooks
@@ -58,6 +60,8 @@ export interface Workspace {
   dir: string;
   profile?: string; // pinned account name; absent = default account
   port?: number; // project's dev-server port; absent = no server check
+  startCommands?: string[]; // what ▶ runs — one dev pane per command (a project
+  // can need a backend AND a frontend watcher)
 }
 
 // Per-workspace dev-server liveness for the sidebar. Only workspaces with a

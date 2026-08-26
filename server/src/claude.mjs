@@ -341,3 +341,66 @@ export function accountEmail(configDir) {
     return null;
   }
 }
+
+// -------------------------------------------- headless `claude -p` answers
+// Helm asks claude how to start a project (workspace ▶ with nothing
+// configured) via `claude -p --output-format json`. The envelope is claude's,
+// so a shape change here is DRIFT, not a caller bug — flagged as such so the
+// UI banner shows it instead of the feature failing silently. Envelope fields
+// used (verified on 2.1.246): `result` (the model's text) and
+// `total_cost_usd`. Returns {commands, cost} or null when unreadable.
+export function parseStartSuggestion(stdout, label = '') {
+  let envelope;
+  try {
+    envelope = JSON.parse(stdout);
+  } catch {
+    // Some runs print a warning line before the envelope — take the last line
+    // that parses as JSON before calling it drift.
+    const lines = stdout.trim().split(/\r?\n/).reverse();
+    for (const line of lines) {
+      try {
+        envelope = JSON.parse(line);
+        break;
+      } catch {
+        /* keep looking */
+      }
+    }
+    if (!envelope) {
+      noteDrift(
+        'suggest-nonjson',
+        `claude -p returned non-JSON output (suggest-start${label ? ' ' + label : ''})`,
+      );
+      return null;
+    }
+  }
+  const text = typeof envelope?.result === 'string' ? envelope.result : null;
+  if (text === null) {
+    noteDrift(
+      'suggest-noresult',
+      "claude -p JSON envelope has no string 'result' field (suggest-start)",
+    );
+    return null;
+  }
+  // Models like to wrap JSON in prose or a code fence — take the first array.
+  const match = /\[[\s\S]*?\]/.exec(text);
+  let commands = [];
+  if (match) {
+    try {
+      const arr = JSON.parse(match[0]);
+      if (Array.isArray(arr)) commands = arr.filter((c) => typeof c === 'string');
+    } catch {
+      /* not JSON after all — fall through to the line read below */
+    }
+  }
+  if (!commands.length && !match) {
+    // A plain one-command answer is still useful.
+    commands = text
+      .split(/\r?\n/)
+      .map((l) => l.trim())
+      .filter((l) => l && !l.startsWith('#') && !l.startsWith('`'));
+  }
+  return {
+    commands: commands.map((c) => c.trim()).filter(Boolean),
+    cost: typeof envelope?.total_cost_usd === 'number' ? envelope.total_cost_usd : null,
+  };
+}

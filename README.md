@@ -92,6 +92,13 @@ window instead.
   Claude reads them from disk, like native terminal drag-drop.
 - **Workspace ops** — the sidebar shows each project's git branch, dirty
   marker, ahead/behind counts, and whether its dev server is up on its port.
+- **Start your project from the sidebar** — a play button on each project runs
+  it. Helm guesses the command from `package.json`, and when it can't (a Python
+  service, a monorepo, no manifest at all) it asks Claude to work it out and
+  shows you the answer before anything runs. Projects that need two processes —
+  a backend *and* a frontend watcher — get one command each, in their own
+  terminal panes that stay out of your way in the tray until you open them, so
+  a dev server that fell over still shows why.
 - **Make it yours** — dark or light theme with five accent presets, terminal
   font-size stepper, pane names & colors, PWA install (native-app feel, no
   Electron). Terminals stay dark in light mode so Claude's TUI stays legible.

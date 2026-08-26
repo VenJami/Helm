@@ -6,6 +6,26 @@ All notable changes to Helm are documented here. Format follows
 
 ## [Unreleased]
 
+### Added
+- **Start a project from the sidebar** — a play button on each project card runs
+  its start command(s); stop takes them down again. The command is detected from
+  the project's `package.json` the first time and saved on the workspace, and
+  can be edited any time (right-click → "Set start command(s)…").
+- **Projects that need more than one process** — a workspace holds a *list* of
+  start commands (Helm itself needs a backend and a frontend watcher), each
+  getting its own dev pane, named after the folder its command runs in. One play
+  starts them all; one stop stops them all.
+- **"Ask Claude how to start it"** — for projects nothing can be guessed from (no
+  root `package.json`, a Python service, a monorepo whose command lives in a
+  subfolder), Helm asks the claude CLI headlessly and read-only, then shows the
+  commands it proposes for review. Accepting them (Ctrl+Enter) saves and runs
+  them; nothing is ever saved or executed unreviewed. Costs a few cents on that
+  project's account, reported with the suggestion.
+- Dev output lives in real terminal panes — same scrollback, colors and Ctrl+C
+  as any pane — created minimized, so they sit in the tray until the card's
+  terminal button opens them and never disturb the Claude grid. Stopping keeps
+  the pane so a server that died on an error still shows why.
+
 ## [0.2.0] — 2026-07-10
 
 ### Added

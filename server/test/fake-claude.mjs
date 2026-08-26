@@ -10,12 +10,37 @@ if (process.argv.includes('--version')) {
   process.exit(0);
 }
 
-process.stdout.write('fake-claude ready\r\n');
-process.stdin.resume(); // consume input + keep the event loop alive
-const keep = setInterval(() => {}, 1 << 30);
-const bye = () => {
-  clearInterval(keep);
-  process.exit(0);
-};
-process.on('SIGTERM', bye);
-process.on('SIGINT', bye);
+// `claude -p` — Helm's "ask claude how to start this project" call. Reads the
+// prompt on stdin and answers with the same JSON envelope shape the real CLI
+// uses, so the smoke test can drive the whole route (spawn -> envelope -> parse
+// -> validate) without a login, a network, or a token spend.
+if (process.argv.includes('-p')) {
+  let prompt = '';
+  process.stdin.setEncoding('utf8');
+  process.stdin.on('data', (d) => (prompt += d));
+  process.stdin.on('end', () => {
+    const sawPrompt = /JSON array/i.test(prompt); // proves stdin carried the prompt
+    process.stdout.write(
+      JSON.stringify({
+        type: 'result',
+        subtype: 'success',
+        is_error: false,
+        total_cost_usd: 0.0123,
+        result: sawPrompt
+          ? '["cd api && npm start", "cd web && npm run watch"]'
+          : '[] (no prompt arrived on stdin)',
+      }) + '\n',
+    );
+    process.exit(0);
+  });
+} else {
+  process.stdout.write('fake-claude ready\r\n');
+  process.stdin.resume(); // consume input + keep the event loop alive
+  const keep = setInterval(() => {}, 1 << 30);
+  const bye = () => {
+    clearInterval(keep);
+    process.exit(0);
+  };
+  process.on('SIGTERM', bye);
+  process.on('SIGINT', bye);
+}

@@ -36,7 +36,9 @@ notifications, all script-verified). Current backlog: see docs/ROADMAP.md.
 - **No DB** — JSON files + tokens + account profiles in `%LOCALAPPDATA%\Helm\`
   (`~/.helm` on macOS/Linux).
 - **Panes ARE the product:** real `claude` CLI subscriptions via PTY — never a
-  custom Anthropic-API agent loop.
+  custom Anthropic-API agent loop. (One other pane kind exists: a workspace's
+  ▶ dev pane runs that project's start command in the same PTY machinery —
+  `kind:'dev'`, no hooks/account/usage. See ARCHITECTURE.)
 
 ## Project Structure
 ```

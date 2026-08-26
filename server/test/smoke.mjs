@@ -544,6 +544,212 @@ test('PATCH workspace port sets then clears', async () => {
   assert.equal((await cleared.json()).port, undefined);
 });
 
+test('dev pane: start / stop / restart a project, keeping the pane', async () => {
+  const dir = mkdir(path.join(tmp, 'devproj'));
+  const ws = await (
+    await authed('/workspaces', { method: 'POST', body: JSON.stringify({ name: 'devproj', dir }) })
+  ).json();
+
+  // No start command and no package.json to guess from → a clear 400, not a spawn.
+  const noCmd = await authed(`/workspaces/${ws.id}/start`, { method: 'POST' });
+  assert.equal(noCmd.status, 400);
+
+  // A keep-alive stand-in for a dev server (no npm, no network).
+  const command = 'node -e "setInterval(() => {}, 1000)"';
+  const set = await authed(`/workspaces/${ws.id}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ startCommands: [command] }),
+  });
+  assert.equal(set.status, 200);
+  assert.deepEqual((await set.json()).startCommands, [command]);
+
+  const started = await authed(`/workspaces/${ws.id}/start`, { method: 'POST' });
+  assert.equal(started.status, 201);
+  const dev = (await started.json()).sessions[0];
+  assert.equal(dev.kind, 'dev');
+  assert.equal(dev.command, command);
+  assert.equal(dev.status, 'running');
+  assert.equal(dev.profile, null); // dev panes carry no claude account
+
+  // One pane per command — a second start while it runs is refused.
+  assert.equal((await authed(`/workspaces/${ws.id}/start`, { method: 'POST' })).status, 409);
+
+  // Stop keeps the pane (so its output stays readable) — only the process dies.
+  assert.equal((await authed(`/sessions/${dev.id}/stop`, { method: 'POST' })).status, 200);
+  let after = null;
+  for (let i = 0; i < 40 && after?.status !== 'exited'; i++) {
+    await sleep(100);
+    after = (await (await authed('/sessions')).json()).find((x) => x.id === dev.id);
+  }
+  assert.equal(after?.status, 'exited');
+  assert.equal((await authed(`/sessions/${dev.id}/stop`, { method: 'POST' })).status, 409);
+
+  // ▶ again reuses the same pane rather than piling up a second one.
+  const restarted = await authed(`/workspaces/${ws.id}/start`, { method: 'POST' });
+  assert.equal(restarted.status, 201);
+  const again = (await restarted.json()).sessions[0];
+  assert.equal(again.id, dev.id);
+  assert.equal(again.status, 'running');
+  const devPanes = (await (await authed('/sessions')).json()).filter(
+    (x) => x.kind === 'dev' && x.workspace === path.resolve(dir),
+  );
+  assert.equal(devPanes.length, 1);
+
+  // A dev pane is not a claude pane: no account to switch, never a broadcast target.
+  assert.equal(
+    (
+      await authed(`/sessions/${dev.id}/switch-profile`, {
+        method: 'POST',
+        body: JSON.stringify({ profile: 'nope' }),
+      })
+    ).status,
+    400,
+  );
+  const bc = await (
+    await authed('/broadcast', {
+      method: 'POST',
+      body: JSON.stringify({ text: 'hello', sessionIds: [dev.id] }),
+    })
+  ).json();
+  assert.equal(bc.results[dev.id], 'skipped');
+
+  await authed(`/sessions/${dev.id}`, { method: 'DELETE' });
+});
+
+test('dev pane: start command is auto-detected from package.json once', async () => {
+  const dir = mkdir(path.join(tmp, 'detectproj'));
+  fs.writeFileSync(
+    path.join(dir, 'package.json'),
+    JSON.stringify({ name: 'detectproj', scripts: { build: 'x', dev: 'x', start: 'x' } }),
+  );
+  const ws = await (
+    await authed('/workspaces', {
+      method: 'POST',
+      body: JSON.stringify({ name: 'detectproj', dir }),
+    })
+  ).json();
+  assert.equal(ws.startCommands, undefined);
+
+  // 'dev' wins over 'start'; the guess is saved so it's editable afterwards.
+  const started = await authed(`/workspaces/${ws.id}/start`, { method: 'POST' });
+  assert.equal(started.status, 201);
+  const dev = (await started.json()).sessions[0];
+  assert.equal(dev.command, 'npm run dev');
+  const saved = (await (await authed('/workspaces')).json()).find((w) => w.id === ws.id);
+  assert.deepEqual(saved.startCommands, ['npm run dev']);
+
+  await authed(`/sessions/${dev.id}`, { method: 'DELETE' });
+  // Clearing it puts the workspace back to "no command set".
+  await authed(`/workspaces/${ws.id}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ startCommands: null }),
+  });
+  const cleared = (await (await authed('/workspaces')).json()).find((w) => w.id === ws.id);
+  assert.equal(cleared.startCommands, undefined);
+});
+
+test('dev panes: a project with several start commands runs one pane each', async () => {
+  const dir = mkdir(path.join(tmp, 'multiproj'));
+  const ws = await (
+    await authed('/workspaces', {
+      method: 'POST',
+      body: JSON.stringify({ name: 'multiproj', dir }),
+    })
+  ).json();
+
+  // Two keep-alive stand-ins, given as one string (the editor's one-per-line
+  // shape) to prove that path parses too.
+  const a = 'node -e "setInterval(() => {}, 1000) /* api */"';
+  const b = 'node -e "setInterval(() => {}, 1000) /* web */"';
+  const set = await authed(`/workspaces/${ws.id}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ startCommands: [a, b].join('\n') }),
+  });
+  assert.equal(set.status, 200);
+  assert.deepEqual((await set.json()).startCommands, [a, b]);
+
+  const started = await authed(`/workspaces/${ws.id}/start`, { method: 'POST' });
+  assert.equal(started.status, 201);
+  const body = await started.json();
+  assert.equal(body.started, 2);
+  assert.deepEqual(body.sessions.map((x) => x.command).sort(), [a, b].sort());
+  assert.ok(body.sessions.every((x) => x.status === 'running'));
+
+  // One workspace-level stop takes them all down; the panes survive it.
+  const stopped = await authed(`/workspaces/${ws.id}/stop`, { method: 'POST' });
+  assert.equal(stopped.status, 200);
+  assert.equal((await stopped.json()).stopped, 2);
+  let panes = [];
+  for (let i = 0; i < 40; i++) {
+    await sleep(100);
+    panes = (await (await authed('/sessions')).json()).filter(
+      (x) => x.kind === 'dev' && x.workspace === path.resolve(dir),
+    );
+    if (panes.every((x) => x.status === 'exited')) break;
+  }
+  assert.equal(panes.length, 2);
+  assert.ok(panes.every((x) => x.status === 'exited'));
+  assert.equal((await authed(`/workspaces/${ws.id}/stop`, { method: 'POST' })).status, 409);
+
+  // ▶ again revives both in place — still two panes, not four.
+  assert.equal((await authed(`/workspaces/${ws.id}/start`, { method: 'POST' })).status, 201);
+  const after = (await (await authed('/sessions')).json()).filter(
+    (x) => x.kind === 'dev' && x.workspace === path.resolve(dir),
+  );
+  assert.equal(after.length, 2);
+  assert.ok(after.every((x) => x.status === 'running'));
+
+  // Too many commands, or one that is far too long, are refused.
+  assert.equal(
+    (
+      await authed(`/workspaces/${ws.id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ startCommands: Array(7).fill('node -e ""') }),
+      })
+    ).status,
+    400,
+  );
+  assert.equal(
+    (
+      await authed(`/workspaces/${ws.id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ startCommands: ['x'.repeat(501)] }),
+      })
+    ).status,
+    400,
+  );
+
+  for (const pane of after) await authed(`/sessions/${pane.id}`, { method: 'DELETE' });
+});
+
+test('suggest-start: claude is asked how a project starts, and only suggests', async () => {
+  const dir = mkdir(path.join(tmp, 'suggestproj'));
+  const ws = await (
+    await authed('/workspaces', {
+      method: 'POST',
+      body: JSON.stringify({ name: 'suggestproj', dir }),
+    })
+  ).json();
+
+  const r = await authed(`/workspaces/${ws.id}/suggest-start`, { method: 'POST' });
+  assert.equal(r.status, 200);
+  const body = await r.json();
+  // The stand-in only answers with commands when the PROMPT reached it on
+  // stdin — which is the contract that keeps prompt text off the command line.
+  assert.deepEqual(body.commands, ['cd api && npm start', 'cd web && npm run watch']);
+  assert.equal(body.cost, 0.0123); // cost read off claude's own envelope
+
+  // A suggestion is only a suggestion: nothing saved, nothing spawned.
+  const after = (await (await authed('/workspaces')).json()).find((w) => w.id === ws.id);
+  assert.equal(after.startCommands, undefined);
+  const panes = (await (await authed('/sessions')).json()).filter(
+    (x) => x.kind === 'dev' && x.workspace === path.resolve(dir),
+  );
+  assert.equal(panes.length, 0);
+
+  assert.equal((await authed('/workspaces/nope/suggest-start', { method: 'POST' })).status, 404);
+});
+
 test('GET/POST /api/console reports shape and (Windows) toggles visibility', async (t) => {
   const q = await authed('/console');
   assert.equal(q.status, 200);

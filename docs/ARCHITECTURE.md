@@ -36,6 +36,12 @@ Browser (React + xterm.js grid) <--WS/REST--> Node server <--PTY--> claude.cmd
 - `GET/POST /api/sessions`, `DELETE /api/sessions/:id` — lifecycle.
   POST body `{workspace, profile?, cols?, rows?}`. Session statuses:
   `running` | `exited` (process ended) | `dead` (PTY lost to server restart).
+  Every session carries a `kind`: `claude` (a claude CLI pane — everything
+  below assumes this) or `dev` (a workspace's dev-server pane, see
+  `POST /api/workspaces/:id/start`).
+- `POST /api/sessions/:id/stop` — kill the process, KEEP the pane (its
+  scrollback stays readable; it lands in `exited` and can be started again).
+  409 when it isn't running. Deleting the pane outright is the DELETE above.
 - `PATCH /api/sessions/:id {name?, color?}` — pane identity (persisted).
 - `POST /api/sessions/:id/revive` — respawn a `dead` session; uses
   `claude --resume <claudeSessionId>` when hooks captured the id (same
@@ -95,12 +101,33 @@ Browser (React + xterm.js grid) <--WS/REST--> Node server <--PTY--> claude.cmd
   workspaces with a configured `port`: a bare TCP connect to `127.0.0.1:port`
   (`up` = accepted, capped at 1 s). Also registered before `:id`. Polled ~4 s.
 - `GET/POST /api/workspaces`, `DELETE /api/workspaces/:id`. Workspace =
-  `{id, name, dir, profile?, port?}` — `profile` pins a default account to that
-  project (panes made there run on it → per-project usage); `port` is the
-  project's dev-server port for the liveness check above. `PATCH
-  /api/workspaces/:id {name?, dir?, profile?, port?}` re-pins/renames/re-roots or
-  sets the port; `profile: null|''` clears the pin, `port: null` clears the
-  check, and a `port` outside 1–65535 is a 400.
+  `{id, name, dir, profile?, port?, startCommands?}` — `profile` pins a default
+  account to that project (panes made there run on it → per-project usage);
+  `port` is the project's dev-server port for the liveness check above;
+  `startCommands` is the LIST of commands ▶ runs (a project can need a backend
+  *and* a frontend watcher — this repo does). `PATCH /api/workspaces/:id
+  {name?, dir?, profile?, port?, startCommands?}` re-pins/renames/re-roots or
+  sets the port/commands; `profile: null|''` clears the pin, `port: null`
+  clears the check, `startCommands: null|[]` clears the commands. Commands may
+  be sent as an array or as one newline-separated string (what the sidebar's
+  editor does); over 6 commands, or one over 500 chars, is a 400. A legacy
+  single `startCommand` is still accepted on the wire and migrated on load.
+- `POST /api/workspaces/:id/start {cols?, rows?}` — ▶: run each start command
+  as its own **dev pane** (`kind:'dev'`), returning
+  `{sessions:[…], started:n}`. Panes are matched to commands by command string,
+  so an existing stopped/dead pane is respawned in place instead of duplicated;
+  409 when every command is already running. With no `startCommands` set, they
+  are guessed from the ROOT `package.json` scripts (`dev` → `start` → `serve`,
+  as `npm run <script>`) and saved onto the workspace. Nothing guessable → 400
+  with `needsCommand:true`, which is the UI's cue to offer /suggest-start.
+- `POST /api/workspaces/:id/stop` — ■: stop every running dev pane of that
+  workspace (`{stopped:n}`); the panes stay so their output is still readable.
+  409 when none is running.
+- `POST /api/workspaces/:id/suggest-start` → `{commands:[…], cost}` — asks the
+  REAL claude CLI, headlessly and read-only, how this project starts (see
+  CLAUDE_INTERNALS §6 for the exact invocation). Costs a real few cents and
+  takes ~5–20 s. It **only suggests**: nothing is saved and nothing is spawned,
+  because the UI shows the commands for the owner to accept first.
 - `GET /api/profiles` → `{default:{email}, profiles:[{name,email}]}`;
   `DELETE /api/profiles/:name` (refused while a running session uses it).
 - `POST /api/hook` — hook relay (own token via `x-helm-hook` header).
@@ -123,6 +150,21 @@ HELM_SESSION_ID, HELM_HOOK_TOKEN, HELM_PORT} })`
   would queue a duplicate dialog).
 - Ring buffer: ~200 KB of output kept per session, replayed on (re)attach so
   panes repaint instantly. Socket close ≠ PTY kill (locked decision).
+
+### Dev panes (`kind:'dev'`)
+A workspace's ▶ spawns each of its start commands through the platform shell instead of
+claude — `%ComSpec% /d /s /c <command>` on Windows, `$SHELL -lc <command>`
+elsewhere — in the same PTY/session machinery, so npm's colors, its prompts and
+Ctrl+C behave as they do in a normal terminal. Deliberately NOT a claude
+session: no hook settings, no `CLAUDE_CONFIG_DIR`, no profile, no transcript
+(so it never touches usage), and it's refused as a broadcast or account-switch
+target. `FORCE_COLOR=1` is set, and Helm's own `PORT` is scrubbed from the env
+(Vite/Next read it — inheriting Helm's would point the dev server at Helm).
+Killing the pty tears the whole chain down (cmd → npm → node), so stopping
+frees the project's port. The UI creates these panes minimized: they live in
+the tray, out of the claude grid, until the sidebar card's terminal button
+opens them. A project with several commands gets one pane each, named after the
+folder its command cds into (`cd server && npm start` → "<project> server").
 
 ## Hooks → status/usage (how panes report state)
 Every pane gets `--settings %LOCALAPPDATA%\Helm\hook-settings.json` (generated
