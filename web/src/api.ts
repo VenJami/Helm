@@ -8,6 +8,8 @@ import type {
   ProfilesInfo,
   ServerInfo,
   SessionInfo,
+  TunnelInfo,
+  TunnelsResponse,
   UsageInfo,
   Workspace,
 } from './types';
@@ -140,6 +142,25 @@ export const api = {
       method: 'POST',
     }),
   removeWorkspace: (id: string) => req<{ ok: boolean }>(`/workspaces/${id}`, { method: 'DELETE' }),
+
+  // Public share links (Cloudflare quick tunnels). The URLs are
+  // UNAUTHENTICATED by design of the free tier — callers must warn first.
+  getTunnels: () => req<TunnelsResponse>('/tunnels'),
+  // Runs the install in a visible dev pane — never silently in the background.
+  installCloudflared: (cols: number, rows: number) =>
+    req<SessionInfo>('/tunnels/install', {
+      method: 'POST',
+      body: JSON.stringify({ cols, rows }),
+    }),
+  shareWorkspace: (id: string, port?: number) =>
+    req<TunnelInfo>(`/workspaces/${id}/tunnel`, {
+      method: 'POST',
+      body: JSON.stringify({ port }),
+    }),
+  extendShare: (id: string) =>
+    req<TunnelInfo>(`/workspaces/${id}/tunnel/extend`, { method: 'POST' }),
+  unshareWorkspace: (id: string) =>
+    req<{ ok: boolean }>(`/workspaces/${id}/tunnel`, { method: 'DELETE' }),
 
   listProfiles: () => req<ProfilesInfo>('/profiles'),
   deleteProfile: (name: string) =>

@@ -512,6 +512,54 @@ byte-identical. The CI gate is a hard failure again. Lesson: read what a
 dry-run actually reports before drawing a conclusion from it, and don't loosen
 a gate until the cheap fix has genuinely been tried.
 
+Public share links (2026-08-26, owner-approved dep) — VS-Code-style port
+forwarding: each workspace with a dev-server port gets a globe button that
+publishes it to the internet through a **Cloudflare quick tunnel**
+(`server/src/tunnel.mjs`, `cloudflared tunnel --url`), giving a
+`https://<random>.trycloudflare.com` link that's copied to the clipboard.
+Because those URLs are UNAUTHENTICATED, the safety is three-layered and
+deliberate: an un-suppressible warning dialog (no "don't ask again") spelling
+out that there is no password; a red PUBLIC flag on the project plus an
+always-visible red toolbar pill (`N public · Nm left`) so a forgotten link
+can't hide; and a 30-minute self-expiry (click the pill to extend all, toast
+warns at 5 min). Helm's own port is refused server-side (`BLOCKED_PORT`) since
+its pages carry the auth token; links are never persisted (restart = fail
+closed), and die with the workspace and on shutdown. cloudflared is detected on
+PATH; a miss is re-probed every 10 s so installing it mid-session needs no
+server restart (a permanent negative would have meant restarting and killing
+every pane). Missing cloudflared opens an explainer dialog — what it is, that
+installing it starts no service and opens no ports, the exact command, a copy
+button, and "Install it for me" which runs winget/brew in a VISIBLE pane
+(`POST /api/tunnels/install`, reusing the dev-pane machinery) so the owner
+watches it and answers any elevation prompt. That revises the original
+"detect, never install" call: the bare error toast was a dead end. The share
+dialog also warns when nothing is listening on the port yet, so a Cloudflare
+502 isn't a mystery. Owner testing then found the install loop broken two ways
+(both now regression-tested, both in GOTCHAS): the pane ran bare `winget`,
+which is an App Execution Alias that doesn't resolve for child processes (exit
+1 in one second) — Helm now quotes the absolute WindowsApps path, found via
+`lstat` since `existsSync` reports false for that symlink; and detection was
+PATH-only, so a freshly installed cloudflared stayed invisible to the
+already-running server (a process keeps its spawn-time PATH), which is why it
+kept re-prompting even after a manual install — detection now probes known
+install dirs and spawns the resolved absolute path. Re-verified 10/10 against
+the real Cloudflare edge with cloudflared deliberately absent from PATH. Owner
+then reported the link itself was invisible — correctly: the URL only existed
+in a hover tooltip and a toast that vanished, and the sidebar pill copied
+SILENTLY so it read as a dead button. Added a **Public links panel**
+(`modals/SharesModal`) opened by the toolbar pill or the PUBLIC flag: every
+live link with its full wrapped URL as a real clickable anchor, plus Copy
+(with visible "Copied"), Open, Extend and Stop per link, and time remaining.
+Verified 26/26 by CDP against a REAL tunnel (not the stub), including that the
+whole URL is readable rather than scrolled out of sight. Smoke suite 21 (every refusal + the full
+lifecycle against a `fake-cloudflared` stand-in) and 17/17 CDP UI checks, plus
+10/10 against the REAL binary and the REAL Cloudflare edge (cloudflared
+2026.8.2, run from a throwaway copy so the owner's machine stays clean): a
+test origin was published, fetched back over the public internet, then torn
+down — banner parse ~6 s, anonymous (no account), edge 502s after stop, no
+stray processes. SECURITY.md gained a section: this is the one feature that
+intentionally leaves loopback.
+
 ## Short-term backlog (rough priority order, owner-approved direction)
 (empty — next items to be chosen with the owner)
 

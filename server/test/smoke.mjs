@@ -24,6 +24,9 @@ const serverDir = path.join(testDir, '..');
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'helm-smoke-'));
 const helmDir = IS_WIN ? path.join(tmp, 'Helm') : path.join(tmp, '.helm');
 const wrapper = path.join(testDir, IS_WIN ? 'fake-claude.cmd' : 'fake-claude.sh');
+// Stand-in for cloudflared, so share links can be driven without the real
+// binary or any network (see fake-cloudflared.mjs).
+const cfWrapper = path.join(testDir, IS_WIN ? 'fake-cloudflared.cmd' : 'fake-cloudflared.sh');
 
 let child;
 let PORT = 0;
@@ -78,6 +81,7 @@ async function tryBoot(port) {
     USERPROFILE: tmp,
     LOCALAPPDATA: tmp,
     HELM_CLAUDE_CMD: wrapper,
+    HELM_CLOUDFLARED_CMD: cfWrapper,
     HELM_USAGE_TTL_MS: '0', // usage tests append + immediately re-poll
   };
   delete env.CLAUDE_CONFIG_DIR; // don't inherit a real default account
@@ -542,6 +546,194 @@ test('PATCH workspace port sets then clears', async () => {
   });
   assert.equal(cleared.status, 200);
   assert.equal((await cleared.json()).port, undefined);
+});
+
+// Public share links. The happy path needs a real cloudflared + real internet,
+// so it lives outside CI (see docs/GOTCHAS.md); what IS covered here is every
+// refusal, because those are the security-critical half — a share link is
+// unauthenticated, so the port guard is the thing that must never regress.
+test('share links: refuses Helm’s own port, an unset port, and unknown workspaces', async () => {
+  const dir = mkdir(path.join(tmp, 'shared'));
+  const ws = await (
+    await authed('/workspaces', {
+      method: 'POST',
+      body: JSON.stringify({ name: 'shared', dir }),
+    })
+  ).json();
+
+  // No port configured yet → refuse with an actionable message, not a crash.
+  const noPort = await authed(`/workspaces/${ws.id}/tunnel`, { method: 'POST' });
+  assert.equal(noPort.status, 400);
+  assert.match((await noPort.json()).error, /port/i);
+
+  // THE load-bearing guard: Helm serves its own token in index.html, so a
+  // public link to its port would hand out a terminal on this machine.
+  // Enforced server-side, so a UI bug or a direct curl can't get past it.
+  const helmPort = await authed(`/workspaces/${ws.id}/tunnel`, {
+    method: 'POST',
+    body: JSON.stringify({ port: PORT }),
+  });
+  assert.equal(helmPort.status, 400);
+  assert.equal((await helmPort.json()).code, 'BLOCKED_PORT');
+
+  // Out-of-range ports are rejected before cloudflared is ever consulted.
+  const badPort = await authed(`/workspaces/${ws.id}/tunnel`, {
+    method: 'POST',
+    body: JSON.stringify({ port: 99999 }),
+  });
+  assert.equal(badPort.status, 400);
+
+  const noSuchWs = await authed('/workspaces/nope/tunnel', {
+    method: 'POST',
+    body: JSON.stringify({ port: 4321 }),
+  });
+  assert.equal(noSuchWs.status, 404);
+
+  // Stopping / extending something that isn't shared is a clean 404.
+  assert.equal((await authed(`/workspaces/${ws.id}/tunnel`, { method: 'DELETE' })).status, 404);
+  assert.equal(
+    (await authed(`/workspaces/${ws.id}/tunnel/extend`, { method: 'POST' })).status,
+    404,
+  );
+});
+
+test('share links: /api/tunnels reports cloudflared availability and an install hint', async () => {
+  const res = await authed('/tunnels');
+  assert.equal(res.status, 200);
+  const body = await res.json();
+  assert.equal(body.available, true); // the stand-in answers --version
+  assert.match(body.version, /cloudflared version/);
+  assert.ok(body.installHint.length > 0); // shown instead of a share button when absent
+  assert.equal(body.ttlMs, 30 * 60 * 1000); // links self-expire — don't silently lengthen this
+});
+
+// The full lifecycle against the cloudflared stand-in: spawn, scrape the URL
+// out of its banner, expose it, extend the deadline, then tear it down. Proves
+// everything except that Cloudflare's edge really serves the URL — that needs
+// the real binary and is deliberately out of CI.
+test('share links: start → live URL → extend → stop', async () => {
+  const dir = mkdir(path.join(tmp, 'tunnelled'));
+  const ws = await (
+    await authed('/workspaces', {
+      method: 'POST',
+      body: JSON.stringify({ name: 'tunnelled', dir, port: 5173 }),
+    })
+  ).json();
+
+  const started = await authed(`/workspaces/${ws.id}/tunnel`, { method: 'POST' });
+  assert.equal(started.status, 201);
+  const tunnel = await started.json();
+  assert.equal(tunnel.status, 'live');
+  assert.match(tunnel.url, /^https:\/\/fake-[0-9a-f]+\.trycloudflare\.com$/);
+  assert.equal(tunnel.port, 5173);
+  // Expiry is set at creation, not bolted on later — a link can never exist
+  // without a deadline. (Armed a few ms after startedAt is captured.)
+  const ttl = tunnel.expiresAt - tunnel.startedAt;
+  assert.ok(ttl >= 30 * 60 * 1000 && ttl < 31 * 60 * 1000, `ttl was ${ttl}ms`);
+  // The process handle must never leak through the API.
+  assert.equal(tunnel.proc, undefined);
+
+  // It shows up in the list the sidebar/toolbar poll.
+  const listed = (await (await authed('/tunnels')).json()).tunnels;
+  assert.equal(listed.length, 1);
+  assert.equal(listed[0].workspaceId, ws.id);
+
+  // Sharing the same project twice is refused rather than orphaning a process.
+  const again = await authed(`/workspaces/${ws.id}/tunnel`, { method: 'POST' });
+  assert.equal(again.status, 409);
+
+  // Extend pushes the deadline out.
+  const extended = await (
+    await authed(`/workspaces/${ws.id}/tunnel/extend`, { method: 'POST' })
+  ).json();
+  assert.ok(extended.expiresAt > tunnel.expiresAt);
+
+  // Stop takes it down and removes it from the list.
+  assert.equal((await authed(`/workspaces/${ws.id}/tunnel`, { method: 'DELETE' })).status, 200);
+  assert.deepEqual((await (await authed('/tunnels')).json()).tunnels, []);
+});
+
+test('share links: removing a workspace takes its public link down with it', async () => {
+  const dir = mkdir(path.join(tmp, 'tunnel-doomed'));
+  const ws = await (
+    await authed('/workspaces', {
+      method: 'POST',
+      body: JSON.stringify({ name: 'doomed', dir, port: 5174 }),
+    })
+  ).json();
+  assert.equal((await authed(`/workspaces/${ws.id}/tunnel`, { method: 'POST' })).status, 201);
+  assert.equal((await (await authed('/tunnels')).json()).tunnels.length, 1);
+
+  assert.equal((await authed(`/workspaces/${ws.id}`, { method: 'DELETE' })).status, 200);
+  // A public link pointing at a project you just removed would be the worst
+  // kind of leftover — it must die with the workspace.
+  assert.deepEqual((await (await authed('/tunnels')).json()).tunnels, []);
+});
+
+test('share links: the installer route refuses when cloudflared is already there', async () => {
+  // The stand-in answers --version, so this suite always looks "installed".
+  const res = await authed('/tunnels/install', { method: 'POST' });
+  assert.equal(res.status, 409);
+  assert.match((await res.json()).error, /already installed/);
+  // And the command Helm would run is exposed for the UI to show verbatim,
+  // so the owner can read it before agreeing to it.
+  const body = await (await authed('/tunnels')).json();
+  if (process.platform === 'win32') {
+    assert.ok(
+      body.installCommand.startsWith('winget install --id Cloudflare.cloudflared '),
+      body.installCommand,
+    );
+  }
+  assert.ok(body.installDocs.startsWith('https://developers.cloudflare.com/'), body.installDocs);
+});
+
+// Regression guards for the two bugs that made the installed-but-invisible
+// loop possible (2026-08-26, both hit for real by the owner).
+test('share links: install command is a real, runnable executable path', async () => {
+  const { installCommand } = await (await authed('/tunnels')).json();
+  if (process.platform !== 'win32') {
+    assert.equal(installCommand, 'brew install cloudflared');
+    return;
+  }
+  // BUG 1 was a bare `winget`, which is an App Execution Alias: it does NOT
+  // resolve for spawned children, so the install pane died instantly (exit 1).
+  // The alias file is a SYMLINK whose target isn't normally resolvable, so
+  // existsSync() reports false for a file that runs fine — lstat is the check.
+  const quoted = /^"([^"]+winget\.exe)"/.exec(installCommand);
+  if (quoted) {
+    const st = fs.lstatSync(quoted[1]); // throws if we pointed at nothing
+    assert.ok(st.size >= 0);
+    // and it must actually run the way a pane runs it (through cmd.exe)
+    const out = execFileSync(process.env.ComSpec || 'cmd.exe', [
+      '/d',
+      '/s',
+      '/c',
+      `"${quoted[1]}" --version`,
+    ]);
+    assert.match(out.toString(), /^v?\d+\./m);
+  } else {
+    assert.equal(installCommand.startsWith('winget install '), true);
+  }
+});
+
+test('share links: cloudflared is found by absolute path, not just PATH', async () => {
+  // BUG 2: winget installs cloudflared into Program Files and adds it to the
+  // MACHINE PATH — but a running process keeps the PATH it was spawned with,
+  // so the long-lived server stayed blind to it and re-prompted forever.
+  // Detection must therefore probe known install dirs too. Proven here by
+  // handing the resolver a candidate list with NO PATH entry in it.
+  const mod = await import('../src/tunnel.mjs');
+  const probe = path.join(testDir, IS_WIN ? 'fake-cloudflared.cmd' : 'fake-cloudflared.sh');
+  const prev = process.env.HELM_CLOUDFLARED_CMD;
+  process.env.HELM_CLOUDFLARED_CMD = probe; // an absolute path, never on PATH
+  try {
+    const r = await mod.checkCloudflared();
+    assert.equal(r.available, true);
+    assert.equal(r.path, probe); // the resolved absolute path is what gets spawned
+  } finally {
+    if (prev === undefined) delete process.env.HELM_CLOUDFLARED_CMD;
+    else process.env.HELM_CLOUDFLARED_CMD = prev;
+  }
 });
 
 test('dev pane: start / stop / restart a project, keeping the pane', async () => {

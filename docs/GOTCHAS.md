@@ -88,6 +88,77 @@
   inside a debounce window once left a stale `sessions.json` that resurrected
   a deleted session as a revivable ghost. Don't re-debounce lifecycle writes.
 
+- **`/voice` works in a pane, but only in tap mode.** claude's built-in
+  dictation defaults to `voice.mode: "hold"` ("hold space to record"), and
+  hold-to-talk needs a key-RELEASE event. A browser terminal only ever
+  transmits characters: xterm.js implements no kitty keyboard protocol, so
+  Helm can never tell claude that space came back up. Measured on claude
+  2.1.246 in a real pane: hold mode → pressing space does nothing at all (no
+  REC, no waveform); `/voice tap` → `● REC · tap to send` with a live
+  waveform, real mic capture, second tap sends. So dictation in Helm = run
+  `/voice tap` once (it persists in `~/.claude/settings.json`). Two traps if
+  you go poking at this: `/voice` is a TOGGLE (running it to "see what it
+  does" turns a user's working setup OFF), and it writes to the REAL
+  `~/.claude/settings.json` even when Helm's own state is isolated via
+  `HELM_DATA_DIR` — pass `/voice hold|tap|off` explicitly instead of bare
+  `/voice`, and put the setting back. Consequence for Helm: do NOT build a
+  browser-side dictation feature. The CLI's is better (audio goes to
+  Anthropic on the user's own account instead of Google/Microsoft, native
+  composer integration, zero code here).
+
+- **Public share links: verified against the real Cloudflare edge
+  (2026-08-26, cloudflared 2026.8.2).** A throwaway origin was published and
+  fetched back over the public internet, so the banner regex, the anonymous
+  quick-tunnel path, and teardown are all confirmed — not just stub-verified.
+  Facts worth keeping:
+  - The URL appears on **stderr** inside an ASCII box, and took **~6 s** to
+    arrive (the route waits up to 15 s before handing back a `starting`
+    record, so that's comfortable — but a slow link is normal, not a bug).
+  - Quick tunnels still need **no Cloudflare account and no login**. The
+    hostname is four random words, e.g.
+    `agency-webcams-neighbor-farmer.trycloudflare.com`.
+  - After stopping, the hostname keeps resolving for a while but the edge
+    returns **502** — the link is dead, it just doesn't vanish instantly.
+    Don't read a 502 as "teardown failed".
+  - `cloudflared` is a single signed Go binary (Authenticode: Cloudflare,
+    Inc.); Helm only detects it on PATH and never installs it. Two traps still
+    apply: a `.cmd`/`.bat` wrapper needs `shell:true` on Node 22 (same trap as
+    `claude.cmd` — a real `.exe` doesn't), and Vite rejects requests from an
+    unknown Host, so a tunnelled Vite project 403s until `server.allowedHosts`
+    is set (Next has `allowedDevOrigins`).
+  - `npm test` still covers the whole lifecycle against
+    `test/fake-cloudflared.mjs` (no network, no 52 MB download in CI); the
+    real-binary script lives outside the repo, in the session scratchpad.
+
+- **"cloudflared is installed but Helm keeps asking me to install it"
+  (2026-08-26, hit for real).** Two separate traps, both worth knowing beyond
+  this feature:
+  1. **A running process keeps the PATH it was spawned with.** winget put
+     cloudflared in `C:\Program Files (x86)\cloudflared` and added that to the
+     *machine* PATH — but the long-lived Helm server never sees a PATH change,
+     so detection failed forever no matter how often it re-ran. Restarting the
+     server fixes it and kills every live pane, which is the trade this feature
+     must not force. Fix: `cloudflaredCandidates()` probes known install dirs
+     (Program Files, WinGet\Links, chocolateyin, brew paths) as well as
+     PATH, and the resolved ABSOLUTE path is what gets spawned. Apply the same
+     thinking to any future external tool Helm shells out to.
+  2. **`winget` on PATH is an App Execution Alias, not an exe.** It does not
+     resolve for spawned child processes, so a pane running bare `winget …`
+     dies instantly with exit 1. Its real file under
+     `%LOCALAPPDATA%\Microsoft\WindowsApps\winget.exe` runs fine, including
+     through cmd.exe — so Helm quotes that absolute path. Sub-trap:
+     that file is a **symlink whose target isn't normally resolvable**, so
+     `fs.existsSync()` returns FALSE for a file that executes perfectly.
+     Use `fs.lstatSync()` (or `accessSync`) to test for it; `existsSync`
+     silently sends you down the broken fallback.
+  Both are pinned by smoke tests that lstat the alias, run it through cmd.exe,
+  and assert detection resolves an absolute path that was never on PATH.
+
+- **Build Windows paths with `path.join`, not template literals.** A single
+  backslash in a JS string is an escape: `` `${dir}\cloudflared\cloudflared.exe` ``
+  silently collapses to `dircloudflaredcloudflared.exe`, and the only symptom
+  is "the program isn't installed". Cost a debugging round on 2026-08-26.
+
 ## Testing pattern that works
 `cd server && npm run e2e` now codifies this permanently
 (`server/test/e2e-real.mjs`): it drives a real `claude` pane through

@@ -10,7 +10,9 @@ Browser (React + xterm.js grid) <--WS/REST--> Node server <--PTY--> claude.cmd
   routes, WebSocket attach). Shared concerns live in `server/src/`:
   `log.mjs` (🐞 drawer feed) · `persist.mjs` (atomic JSON state) ·
   `claude.mjs` (ALL claude-internals: transcript parsing, pricing, drift alarm
-  — see docs/CLAUDE_INTERNALS.md).
+  — see docs/CLAUDE_INTERNALS.md) · `tunnel.mjs` (public share links via
+  cloudflared quick tunnels — read its header comment before touching it, it
+  is the one place Helm leaves loopback).
   Sessions map (id → {pty, ring buffer, sockets, name, color, activity,
   claudeSessionId, transcriptPath…}), REST under `/api`, WS attach, hook
   endpoint, usage parsing, persistence.
@@ -20,14 +22,15 @@ Browser (React + xterm.js grid) <--WS/REST--> Node server <--PTY--> claude.cmd
   resize gutters), workspace selection, jump/cycle focus (pane ref map).
 - `web/src/hooks/` — `useSessionsPoll` (3 s session+profile poll, stable
   references, desktop notifications) · `useWorkspaceStatus` (git/dev-server
-  dots) · `useTheme` (dark/light + accent → `data-*` attrs) ·
+  dots + share-link state) · `useTheme` (dark/light + accent → `data-*` attrs) ·
   `useGridWeights` (per-workspace pane sizing).
 - `web/src/lib/storage.ts` — ALL localStorage behind typed, validated
   accessors (corrupt values fall back; per-workspace keys pruned on removal).
 - `web/src/components/` — `TerminalPane.tsx` (xterm +fit/webgl, WS
   attach/replay, per-pane usage, revive overlay) · `Sidebar.tsx` ·
   `GridResizers.tsx` (drag gutters) · `modals/` (each dialog owns its draft
-  state: NewProfile, AddWorkspace, Profiles, Usage, Broadcast, Appearance) ·
+  state: NewProfile, AddWorkspace, Profiles, Usage, Broadcast, Appearance, Share,
+  Shares = the live public-link panel, InstallCloudflared) ·
   `Modal.tsx` (shell) · `Toaster.tsx` · `CommandPalette.tsx` · `DriftBanner.tsx`.
 - `web/src/api.ts` — token + fetch wrapper (auto-reloads page once on 401),
   `types.ts` — shared shapes incl. the typed WS protocol union.
@@ -128,6 +131,31 @@ Browser (React + xterm.js grid) <--WS/REST--> Node server <--PTY--> claude.cmd
   CLAUDE_INTERNALS §6 for the exact invocation). Costs a real few cents and
   takes ~5–20 s. It **only suggests**: nothing is saved and nothing is spawned,
   because the UI shows the commands for the owner to accept first.
+### Public share links (Cloudflare quick tunnels)
+Publishes a **project's dev server** — never Helm's own port — to the internet.
+The URLs are unauthenticated, so the guards are load-bearing; see SECURITY.md
+and the header of `server/src/tunnel.mjs`.
+- `GET /api/tunnels` → `{available, version, installHint, ttlMs, tunnels:[…]}`.
+  `available:false` = cloudflared isn't on PATH; the UI then opens an explainer
+  dialog instead of sharing. A *found* result is cached for the process, a MISS
+  only for 10 s, so installing mid-session needs no restart.
+- `POST /api/tunnels/install {cols?, rows?}` → a dev-pane `sessionInfo` running
+  `installCommand` (winget/brew) in a **visible** pane — never a silent
+  background install. 409 when cloudflared is already present, 501 where there
+  is no one-line installer (the UI shows `installDocs` instead).
+- `POST /api/workspaces/:id/tunnel {port?}` → the tunnel record (201), blocking
+  until cloudflared yields a URL (15 s cap; a slower one stays `starting` and
+  the poll picks it up). Refusals: **400 `code:'BLOCKED_PORT'` for Helm's own
+  port** (its pages carry the auth token), 400 for an unset/invalid port, 409
+  when already shared, 501 when cloudflared is missing, 502 when it dies before
+  producing a URL.
+- `POST /api/workspaces/:id/tunnel/extend` — push the deadline out by another
+  `ttlMs`. `DELETE /api/workspaces/:id/tunnel` — take the link down.
+- Links live **30 min** by default, are **never persisted** (a restart drops
+  them — fail-closed), and are torn down on workspace delete and on shutdown.
+  `HELM_CLOUDFLARED_CMD` overrides the binary (the test suite points it at a
+  stand-in).
+
 - `GET /api/profiles` → `{default:{email}, profiles:[{name,email}]}`;
   `DELETE /api/profiles/:name` (refused while a running session uses it).
 - `POST /api/hook` — hook relay (own token via `x-helm-hook` header).

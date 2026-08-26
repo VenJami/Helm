@@ -37,12 +37,47 @@ any website. Helm's defenses:
    omitting it; an absent Origin means a non-browser client, which the bearer
    token alone gates.
 
+## Public share links (the one deliberate exception)
+
+Helm can publish **a project's own dev server** — never Helm itself — to the
+internet through a Cloudflare quick tunnel (the ▶ globe button; see
+`server/src/tunnel.mjs`). This is the single feature that intentionally leaves
+loopback, so its limits are stated bluntly:
+
+- **A quick-tunnel URL is completely unauthenticated.** The random
+  `*.trycloudflare.com` hostname is *not* a password. Anyone who receives or
+  guesses the link reaches your dev server, and links can be forwarded, logged,
+  or crawled. Treat a shared port as public the moment you create the link.
+- **Whatever that dev server exposes goes with it** — seeded data, admin
+  routes, debug endpoints, file uploads. Helm proxies the port; it does not
+  filter what is behind it.
+- **Traffic leaves your machine.** It is proxied through Cloudflare's edge, so
+  this feature alone breaks the "everything runs locally" property.
+- **Helm's own port can never be tunnelled.** The served page carries the auth
+  token, so a public link to it would be remote code execution. Refused
+  server-side (`blockedPorts`), not merely hidden in the UI — a smoke test
+  pins that refusal.
+- **Links self-expire** after 30 minutes unless extended, are never persisted
+  (a restart drops them all — fail-closed), and die with the workspace they
+  belong to. The UI warns before every share and shows a permanent red
+  indicator while any link is live.
+- **Helm never downloads a binary itself.** It detects cloudflared on PATH.
+  If it's missing, the UI explains what cloudflared is and offers to run your
+  platform's package-manager install command (`winget` / `brew`) — on an
+  explicit click only, and in a visible terminal pane, so you see exactly what
+  runs and answer any elevation prompt yourself.
+
+If you need an authenticated share, a quick tunnel is the wrong tool — use a
+named Cloudflare tunnel with Access, or Tailscale, neither of which Helm
+currently wires up.
+
 ## What is explicitly out of scope
 
 - **Multi-user / remote access.** Helm assumes one trusted user on the local
   machine. Do **not** expose port 7777 to a network, reverse-proxy it to the
   public internet, or run it on a shared machine. There is no per-user
-  authorization, rate limiting, or audit logging — by design.
+  authorization, rate limiting, or audit logging — by design. (The share links
+  above are an exception *for a project's dev server only*, never for Helm.)
 - **A malicious local process.** The token file, session state, and OAuth
   credentials live under `%LOCALAPPDATA%\Helm\` and are readable by any process
   running as your user. **That token file is effectively the whole security
