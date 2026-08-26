@@ -259,8 +259,7 @@ token file is the whole boundary; private vuln reporting) and CONTRIBUTING.md
 (dev setup, pre-PR checklist, simplicity/security ground rules, the real-pane
 verification requirement). README gained the screenshot + links to both. CI
 switched the server job to `npm ci` (reproducible, matches the pinned node-pty)
-and added `npm audit --audit-level=high` to both jobs (audits clean at the
-time; made informational on 2026-08-26 — see below).
+and added `npm audit --audit-level=high` to both jobs (still a hard gate).
 Improvement-plan P1-5, finishing Phase 1. Deliberately deferred ESLint/Prettier
 to the Phase 3 tooling pass — bolting a linter onto a never-linted ~2.6k-line
 codebase risks a red CI that blocks pushes, and it pairs naturally with the
@@ -501,14 +500,17 @@ proposing this repo's real commands and NOT the pane-killing `npm run dev`) and
 11/11 CDP UI (▶ → editor pre-filled → accept → both panes in the tray → logs
 open/close → ■).
 
-CI audit step made informational (2026-08-26) — `npm audit --audit-level=high`
-had gone red on BOTH jobs (main included) on transitive deps: body-parser via
-express, postcss via vite, plus brace-expansion/js-yaml in dev tooling. `npm
-audit fix` doesn't clear any of them (dry-run verified) — that needs express and
-vite major bumps. Against Helm's threat model (loopback, token-gated, single
-user) none is remotely exploitable, so the step now runs with
-`continue-on-error` and reports instead of blocking. Owner's call, taken because
-a permanently red CI stops being a signal. The dependency bumps remain open.
+Audit advisories cleared (2026-08-26) — `npm audit --audit-level=high` had gone
+red on BOTH jobs (main included): body-parser via express, postcss + nanoid via
+vite, brace-expansion/js-yaml in dev tooling. First response was to make the
+step informational, on a WRONG reading of `npm audit fix --dry-run` (its summary
+line reports the pre-fix count, which was mistaken for "the fix changes
+nothing"). Owner pasted the actual advisory list, all of which say "fix
+available"; `npm audit fix` cleared every one — all patch-level, no declared
+dependency changed, node-pty still pinned at exactly 1.1.0, web bundle hashes
+byte-identical. The CI gate is a hard failure again. Lesson: read what a
+dry-run actually reports before drawing a conclusion from it, and don't loosen
+a gate until the cheap fix has genuinely been tried.
 
 ## Short-term backlog (rough priority order, owner-approved direction)
 (empty — next items to be chosen with the owner)

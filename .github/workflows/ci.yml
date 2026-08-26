@@ -25,14 +25,8 @@ jobs:
       - name: Install frontend deps
         working-directory: web
         run: npm ci
-      # Reports advisories without failing the build. Every finding so far has
-      # been in a transitive dep that only a major-version bump would clear
-      # (express -> body-parser, vite -> postcss), and Helm is a loopback-only,
-      # token-gated, single-user server — so a permanently red CI would cost
-      # more than it catches. Read the output; a red CI means something broke.
-      - name: Audit frontend deps (informational)
+      - name: Audit frontend deps
         working-directory: web
-        continue-on-error: true
         run: npm audit --audit-level=high
       - name: Lint frontend
         working-directory: web
@@ -62,14 +56,8 @@ jobs:
       - name: Install server deps
         working-directory: server
         run: npm ci   # exact, reproducible — matches the pinned node-pty (GOTCHAS)
-      # Reports advisories without failing the build. Every finding so far has
-      # been in a transitive dep that only a major-version bump would clear
-      # (express -> body-parser, vite -> postcss), and Helm is a loopback-only,
-      # token-gated, single-user server — so a permanently red CI would cost
-      # more than it catches. Read the output; a red CI means something broke.
-      - name: Audit server deps (informational)
+      - name: Audit server deps
         working-directory: server
-        continue-on-error: true
         run: npm audit --audit-level=high
       - name: Lint server
         working-directory: server

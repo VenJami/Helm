@@ -26,6 +26,12 @@ All notable changes to Helm are documented here. Format follows
   terminal button opens them and never disturb the Claude grid. Stopping keeps
   the pane so a server that died on an error still shows why.
 
+### Security
+- Cleared four high-severity advisories in transitive dependencies
+  (`body-parser`, `postcss`, `nanoid`, `brace-expansion`, `js-yaml`) — all
+  patch-level, no declared dependency changed and `node-pty` still pinned.
+
+
 ## [0.2.0] — 2026-07-10
 
 ### Added
