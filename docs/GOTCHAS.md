@@ -88,6 +88,24 @@
   inside a debounce window once left a stale `sessions.json` that resurrected
   a deleted session as a revivable ghost. Don't re-debounce lifecycle writes.
 
+- **`/voice` works in a pane, but only in tap mode.** claude's built-in
+  dictation defaults to `voice.mode: "hold"` ("hold space to record"), and
+  hold-to-talk needs a key-RELEASE event. A browser terminal only ever
+  transmits characters: xterm.js implements no kitty keyboard protocol, so
+  Helm can never tell claude that space came back up. Measured on claude
+  2.1.246 in a real pane: hold mode → pressing space does nothing at all (no
+  REC, no waveform); `/voice tap` → `● REC · tap to send` with a live
+  waveform, real mic capture, second tap sends. So dictation in Helm = run
+  `/voice tap` once (it persists in `~/.claude/settings.json`). Two traps if
+  you go poking at this: `/voice` is a TOGGLE (running it to "see what it
+  does" turns a user's working setup OFF), and it writes to the REAL
+  `~/.claude/settings.json` even when Helm's own state is isolated via
+  `HELM_DATA_DIR` — pass `/voice hold|tap|off` explicitly instead of bare
+  `/voice`, and put the setting back. Consequence for Helm: do NOT build a
+  browser-side dictation feature. The CLI's is better (audio goes to
+  Anthropic on the user's own account instead of Google/Microsoft, native
+  composer integration, zero code here).
+
 ## Testing pattern that works
 `cd server && npm run e2e` now codifies this permanently
 (`server/test/e2e-real.mjs`): it drives a real `claude` pane through
