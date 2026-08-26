@@ -452,6 +452,14 @@ dangling objects immediately — old blobs may linger by direct SHA until GitHub
 GC; low-stakes here (username + project-name pixels), contact GH Support to
 purge if it ever matters.
 
+Ctrl+V paste in panes (2026-08-26) — plain Ctrl+V never pasted: xterm maps
+ctrl+letter to a control char and calls preventDefault, so the browser's native
+paste event never fired and the PTY just got ^V (Ctrl+Shift+V worked, and
+right-click paste was off since the app-wide context-menu suppression). The
+pane's custom key handler now returns false for Ctrl+V, which exits xterm's
+key handling before that preventDefault and lets the native paste reach its
+textarea. Image/file pastes still short-circuit earlier into the attach path.
+
 ## Short-term backlog (rough priority order, owner-approved direction)
 (empty — next items to be chosen with the owner)
 

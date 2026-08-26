@@ -231,9 +231,16 @@ function TerminalPaneImpl({
     };
     document.addEventListener('paste', onDocPaste, true);
     // Pane shortcuts intercepted before the PTY sees them:
-    // Ctrl+Shift+C copy · Ctrl+Shift+F find · Ctrl+Shift+M maximize
+    // Ctrl+V paste · Ctrl+Shift+C copy · Ctrl+Shift+F find · Ctrl+Shift+M maximize
     term.attachCustomKeyEventHandler((e) => {
-      if (e.type !== 'keydown' || !e.ctrlKey || !e.shiftKey) return true;
+      if (e.type !== 'keydown') return true;
+      // Ctrl+V: xterm would map ctrl+letter to a control char (^V) and
+      // preventDefault, so the browser's paste never fired. Returning false
+      // bails out of xterm's key handling BEFORE that preventDefault, letting
+      // the native paste land on xterm's textarea, which types it into the PTY.
+      // File/image pastes are still caught earlier by the capture-phase handler.
+      if (e.ctrlKey && !e.shiftKey && !e.altKey && e.code === 'KeyV') return false;
+      if (!e.ctrlKey || !e.shiftKey) return true;
       if (e.code === 'KeyC') {
         copySelection();
         return false; // handled — don't send to the PTY
