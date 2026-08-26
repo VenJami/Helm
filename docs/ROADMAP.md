@@ -259,7 +259,8 @@ token file is the whole boundary; private vuln reporting) and CONTRIBUTING.md
 (dev setup, pre-PR checklist, simplicity/security ground rules, the real-pane
 verification requirement). README gained the screenshot + links to both. CI
 switched the server job to `npm ci` (reproducible, matches the pinned node-pty)
-and added `npm audit --audit-level=high` to both jobs (audits currently clean).
+and added `npm audit --audit-level=high` to both jobs (audits clean at the
+time; made informational on 2026-08-26 — see below).
 Improvement-plan P1-5, finishing Phase 1. Deliberately deferred ESLint/Prettier
 to the Phase 3 tooling pass — bolting a linter onto a never-linted ~2.6k-line
 codebase risks a red CI that blocks pushes, and it pairs naturally with the
@@ -499,6 +500,15 @@ CI covers the whole route. Verified: smoke 17, plus 16/16 real-process E2E
 proposing this repo's real commands and NOT the pane-killing `npm run dev`) and
 11/11 CDP UI (▶ → editor pre-filled → accept → both panes in the tray → logs
 open/close → ■).
+
+CI audit step made informational (2026-08-26) — `npm audit --audit-level=high`
+had gone red on BOTH jobs (main included) on transitive deps: body-parser via
+express, postcss via vite, plus brace-expansion/js-yaml in dev tooling. `npm
+audit fix` doesn't clear any of them (dry-run verified) — that needs express and
+vite major bumps. Against Helm's threat model (loopback, token-gated, single
+user) none is remotely exploitable, so the step now runs with
+`continue-on-error` and reports instead of blocking. Owner's call, taken because
+a permanently red CI stops being a signal. The dependency bumps remain open.
 
 ## Short-term backlog (rough priority order, owner-approved direction)
 (empty — next items to be chosen with the owner)

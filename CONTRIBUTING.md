@@ -87,7 +87,10 @@ cd ../server && npm start # → http://127.0.0.1:7777
 
 CI (`.github/workflows/ci.yml`) runs lint + format check, the server syntax
 check, frontend typecheck + build, `npm audit`, and the Windows smoke test on
-every push/PR.
+every push/PR. The audit step is **informational** (`continue-on-error`): its
+findings so far have all been transitive deps that only a major-version bump
+would clear, and a permanently red CI is worth nothing. Read its output — but
+a red CI means something actually broke.
 
 ## Style
 
