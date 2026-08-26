@@ -388,7 +388,11 @@ light mode — claude's TUI/ANSI colors assume a dark background, so panes read
 as dark cards on light chrome. New `hooks/useTheme` + `modals/AppearanceModal`.
 20 vitest tests. Verified via CDP: opened the dialog, switched light+rose
 (screenshot), back to dark+blue (screenshot), attributes + localStorage
-round-trip asserted. Backlog item #1 done.
+round-trip asserted. Backlog item #1 done. (2026-08-27: the animated target
+cursor was missing from that sweep — TargetCursor paints its dot/corners with
+an INLINE style, which outranked the var(--accent) rules in its own CSS, so it
+stayed amber through every accent/theme switch. Its cursorColor default is now
+`var(--accent)`; CDP-verified amber→rose in dark and light.)
 
 Drag-resize panes (2026-07-09) — thin gutters between grid columns/rows (amber
 line on hover): dragging trades fr-weight between the two adjacent tracks (grid
