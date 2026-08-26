@@ -308,6 +308,69 @@ html, body {
   color: var(--accent);
 }
 
+/* Run controls on the project card: start/stop the project, then open its
+   dev-server output. Hidden until hover unless the server is actually up. */
+.ws-run { display: inline-flex; gap: 3px; flex-shrink: 0; }
+.ws-run-btn {
+  display: inline-flex;
+  align-items: center;
+  background: none;
+  border: 0;
+  border-radius: 4px;
+  color: var(--faint);
+  cursor: pointer;
+  /* Comfortably clickable: these are the row's action buttons, not decoration. */
+  padding: 5px;
+  visibility: hidden;
+}
+.ws-item:hover .ws-run-btn { visibility: visible; }
+.ws-run-btn:hover { color: var(--text); background: var(--hover); }
+/* A live dev server keeps its stop button (and the logs button) on screen. */
+.ws-run-btn.live,
+.ws-run-btn.open { visibility: visible; }
+.ws-run-btn.live { color: var(--live); }
+.ws-run-btn.open { color: var(--accent); }
+
+/* Count badge when a project runs more than one dev process. */
+.ws-run-count {
+  font-size: 10px;
+  font-weight: 700;
+  margin-left: 1px;
+  line-height: 1;
+}
+
+/* Start-command editor: a list (one command per line) + the "ask Claude" action. */
+.ws-edit-area {
+  resize: vertical;
+  min-height: 44px;
+  font-family: ui-monospace, Consolas, monospace;
+  font-size: 11.5px;
+  line-height: 1.5;
+}
+.ws-edit-area:disabled { opacity: 0.6; }
+.ws-edit-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  margin-top: 4px;
+}
+.ws-edit-ask {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: var(--accent-dim, transparent);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--accent);
+  cursor: pointer;
+  font-size: 10.5px;
+  padding: 2px 7px;
+}
+.ws-edit-ask:hover:not(:disabled) { border-color: var(--accent); }
+.ws-edit-ask:disabled { cursor: default; opacity: 0.7; }
+.ws-edit-hint { color: var(--faint); font-size: 10px; }
+
 .ws-remove {
   display: inline-flex;
   align-items: center;

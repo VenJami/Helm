@@ -259,7 +259,7 @@ token file is the whole boundary; private vuln reporting) and CONTRIBUTING.md
 (dev setup, pre-PR checklist, simplicity/security ground rules, the real-pane
 verification requirement). README gained the screenshot + links to both. CI
 switched the server job to `npm ci` (reproducible, matches the pinned node-pty)
-and added `npm audit --audit-level=high` to both jobs (audits currently clean).
+and added `npm audit --audit-level=high` to both jobs (still a hard gate).
 Improvement-plan P1-5, finishing Phase 1. Deliberately deferred ESLint/Prettier
 to the Phase 3 tooling pass — bolting a linter onto a never-linted ~2.6k-line
 codebase risks a red CI that blocks pushes, and it pairs naturally with the
@@ -459,6 +459,58 @@ right-click paste was off since the app-wide context-menu suppression). The
 pane's custom key handler now returns false for Ctrl+V, which exits xterm's
 key handling before that preventDefault and lets the native paste reach its
 textarea. Image/file pastes still short-circuit earlier into the attach path.
+
+Start button per project (2026-08-26) — each workspace card in the sidebar got
+▶ / ■: it runs the project's start command (auto-detected from package.json
+scripts the first time — `dev` → `start` → `serve` — then editable via
+right-click → "Set start command…", stored as `startCommand` on the workspace).
+The command runs in a real PTY as a **dev pane** (`kind:'dev'` session): same
+terminal, scrollback, colors and Ctrl+C as any pane, but no hooks, no account,
+no transcript/usage, and never a broadcast target. The pane is created
+minimized — it sits in the existing tray so the claude grid is undisturbed, and
+the card's terminal button opens/hides it (owner's requested shape). ■ is
+`POST /api/sessions/:id/stop`, which kills the process but KEEPS the pane so a
+crashed start stays readable; ▶ then restarts the same pane. Killing the pty
+takes the whole cmd→npm→node chain with it (port really frees), and Helm's own
+PORT is scrubbed from the dev env. Verified E2E on isolated servers against a
+REAL npm dev server: 14/14 (detect→start→port up→output in pane→stop frees
+port→restart→survives a Helm restart→delete stops the server) plus a CDP UI
+pass (▶ → tray chip, grid untouched, logs open/close, green port dot). Smoke
+suite now 15.
+
+Multi-command start + "ask Claude how to start it" (2026-08-26) — the ▶ above
+turned out to cover half of the owner's projects: `startCommand` became
+`startCommands` (a LIST — this repo needs `cd server && npm start` AND
+`cd web && npm run watch`; one dev pane each, named after the folder they cd
+into), with `POST /api/workspaces/:id/start` starting them all and a new
+`/stop` stopping them all. For projects whose files can't be guessed from (no
+root package.json, a Python service, a subfolder monorepo — Helm, Nocturne,
+CloseBy, Backend, Game1 among the owner's), ▶ now falls into a new
+`POST /api/workspaces/:id/suggest-start`: the REAL claude CLI, headless and
+read-only (`-p`, prompt on STDIN — claude.cmd needs a shell on Node 22 and the
+prompt contains `&&`), answers with the commands, which land in the sidebar's
+editor for the owner to accept (Ctrl+Enter saves *and* runs). It only ever
+suggests — nothing saved or spawned unreviewed. No model pinned: Opus found
+both of this repo's processes where Sonnet found one, and the owner's rule is
+quality over marginal cost (~$0.12–0.56 a call, shown in the toast). Parser
+lives in claude.mjs with two new drift keys; fake-claude grew a `-p` branch so
+CI covers the whole route. Verified: smoke 17, plus 16/16 real-process E2E
+(two servers up on their own ports, one ■ frees both, revive-in-place, claude
+proposing this repo's real commands and NOT the pane-killing `npm run dev`) and
+11/11 CDP UI (▶ → editor pre-filled → accept → both panes in the tray → logs
+open/close → ■).
+
+Audit advisories cleared (2026-08-26) — `npm audit --audit-level=high` had gone
+red on BOTH jobs (main included): body-parser via express, postcss + nanoid via
+vite, brace-expansion/js-yaml in dev tooling. First response was to make the
+step informational, on a WRONG reading of `npm audit fix --dry-run` (its summary
+line reports the pre-fix count, which was mistaken for "the fix changes
+nothing"). Owner pasted the actual advisory list, all of which say "fix
+available"; `npm audit fix` cleared every one — all patch-level, no declared
+dependency changed, node-pty still pinned at exactly 1.1.0, web bundle hashes
+byte-identical. The CI gate is a hard failure again. Lesson: read what a
+dry-run actually reports before drawing a conclusion from it, and don't loosen
+a gate until the cheap fix has genuinely been tried.
 
 ## Short-term backlog (rough priority order, owner-approved direction)
 (empty — next items to be chosen with the owner)

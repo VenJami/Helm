@@ -456,6 +456,9 @@ function TerminalPaneImpl({
     ? (profiles.find((p) => p.name === effectiveProfile)?.email ?? null)
     : defaultEmail;
   const profileText = accountLabel(effectiveProfile, profileEmail, profiles);
+  // A dev pane runs the project's server, not claude: no account, no
+  // conversation, no attachments — its chrome drops what doesn't apply.
+  const isDev = session.kind === 'dev';
 
   // Hand App a direct "focus this pane's terminal" handle (jump/cycle target).
   useEffect(() => {
@@ -491,8 +494,9 @@ function TerminalPaneImpl({
     connecting: 'connecting…',
     // When blocked, show the hook's reason ("Claude needs permission to…") in
     // place of the profile so you can see why without opening the pane.
-    live:
-      activity === 'waiting' && session.activityNote
+    live: isDev
+      ? 'dev server · running'
+      : activity === 'waiting' && session.activityNote
         ? `${activity}${since} · ${session.activityNote}`
         : `${activity ?? 'live'}${since} · ${profileText}`,
     disconnected: 'disconnected',
@@ -556,16 +560,18 @@ function TerminalPaneImpl({
         <span className="pane-title" title={session.workspace}>
           {label}
         </span>
-        <AnimateIcon asChild>
-          <button
-            className="ibtn"
-            disabled={conn !== 'live'}
-            onClick={() => fileInputRef.current?.click()}
-            title="Attach a file — or paste/drop one onto the pane"
-          >
-            <IconPaperclip size={14} />
-          </button>
-        </AnimateIcon>
+        {!isDev && (
+          <AnimateIcon asChild>
+            <button
+              className="ibtn"
+              disabled={conn !== 'live'}
+              onClick={() => fileInputRef.current?.click()}
+              title="Attach a file — or paste/drop one onto the pane"
+            >
+              <IconPaperclip size={14} />
+            </button>
+          </AnimateIcon>
+        )}
         <AnimateIcon asChild>
           <button
             className="ibtn"
@@ -582,17 +588,19 @@ function TerminalPaneImpl({
             </button>
           </AnimateIcon>
         )}
-        <button
-          className="ibtn"
-          onClick={() => {
-            setSwitchError('');
-            setSwitchTarget(null);
-            setSwitchOpen(true);
-          }}
-          title="Move this pane to another account"
-        >
-          <IconUserSwitch size={14} />
-        </button>
+        {!isDev && (
+          <button
+            className="ibtn"
+            onClick={() => {
+              setSwitchError('');
+              setSwitchTarget(null);
+              setSwitchOpen(true);
+            }}
+            title="Move this pane to another account"
+          >
+            <IconUserSwitch size={14} />
+          </button>
+        )}
         {!isMaximized && (
           <AnimateIcon asChild>
             <button
@@ -624,12 +632,20 @@ function TerminalPaneImpl({
             onClick={revive}
             disabled={reviving}
             title={
-              session.canResume
-                ? 'Start claude again and resume this conversation'
-                : 'Start a fresh claude in this folder'
+              isDev
+                ? `Run "${session.command}" again`
+                : session.canResume
+                  ? 'Start claude again and resume this conversation'
+                  : 'Start a fresh claude in this folder'
             }
           >
-            {reviving ? 'Reviving…' : session.canResume ? 'Resume' : 'Restart'}
+            {reviving
+              ? isDev
+                ? 'Starting…'
+                : 'Reviving…'
+              : session.canResume
+                ? 'Resume'
+                : 'Restart'}
           </button>
         )}
         <button
@@ -758,16 +774,22 @@ function TerminalPaneImpl({
           <div className="pane-overlay">
             <p>
               This pane's process died with a server restart.
-              {session.canResume
-                ? ' Its conversation was saved and can be resumed.'
-                : ' No conversation id was captured — revive starts fresh in the same folder.'}
+              {isDev
+                ? ` Start it again to run "${session.command}" in this folder.`
+                : session.canResume
+                  ? ' Its conversation was saved and can be resumed.'
+                  : ' No conversation id was captured — revive starts fresh in the same folder.'}
             </p>
             <button className="btn" onClick={revive} disabled={reviving}>
               {reviving
-                ? 'reviving…'
-                : session.canResume
-                  ? 'Revive (resume conversation)'
-                  : 'Restart (fresh session)'}
+                ? isDev
+                  ? 'starting…'
+                  : 'reviving…'
+                : isDev
+                  ? 'Start dev server'
+                  : session.canResume
+                    ? 'Revive (resume conversation)'
+                    : 'Restart (fresh session)'}
             </button>
           </div>
         )}

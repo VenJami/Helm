@@ -7,7 +7,7 @@ import fs from 'node:fs';
 import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
-import { execFile } from 'node:child_process';
+import { execFile, spawn as spawnProcess } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import express from 'express';
 import { WebSocketServer } from 'ws';
@@ -21,6 +21,7 @@ import {
   diagnostics,
   firstPromptSummary,
   noteDrift,
+  parseStartSuggestion,
   parseTranscriptFile,
   tokenCost,
   transcriptFiles,
@@ -152,6 +153,8 @@ function saveSettings() {
  * @property {string} color
  * @property {string} workspace
  * @property {string|null} profile
+ * @property {'claude'|'dev'} kind      'claude' = a claude CLI pane; 'dev' = the workspace's dev server
+ * @property {string|null} command      dev panes only: the shell command they run
  * @property {import('node-pty').IPty|null} pty
  * @property {string[]} buffer            ring buffer of raw PTY output for replay
  * @property {number} bufLen
@@ -230,8 +233,43 @@ function randomPaneIdentity() {
 
 // ---------------------------------------------------------------- sessions
 
-// Spawn (or respawn, for revive) the claude PTY for a session.
+// A dev pane runs the workspace's start command through the platform shell,
+// in a PTY like any other pane — so npm's colored output, its prompts, and
+// Ctrl+C all behave exactly as they do in a normal terminal. No claude env,
+// no hook relay, no account config dir: this is not a claude session.
+function spawnDevPty(session, { cols, rows }) {
+  const isWin = process.platform === 'win32';
+  const shell = isWin ? process.env.ComSpec || 'cmd.exe' : process.env.SHELL || '/bin/sh';
+  // cmd.exe: /d skips AutoRun scripts, /s keeps the quoted command intact, /c runs it.
+  const args = isWin ? ['/d', '/s', '/c', session.command] : ['-lc', session.command];
+  // Most dev tooling drops its colors when it can't see a TTY it recognizes;
+  // this is a real PTY, so ask for them explicitly.
+  /** @type {Record<string, string|undefined>} */
+  const env = { ...process.env, FORCE_COLOR: '1' };
+  // Helm's own listen port is nothing to do with the project's. Vite, Next and
+  // friends read PORT — inheriting ours would point the dev server at Helm.
+  delete env.PORT;
+  return spawn(shell, args, {
+    name: 'xterm-color',
+    cwd: session.workspace,
+    cols,
+    rows,
+    env,
+  });
+}
+
+// Spawn (or respawn, for revive) the PTY for a session — the claude CLI, or
+// the workspace's dev-server command for a 'dev' pane.
 function spawnPty(session, extraArgs, { cols, rows }) {
+  if (session.kind === 'dev') {
+    const devPty = attachPty(session, spawnDevPty(session, { cols, rows }));
+    dbg(
+      'spawn',
+      `${session.name} (${session.id.slice(0, 8)}) pid=${devPty.pid} dev-server` +
+        ` cwd=${session.workspace} cmd=${session.command}`,
+    );
+    return;
+  }
   /** @type {Record<string, string|undefined>} */
   const env = {
     ...process.env,
@@ -268,21 +306,29 @@ function spawnPty(session, extraArgs, { cols, rows }) {
 
   // -n gives claude a display name too (shows up in its /resume picker)
   const nameArgs = session.name ? ['-n', session.name] : [];
-  const pty = spawn(CLAUDE_CMD, ['--settings', HOOK_SETTINGS_FILE, ...nameArgs, ...extraArgs], {
-    name: 'xterm-color',
-    cwd: session.workspace,
-    cols,
-    rows,
-    env,
-  });
-  session.pty = pty;
-  session.status = 'running';
-  session.exitCode = null;
+  const pty = attachPty(
+    session,
+    spawn(CLAUDE_CMD, ['--settings', HOOK_SETTINGS_FILE, ...nameArgs, ...extraArgs], {
+      name: 'xterm-color',
+      cwd: session.workspace,
+      cols,
+      rows,
+      env,
+    }),
+  );
   dbg(
     'spawn',
     `${session.name} (${session.id.slice(0, 8)}) pid=${pty.pid} cwd=${session.workspace}` +
       `${session.profile ? ` profile=${session.profile}` : ''}${extraArgs.length ? ` args=${extraArgs.join(' ')}` : ''}`,
   );
+}
+
+// Wire a freshly spawned PTY to its session: mark it running, ring-buffer and
+// broadcast its output, and handle its exit. Shared by claude and dev panes.
+function attachPty(session, pty) {
+  session.pty = pty;
+  session.status = 'running';
+  session.exitCode = null;
 
   // Both callbacks check `session.pty === pty`: an account switch kills this
   // process and respawns a new one on the same session, and the old process's
@@ -317,6 +363,7 @@ function spawnPty(session, extraArgs, { cols, rows }) {
       session.sockets.clear();
     }, 150);
   });
+  return pty;
 }
 
 function createSession({ workspace, profile, cols, rows }) {
@@ -351,6 +398,8 @@ function createSession({ workspace, profile, cols, rows }) {
     ...randomPaneIdentity(), // name + color (both customizable via PATCH)
     workspace,
     profile: profile || null,
+    kind: 'claude',
+    command: null,
     pty: null,
     buffer: [], // ring buffer of output chunks
     bufLen: 0,
@@ -365,6 +414,46 @@ function createSession({ workspace, profile, cols, rows }) {
     createdAt: new Date().toISOString(),
   };
   spawnPty(session, args, { cols, rows });
+  sessions.set(session.id, session);
+  persistSessions();
+  return session;
+}
+
+// A workspace's dev panes: same session machinery (ring buffer, WS attach,
+// revive, kill), but each runs one of the project's start commands instead of
+// claude. A project can need several (a backend AND a frontend watcher); the
+// start route matches them up by command string.
+function devSessionsFor(workspaceDir) {
+  const dir = path.resolve(workspaceDir);
+  return [...sessions.values()].filter(
+    (s) => s.kind === 'dev' && path.resolve(s.workspace) === dir,
+  );
+}
+
+function createDevSession({ workspace, command, name, cols, rows }) {
+  /** @type {Session} */
+  const session = {
+    id: crypto.randomUUID(),
+    name: (name || 'dev').slice(0, 32),
+    color: '#4dd0e1',
+    workspace,
+    profile: null,
+    kind: 'dev',
+    command,
+    pty: null,
+    buffer: [],
+    bufLen: 0,
+    sockets: new Set(),
+    status: 'running',
+    exitCode: null,
+    activity: null,
+    activitySince: null,
+    activityNote: null,
+    claudeSessionId: null, // dev panes have no conversation
+    transcriptPath: null,
+    createdAt: new Date().toISOString(),
+  };
+  spawnPty(session, [], { cols, rows });
   sessions.set(session.id, session);
   persistSessions();
   return session;
@@ -408,6 +497,8 @@ function loadPersistedSessions() {
       color: s.color ?? '#90a4ae',
       workspace: s.workspace,
       profile: s.profile ?? null,
+      kind: s.kind === 'dev' ? 'dev' : 'claude',
+      command: s.command ?? null,
       pty: null,
       buffer: [],
       bufLen: 0,
@@ -463,12 +554,13 @@ function persistSessions() {
   persistTimer = null;
   // running/dead sessions always survive a restart; exited ones only when a
   // conversation id was captured — they reload as revivable 'dead' entries.
+  // A stopped dev pane always survives: its command is all it needs to restart.
   const list = [...sessions.values()]
     .filter(
       (s) =>
         s.status === 'running' ||
         s.status === 'dead' ||
-        (s.status === 'exited' && s.claudeSessionId),
+        (s.status === 'exited' && (s.claudeSessionId || s.kind === 'dev')),
     )
     .map((s) => ({
       id: s.id,
@@ -476,6 +568,8 @@ function persistSessions() {
       color: s.color,
       workspace: s.workspace,
       profile: s.profile,
+      kind: s.kind,
+      command: s.command,
       claudeSessionId: s.claudeSessionId,
       transcriptPath: s.transcriptPath,
       createdAt: s.createdAt,
@@ -512,13 +606,16 @@ function sessionInfo(s) {
     color: s.color,
     workspace: s.workspace,
     profile: s.profile,
+    kind: s.kind ?? 'claude',
+    command: s.command ?? null,
     status: s.status,
     exitCode: s.exitCode,
     activity: s.activity,
     activitySince: s.activitySince,
     activityNote: s.activityNote ?? null,
-    // auto-title from the conversation's opening prompt (search/palette label)
-    summary: firstPromptSummary(s.transcriptPath),
+    // auto-title from the conversation's opening prompt (search/palette label);
+    // a dev pane has no conversation, so it goes by the command it runs
+    summary: s.kind === 'dev' ? s.command : firstPromptSummary(s.transcriptPath),
     // resumable = we have claude's session id AND its transcript actually
     // exists on disk (team-mode claude can report a path it never writes)
     canResume: Boolean(s.claudeSessionId && (!s.transcriptPath || fs.existsSync(s.transcriptPath))),
@@ -681,13 +778,7 @@ app.post('/api/sessions', (req, res) => {
 app.delete('/api/sessions/:id', (req, res) => {
   const session = sessions.get(req.params.id);
   if (!session) return res.status(404).json({ error: 'no such session' });
-  if (session.status === 'running' && session.pty) {
-    try {
-      session.pty.kill();
-    } catch {
-      /* already dead */
-    }
-  }
+  if (session.status === 'running' && session.pty) stopPty(session);
   for (const ws of session.sockets) ws.close(1000, 'session killed');
   sessions.delete(session.id);
   // its uploaded attachments go with it
@@ -792,6 +883,128 @@ app.post('/api/sessions/:id/revive', (req, res) => {
   res.json(sessionInfo(session));
 });
 
+// Stop a pane's process but KEEP the pane. The scrollback stays readable (a
+// dev server that died on a syntax error still shows why) and start/revive
+// respawns it. Deleting the pane outright is DELETE /api/sessions/:id.
+app.post('/api/sessions/:id/stop', (req, res) => {
+  const session = sessions.get(req.params.id);
+  if (!session) return res.status(404).json({ error: 'no such session' });
+  if (session.status !== 'running' || !session.pty) {
+    return res.status(409).json({ error: 'session is not running' });
+  }
+  stopPty(session);
+  dbg('stop', `${session.name} (${session.id.slice(0, 8)}) stopped`);
+  // status flips to 'exited' when onExit lands; the poll picks it up.
+  res.json(sessionInfo(session));
+});
+
+// Kill a session's process. A dev command is a chain (cmd.exe → npm → node),
+// but tearing the pty down takes the whole tree with it — verified with a real
+// npm dev server: the port is free within a second, no strays left behind.
+function stopPty(session) {
+  try {
+    session.pty?.kill();
+  } catch {
+    /* already dead */
+  }
+}
+
+// "Ask claude how to start this" — the fallback for projects whose files can't
+// be guessed from (no package.json, a Python service, a monorepo whose command
+// lives in a subfolder). Runs the REAL claude CLI headlessly (`-p`, read-only
+// tools, no PTY, no pane) in the project folder on that project's pinned
+// account, and returns the commands it proposes. Helm never runs them off its
+// own bat: the UI puts them in the editor for the owner to accept.
+const SUGGEST_PROMPT =
+  'Figure out how to RUN this project locally for development. Read whatever files you ' +
+  'need (README, CLAUDE.md, package.json, Makefile, docker-compose, manage.py, etc). ' +
+  'Reply with ONLY a JSON array of the shell command(s) needed, in start order, each ' +
+  'runnable from the project root on ' +
+  (process.platform === 'win32' ? 'Windows' : process.platform) +
+  ' (chain with && when a command must run in a subfolder, e.g. "cd server && npm start"). ' +
+  'Include every long-running process the project needs to be usable (e.g. a backend AND a ' +
+  'frontend watcher), and NOTHING else: no installs, no tests, no one-shot builds. ' +
+  'If you cannot tell, reply with [].';
+
+app.post('/api/workspaces/:id/suggest-start', (req, res) => {
+  const ws = workspaces.find((w) => w.id === req.params.id);
+  if (!ws) return res.status(404).json({ error: 'no such workspace' });
+  const profile = ws.profile || mappedDefaultProfile() || null;
+  /** @type {Record<string, string|undefined>} */
+  const env = { ...process.env, CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS: '0' };
+  // Same inherited-identity scrub panes get: a Helm started from inside a
+  // claude session would otherwise hand this call a child-session identity.
+  for (const k of [
+    'CLAUDECODE',
+    'CLAUDE_CODE_CHILD_SESSION',
+    'CLAUDE_CODE_ENTRYPOINT',
+    'CLAUDE_CODE_SESSION_ID',
+    'CLAUDE_CODE_SSE_PORT',
+    'CLAUDE_AGENT_SDK_VERSION',
+  ])
+    delete env[k];
+  if (profile) env.CLAUDE_CONFIG_DIR = path.join(ACCOUNTS_DIR, profile);
+  // claude.cmd is a batch file, and Node 22 refuses to spawn one without a
+  // shell (EINVAL). So we go through the shell — but the PROMPT goes in on
+  // stdin, never on the command line: it contains && and quotes, which a shell
+  // would happily act on.
+  const proc = spawnProcess(
+    `"${CLAUDE_CMD}" -p --output-format json --allowed-tools "Read,Glob,Grep" --max-turns 12`,
+    { cwd: ws.dir, env, shell: true, windowsHide: true },
+  );
+  let stdout = '';
+  let stderr = '';
+  let done = false;
+  const finish = (fn) => {
+    if (done) return;
+    done = true;
+    clearTimeout(timer);
+    fn();
+  };
+  const timer = setTimeout(() => {
+    finish(() => {
+      try {
+        proc.kill();
+      } catch {
+        /* already gone */
+      }
+      dbg('error', `suggest-start timed out for ${ws.name}`);
+      res.status(504).json({ error: 'claude took too long to answer' });
+    });
+  }, 180_000);
+  proc.stdout.on('data', (d) => (stdout += d));
+  proc.stderr.on('data', (d) => (stderr += d));
+  proc.on('error', (err) =>
+    finish(() => {
+      dbg('error', `suggest-start could not run claude for ${ws.name}: ${err.message}`);
+      res.status(502).json({ error: `could not run claude: ${err.message}` });
+    }),
+  );
+  proc.on('close', () =>
+    finish(() => {
+      const parsed = stdout.trim() ? parseStartSuggestion(stdout, ws.name) : null;
+      if (!parsed) {
+        const msg = String(stderr || 'no output').slice(0, 300);
+        dbg('error', `suggest-start failed for ${ws.name}: ${msg}`);
+        return res.status(502).json({ error: `claude could not answer: ${msg}` });
+      }
+      const commands = parseStartCommands(parsed.commands);
+      parsed.commands = commands === undefined ? [] : commands;
+      dbg(
+        'suggest',
+        `${ws.name}: claude proposed ${parsed.commands.length} command(s)` +
+          (parsed.cost ? ` ($${parsed.cost.toFixed(2)})` : '') +
+          (parsed.commands.length ? `: ${parsed.commands.join(' | ')}` : ''),
+      );
+      res.json(parsed);
+    }),
+  );
+  proc.stdin.on('error', () => {
+    /* claude exited before reading the prompt — the close handler reports it */
+  });
+  proc.stdin.end(SUGGEST_PROMPT);
+});
+
 // The config dir whose credentials a session on this profile uses
 // ('' / null = the default account).
 function configRoot(profile) {
@@ -808,6 +1021,9 @@ function configRoot(profile) {
 app.post('/api/sessions/:id/switch-profile', (req, res) => {
   const session = sessions.get(req.params.id);
   if (!session) return res.status(404).json({ error: 'no such session' });
+  if (session.kind === 'dev') {
+    return res.status(400).json({ error: 'a dev pane has no claude account to switch' });
+  }
   const { profile, cols = 80, rows = 24 } = req.body || {};
   const next = typeof profile === 'string' && profile ? profile : null;
   if (next && !/^[\w-]+$/.test(next)) {
@@ -891,7 +1107,9 @@ app.post('/api/broadcast', (req, res) => {
   const results = {};
   for (const id of sessionIds) {
     const session = sessions.get(id);
-    if (!session || session.status !== 'running' || !session.pty) {
+    // dev panes run a server, not a conversation — a prompt typed into one is
+    // noise at best, so they're never broadcast targets.
+    if (!session || session.kind === 'dev' || session.status !== 'running' || !session.pty) {
       results[id] = 'skipped';
       continue;
     }
@@ -1181,7 +1399,16 @@ function loadWorkspaces() {
   const saved = readJsonWithBackup(WORKSPACES_FILE, 'workspaces');
   // v1 files wrap the list ({version, workspaces}); pre-version files were bare arrays
   const list = Array.isArray(saved) ? saved : saved?.workspaces;
-  return Array.isArray(list) ? list : [];
+  if (!Array.isArray(list)) return [];
+  for (const w of list) {
+    // A project's start command briefly lived as a single string before a
+    // project turned out to need several processes — carry it into the list.
+    if (typeof w?.startCommand === 'string' && !w.startCommands?.length) {
+      w.startCommands = [w.startCommand];
+    }
+    delete w?.startCommand;
+  }
+  return list;
 }
 let workspaces = loadWorkspaces();
 
@@ -1260,6 +1487,61 @@ app.get('/api/workspaces/servers', async (_req, res) => {
   res.json(out);
 });
 
+// A project can need SEVERAL long-running processes (Helm itself is a backend
+// plus a frontend watcher), so a workspace holds a LIST of start commands —
+// each one gets its own dev pane. Coerces a request field (string, one command
+// per line, or an array) into that list; null/blank clears it. Returns
+// undefined when unusable (caller reports a 400).
+const MAX_START_COMMANDS = 6;
+
+function parseStartCommands(v) {
+  if (v === null || v === undefined) return [];
+  const raw = Array.isArray(v) ? v : typeof v === 'string' ? v.split(/\r?\n/) : null;
+  if (!raw) return undefined;
+  const cmds = [];
+  for (const line of raw) {
+    if (typeof line !== 'string') return undefined;
+    const cmd = line.trim();
+    if (!cmd) continue; // blank lines just aren't commands
+    if (cmd.length > 500) return undefined;
+    cmds.push(cmd);
+  }
+  return cmds.length > MAX_START_COMMANDS ? undefined : cmds;
+}
+
+// First guess at how a project starts, from its package.json scripts. Fills in
+// a workspace's commands the first time ▶ is pressed. Deliberately only looks
+// at the ROOT package.json: scanning subfolders guesses wrong in the ways that
+// hurt (in this very repo it would pick server's `npm run dev`, which restarts
+// on every edit and kills live panes). Projects it can't read are handed to
+// `POST /api/workspaces/:id/suggest-start`, which asks claude instead.
+function detectStartCommands(dir) {
+  let pkg;
+  try {
+    pkg = JSON.parse(fs.readFileSync(path.join(dir, 'package.json'), 'utf8'));
+  } catch {
+    return []; // no package.json (or unreadable/invalid) — nothing to guess from
+  }
+  const scripts = pkg?.scripts || {};
+  for (const name of ['dev', 'start', 'serve']) {
+    if (typeof scripts[name] === 'string' && scripts[name].trim()) return [`npm run ${name}`];
+  }
+  return [];
+}
+
+// Short label for a dev pane, from the command it runs: the subfolder when the
+// command cds into one ("cd server && npm start" → "server"), else the tool
+// ("npm run watch" → "npm", "uvicorn app:x" → "uvicorn").
+function devPaneLabel(command) {
+  const cd = /^\s*cd\s+"?([^"&|;]+?)"?\s*&&/.exec(command);
+  if (cd) return path.basename(cd[1].trim()).slice(0, 20);
+  const first = command.trim().split(/\s+/)[0] || 'dev';
+  return path
+    .basename(first)
+    .replace(/\.(cmd|exe|bat|sh)$/i, '')
+    .slice(0, 20);
+}
+
 // Coerce a request `port` field to a valid TCP port (1–65535) or null.
 // Returns undefined when the value is unusable (caller reports a 400).
 function parsePort(v) {
@@ -1300,6 +1582,17 @@ app.post('/api/workspaces', (req, res) => {
   const wsPort = parsePort(port);
   if (wsPort === undefined) return res.status(400).json({ error: 'port must be 1–65535' });
   if (wsPort !== null) workspace.port = wsPort;
+  // Optional start commands for the sidebar's ▶ button (auto-detected/asked for
+  // on first start when left unset). Legacy single `startCommand` accepted too.
+  const startCommands = parseStartCommands(
+    req.body?.startCommands !== undefined ? req.body.startCommands : req.body?.startCommand,
+  );
+  if (startCommands === undefined) {
+    return res
+      .status(400)
+      .json({ error: 'startCommands must be up to 6 shell commands of 500 characters each' });
+  }
+  if (startCommands.length) workspace.startCommands = startCommands;
   workspaces.push(workspace);
   saveWorkspaces();
   res.status(201).json(workspace);
@@ -1341,8 +1634,95 @@ app.patch('/api/workspaces/:id', (req, res) => {
     if (wsPort !== null) ws.port = wsPort;
     else delete ws.port;
   }
+  // `??` would be wrong here: `startCommands: null` MEANS clear, and would
+  // otherwise fall through to the legacy field and skip the clear entirely.
+  const cmdField =
+    req.body?.startCommands !== undefined ? req.body.startCommands : req.body?.startCommand;
+  if (cmdField !== undefined) {
+    const startCommands = parseStartCommands(cmdField);
+    if (startCommands === undefined) {
+      return res
+        .status(400)
+        .json({ error: 'startCommands must be up to 6 shell commands of 500 characters each' });
+    }
+    // Running dev panes keep their old command until they're restarted.
+    if (startCommands.length) ws.startCommands = startCommands;
+    else delete ws.startCommands;
+  }
   saveWorkspaces();
   res.json(ws);
+});
+
+// ▶ on a workspace: run each of its start commands as its own dev pane. Panes
+// are matched to commands by the command string, so an existing stopped pane is
+// respawned in place (scrollback and any attached socket survive) instead of
+// piling up duplicates. Commands are auto-detected from package.json the first
+// time and saved on the workspace; when nothing can be guessed the reply says
+// so and the UI offers to ask claude (/suggest-start).
+app.post('/api/workspaces/:id/start', (req, res) => {
+  const ws = workspaces.find((w) => w.id === req.params.id);
+  if (!ws) return res.status(404).json({ error: 'no such workspace' });
+  const commands = ws.startCommands?.length ? ws.startCommands : detectStartCommands(ws.dir);
+  if (!commands.length) {
+    return res.status(400).json({
+      error: 'no start command set for this project',
+      needsCommand: true,
+    });
+  }
+  if (!ws.startCommands?.length) {
+    ws.startCommands = commands; // remember the detected ones; they're editable now
+    saveWorkspaces();
+  }
+  const { cols = 120, rows = 30 } = req.body || {};
+  const size = { cols: Number(cols) || 120, rows: Number(rows) || 30 };
+  const existing = devSessionsFor(ws.dir);
+  const started = [];
+  const already = [];
+  try {
+    for (const command of commands) {
+      const match = existing.find((s) => s.command === command);
+      if (match?.status === 'running') {
+        already.push(match);
+        continue;
+      }
+      if (match) {
+        reviveSession(match, size);
+        started.push(match);
+        dbg('start', `${ws.name} dev pane restarted: ${command}`);
+        continue;
+      }
+      started.push(
+        createDevSession({
+          workspace: ws.dir,
+          command,
+          name: `${ws.name} ${devPaneLabel(command)}`,
+          ...size,
+        }),
+      );
+      dbg('start', `${ws.name} dev pane started: ${command}`);
+    }
+  } catch (err) {
+    dbg('error', `dev start failed for ${ws.name}: ${err.message}`);
+    return res.status(500).json({ error: `failed to start: ${err.message}` });
+  }
+  if (!started.length) return res.status(409).json({ error: 'already running' });
+  persistSessions();
+  res.status(201).json({
+    sessions: [...started, ...already].map(sessionInfo),
+    started: started.length,
+  });
+});
+
+// ■ on a workspace: stop every dev pane it has running. The panes stay (their
+// output is how you find out why a server died); ▶ starts them again.
+app.post('/api/workspaces/:id/stop', (req, res) => {
+  const ws = workspaces.find((w) => w.id === req.params.id);
+  if (!ws) return res.status(404).json({ error: 'no such workspace' });
+  const live = devSessionsFor(ws.dir).filter((s) => s.status === 'running' && s.pty);
+  if (!live.length) return res.status(409).json({ error: 'nothing running' });
+  for (const session of live) stopPty(session);
+  dbg('stop', `${ws.name}: stopped ${live.length} dev pane(s)`);
+  res.json({ stopped: live.length, sessions: live.map(sessionInfo) });
 });
 
 app.delete('/api/workspaces/:id', (req, res) => {

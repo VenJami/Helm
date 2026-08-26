@@ -217,6 +217,27 @@ export const IconTerminal = (p: IconProps) => (
   </Icon>
 );
 
+// Play/stop are ACTIONS, not decoration — solid shapes read as buttons where
+// the outline versions looked like faint marks next to the project name.
+export const IconPlay = (p: IconProps) => (
+  <Icon {...p}>
+    <path d="M7 4.8v14.4L19 12Z" fill="currentColor" strokeWidth={1.5} strokeLinejoin="round" />
+  </Icon>
+);
+
+export const IconStop = (p: IconProps) => (
+  <Icon {...p}>
+    <rect x="6.5" y="6.5" width="11" height="11" rx="1.6" fill="currentColor" />
+  </Icon>
+);
+
+export const IconSparkle = (p: IconProps) => (
+  <Icon {...p}>
+    <path d="M12 3l1.9 4.6L18.5 9.5l-4.6 1.9L12 16l-1.9-4.6L5.5 9.5l4.6-1.9Z" />
+    <path d="M18 15.5l.8 2 2 .8-2 .8-.8 2-.8-2-2-.8 2-.8Z" />
+  </Icon>
+);
+
 export const IconServer = (p: IconProps) => (
   <Icon {...p}>
     <rect x="2" y="3" width="20" height="8" rx="2" />

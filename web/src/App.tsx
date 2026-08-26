@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { api } from './api';
+import { api, ApiError } from './api';
 import { storage } from './lib/storage';
 import { useSessionsPoll } from './hooks/useSessionsPoll';
 import { useWorkspaceStatus } from './hooks/useWorkspaceStatus';
@@ -366,10 +366,12 @@ export function App() {
       dir,
     [workspaces],
   );
+  // Broadcast targets: live CLAUDE panes only — a dev pane runs a server, so a
+  // prompt typed into it would just be noise (the server refuses it too).
   const runningPanes = useMemo(
     () =>
       sessions
-        .filter((s) => s.status === 'running')
+        .filter((s) => s.status === 'running' && s.kind !== 'dev')
         .sort((a, b) =>
           a.workspace === b.workspace
             ? a.createdAt.localeCompare(b.createdAt)
@@ -420,6 +422,102 @@ export function App() {
       .getWorkspacesServers()
       .then((list) => setServerInfo(Object.fromEntries(list.map((s) => [s.id, s]))))
       .catch(() => {});
+  };
+
+  // What ▶ runs for this project — a list, since a project can need several
+  // long-running processes (null clears it and ▶ works one out again).
+  const setWorkspaceStartCommands = async (id: string, startCommands: string[] | null) => {
+    const ws = await api.updateWorkspace(id, { startCommands });
+    setWorkspaces((prev) => prev.map((w) => (w.id === id ? ws : w)));
+  };
+
+  // ▶ on a project card: run its start command(s), one dev pane each. Panes are
+  // born minimized — they sit in the tray, out of the claude grid, until the
+  // card's terminal button opens them. Returns 'needs-command' so the sidebar
+  // can fall into the ask-claude flow.
+  const startDev = async (id: string): Promise<'started' | 'needs-command' | 'failed'> => {
+    try {
+      const { sessions: started } = await api.startWorkspace(id, 120, 30);
+      setMinimizedIds((prev) => {
+        const next = new Set(prev);
+        for (const s of started) next.add(s.id);
+        return next;
+      });
+      setSessions((prev) => {
+        const byId = new Map(prev.map((p) => [p.id, p]));
+        for (const s of started) byId.set(s.id, s);
+        return [...byId.values()];
+      });
+      // First start may have auto-detected and saved the commands.
+      api
+        .listWorkspaces()
+        .then(setWorkspaces)
+        .catch(() => {});
+      return 'started';
+    } catch (err) {
+      if (err instanceof ApiError && err.body?.needsCommand) return 'needs-command';
+      toast.error((err as Error).message);
+      return 'failed';
+    }
+  };
+
+  // ■ — stop this project's dev processes, keeping the panes so their last
+  // output stays readable.
+  const stopDev = async (id: string) => {
+    try {
+      await api.stopWorkspace(id);
+      refresh();
+    } catch (err) {
+      toast.error((err as Error).message);
+    }
+  };
+
+  // Ask claude how the project starts (headless, read-only). Suggestion only —
+  // the sidebar puts it in the editor for review.
+  const suggestStart = async (id: string) => {
+    const { commands, cost } = await api.suggestStart(id);
+    if (commands.length) {
+      toast.info(
+        `Claude suggests ${commands.length} command${commands.length > 1 ? 's' : ''}` +
+          (cost ? ` (${cost < 0.01 ? '<$0.01' : '$' + cost.toFixed(2)})` : ''),
+      );
+    }
+    return commands;
+  };
+
+  const devPanesFor = (id: string) => {
+    const ws = workspaces.find((w) => w.id === id);
+    return ws ? sessions.filter((s) => s.kind === 'dev' && s.workspace === ws.dir) : [];
+  };
+
+  // On screen = at least one of this project's dev panes is out of the tray AND
+  // its workspace is the one being shown.
+  const devPanesOpen = (id: string) => {
+    const ws = workspaces.find((w) => w.id === id);
+    if (!ws || ws.dir !== selected?.dir) return false;
+    return devPanesFor(id).some((s) => !minimizedIds.has(s.id));
+  };
+
+  const toggleDevPanes = (id: string) => {
+    const panes = devPanesFor(id);
+    if (!panes.length) return;
+    if (devPanesOpen(id)) {
+      setMinimizedIds((prev) => {
+        const next = new Set(prev);
+        for (const s of panes) next.add(s.id);
+        return next;
+      });
+    } else {
+      // Selects their workspace, pulls them out of the tray, focuses the first.
+      jumpToPane(panes[0]);
+      if (panes.length > 1) {
+        setMinimizedIds((prev) => {
+          const next = new Set(prev);
+          for (const s of panes) next.delete(s.id);
+          return next;
+        });
+      }
+    }
   };
 
   const removeWorkspace = async (id: string) => {
@@ -618,8 +716,14 @@ export function App() {
           onRename={renameWorkspace}
           onChangeDir={changeWorkspaceDir}
           onSetPort={setWorkspacePort}
+          onSetStartCommands={setWorkspaceStartCommands}
           onRemove={removeWorkspace}
           onHide={toggleSidebar}
+          onStartDev={startDev}
+          onStopDev={stopDev}
+          onShowDev={toggleDevPanes}
+          devPanesOpen={devPanesOpen}
+          onSuggestStart={suggestStart}
           dragId={dragWsId}
           dragOverId={dragOverWsId}
           onDragStart={setDragWsId}

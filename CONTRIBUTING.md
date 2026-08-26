@@ -87,7 +87,9 @@ cd ../server && npm start # → http://127.0.0.1:7777
 
 CI (`.github/workflows/ci.yml`) runs lint + format check, the server syntax
 check, frontend typecheck + build, `npm audit`, and the Windows smoke test on
-every push/PR.
+every push/PR. `npm audit --audit-level=high` is a hard gate: when it goes red,
+`npm audit fix` has so far been enough (the advisories have been patch-level in
+transitive deps), and the fix belongs in the PR that trips it.
 
 ## Style
 

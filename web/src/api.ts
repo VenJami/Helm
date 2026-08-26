@@ -35,9 +35,22 @@ async function req<T>(path: string, opts: RequestInit = {}): Promise<T> {
   }
   if (!res.ok) {
     const body = await res.json().catch(() => ({}) as { error?: string });
-    throw new Error(body.error || res.statusText);
+    throw new ApiError(body.error || res.statusText, res.status, body);
   }
   return res.json();
+}
+
+// Carries the server's JSON body, so a caller can react to a flag on it (e.g.
+// `needsCommand` on ▶ → offer to ask claude) instead of matching on message text.
+export class ApiError extends Error {
+  status: number;
+  body: Record<string, unknown>;
+  constructor(message: string, status: number, body: Record<string, unknown>) {
+    super(message);
+    this.name = 'ApiError';
+    this.status = status;
+    this.body = body;
+  }
 }
 
 export const api = {
@@ -48,6 +61,8 @@ export const api = {
       body: JSON.stringify({ workspace, profile, cols, rows }),
     }),
   killSession: (id: string) => req<{ ok: boolean }>(`/sessions/${id}`, { method: 'DELETE' }),
+  // Stop a pane's process but keep the pane (its output stays readable).
+  stopSession: (id: string) => req<SessionInfo>(`/sessions/${id}/stop`, { method: 'POST' }),
   reviveSession: (id: string, cols: number, rows: number) =>
     req<SessionInfo>(`/sessions/${id}/revive`, {
       method: 'POST',
@@ -100,8 +115,30 @@ export const api = {
     req<Workspace>('/workspaces', { method: 'POST', body: JSON.stringify({ name, dir, profile }) }),
   updateWorkspace: (
     id: string,
-    patch: { name?: string; dir?: string; profile?: string | null; port?: number | null },
+    patch: {
+      name?: string;
+      dir?: string;
+      profile?: string | null;
+      port?: number | null;
+      startCommands?: string[] | null;
+    },
   ) => req<Workspace>(`/workspaces/${id}`, { method: 'PATCH', body: JSON.stringify(patch) }),
+  // ▶ — run the project's start command(s), one dev pane each (created on first
+  // use). Throws with `needsCommand` when nothing is configured or detectable.
+  startWorkspace: (id: string, cols: number, rows: number) =>
+    req<{ sessions: SessionInfo[]; started: number }>(`/workspaces/${id}/start`, {
+      method: 'POST',
+      body: JSON.stringify({ cols, rows }),
+    }),
+  // ■ — stop every dev pane this project has running (the panes stay).
+  stopWorkspace: (id: string) =>
+    req<{ stopped: number; sessions: SessionInfo[] }>(`/workspaces/${id}/stop`, { method: 'POST' }),
+  // Ask claude (headless, read-only) how this project starts. Suggests only —
+  // the commands land in the editor for the owner to accept.
+  suggestStart: (id: string) =>
+    req<{ commands: string[]; cost: number | null }>(`/workspaces/${id}/suggest-start`, {
+      method: 'POST',
+    }),
   removeWorkspace: (id: string) => req<{ ok: boolean }>(`/workspaces/${id}`, { method: 'DELETE' }),
 
   listProfiles: () => req<ProfilesInfo>('/profiles'),

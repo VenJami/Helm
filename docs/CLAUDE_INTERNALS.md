@@ -82,6 +82,33 @@ writing (dissected in `docs/GOTCHAS.md`):
 `--login`, `--version` (the drift check). On Windows the executable is the
 `claude.cmd` shim (node-pty can't run the `.ps1`).
 
+Headless (the "ask claude how to start this project" call, `POST
+/api/workspaces/:id/suggest-start`): `-p` with the prompt on **stdin**,
+`--output-format json`, `--allowed-tools "Read,Glob,Grep"` (read-only: it works
+the command out, it never runs one), `--max-turns 12`. No model is pinned — the
+account's default is used, because a cheaper model missed one of two required
+processes in testing. Two notes that are easy to trip over:
+
+- The prompt goes on stdin, never in argv. `claude.cmd` is a batch file and
+  Node 22 refuses to spawn one without a shell (`EINVAL`), and a prompt
+  containing `&&` and quotes would be interpreted by that shell.
+- No PTY, no hooks, no pane — but the same inherited-identity env scrub as a
+  pane (section 4), and the workspace's pinned profile via `CLAUDE_CONFIG_DIR`.
+
+## 7. `claude -p --output-format json` envelope
+
+Parsed by `parseStartSuggestion` in `server/src/claude.mjs`. Fields Helm reads
+(verified on 2.1.246):
+
+| Field | Used for |
+|---|---|
+| `result` | the model's reply text — Helm pulls the first JSON array out of it |
+| `total_cost_usd` | the "$0.02" shown with the suggestion (optional) |
+
+Everything else in the envelope is ignored. Output is normally one JSON line;
+the parser also accepts a trailing/leading extra line by taking the last line
+that parses. A shape change here is drift, not a caller bug — see below.
+
 ---
 
 ## Drift detection (what fires the banner)
@@ -95,6 +122,8 @@ inline signals), exposed at `GET /api/diagnostics`:
 | Below floor | `claude-below-floor` | version < `CLAUDE_VERSION_FLOOR` |
 | Unknown model | `unknown-model:<model>` | a real model with tokens matches no `MODEL_PRICING` row |
 | Transcript shape | `transcript-shape` | a >16 KB transcript parses as JSON but yields 0 usage entries |
+| Suggest: not JSON | `suggest-nonjson` | `claude -p --output-format json` printed something unparseable |
+| Suggest: no result | `suggest-noresult` | that envelope had no string `result` field |
 
 Warnings are deduped by key, counted, and shown until dismissed; a *new* key
 re-opens the banner.
