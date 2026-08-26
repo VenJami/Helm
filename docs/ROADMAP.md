@@ -560,6 +560,28 @@ down — banner parse ~6 s, anonymous (no account), edge 502s after stop, no
 stray processes. SECURITY.md gained a section: this is the one feature that
 intentionally leaves loopback.
 
+Sidebar + toolbar layout fix (2026-08-27) — project names in the sidebar were
+being crushed to "N…" / "W.": the row's action buttons were hidden with
+`visibility: hidden`, which still reserves the box, so ~72px of every 192px row
+went to invisible buttons (GOTCHAS). Rows were also four stacked lines tall
+(82px) and ragged. Now: the name gets its own line and account · branch · port ·
+pane-count share ONE meta line that ellipsizes instead of growing (every card
+43px, uniform), the actions moved out of flow into a hover overlay that fades
+over the row (only the dev-logs button stands without hover, and it's the one
+line of reserved width), and the meta chips have a shrink order — the branch
+gives up space first, the port never does. Text column 50px → 182px, twice as
+many projects visible. The sidebar is also drag-resizable from its right edge
+(170–460px, double-click resets, persisted as `helm.sidebarWidth`; the
+responsive rules clamp with max-width since the stored width is inline).
+Toolbar: the right-hand group used to be one unbreakable ~600px block that
+overflowed off-screen on a narrow window and wrapped to a second row even at
+1440 — it now wraps inside itself, and below 1400px the toggles drop their
+labels to icons (tooltips already existed), so the bar stays one row down to
+~1000px and gives that height back to the panes. Verified headlessly (CDP)
+against the live server and a seeded isolated one: row/name/height measurements,
+hover overlay, dev-logs row, drag-resize + clamp + persistence across reload,
+light theme, and 1440/1100/820 widths with no horizontal overflow.
+
 ## Short-term backlog (rough priority order, owner-approved direction)
 (empty — next items to be chosen with the owner)
 

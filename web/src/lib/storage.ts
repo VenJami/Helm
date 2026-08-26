@@ -15,9 +15,16 @@ const KEYS = {
   minimized: 'helm.minimized',
   fontSize: 'helm.fontSize',
   sidebarHidden: 'helm.sidebarHidden',
+  sidebarWidth: 'helm.sidebarWidth',
   theme: 'helm.theme',
   accent: 'helm.accent',
 } as const;
+
+// Sidebar width bounds (px): narrow enough to be a rail, wide enough for long
+// project names; the drag handle clamps to these and so does the stored value.
+export const SIDEBAR_MIN = 170;
+export const SIDEBAR_MAX = 460;
+export const SIDEBAR_DEFAULT = 248;
 
 // Appearance choices — must match the CSS preset selectors in styles.css.
 export type Theme = 'dark' | 'light';
@@ -96,6 +103,14 @@ export const storage = {
   sidebarHidden: {
     get: (): boolean => getRaw(KEYS.sidebarHidden) === '1',
     set: (hidden: boolean): void => setRaw(KEYS.sidebarHidden, hidden ? '1' : '0'),
+  },
+  // px, drag-set from the sidebar's right edge; out-of-range/corrupt → default
+  sidebarWidth: {
+    get: (): number => {
+      const n = Number(getRaw(KEYS.sidebarWidth));
+      return Number.isFinite(n) && n >= SIDEBAR_MIN && n <= SIDEBAR_MAX ? n : SIDEBAR_DEFAULT;
+    },
+    set: (px: number): void => setRaw(KEYS.sidebarWidth, String(Math.round(px))),
   },
   // unknown/corrupt stored values fall back to the defaults (dark / amber)
   theme: {
