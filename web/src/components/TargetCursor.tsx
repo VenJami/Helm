@@ -55,7 +55,11 @@ export function TargetCursor({
   hideDefaultCursor = true,
   hoverDuration = 0.2,
   parallaxOn = true,
-  cursorColor = '#e2b34c', // Helm --accent
+  // The live theme token, not a fixed hex: these land as INLINE styles on the
+  // dot/corners, so a hardcoded amber outranked the var(--accent) rules in
+  // TargetCursor.css and the cursor stayed amber through every accent and
+  // theme switch. A var() here re-resolves on its own when :root changes.
+  cursorColor = 'var(--accent)',
   cursorColorOnTarget,
 }: TargetCursorProps) {
   const cursorRef = useRef<HTMLDivElement>(null);

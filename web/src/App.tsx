@@ -955,7 +955,8 @@ export function App() {
                     onClick={jumpToWaiting}
                     title="Jump to a pane waiting on you (repeat to cycle through them)"
                   >
-                    <span className="dot dot-waiting" /> {waiting} waiting
+                    <span className="dot dot-waiting" /> {waiting}{' '}
+                    <span className="tbtn-label">waiting</span>
                   </button>
                 )}
                 {liveTunnels.length > 0 && (
@@ -981,7 +982,7 @@ export function App() {
                     onClick={openUsage}
                     title="Token usage per account — rolling windows from 1 h to 30 d, plus all time"
                   >
-                    <IconChart /> Usage
+                    <IconChart /> <span className="tbtn-label">Usage</span>
                   </button>
                 </AnimateIcon>
                 <AnimateIcon asChild>
@@ -994,7 +995,7 @@ export function App() {
                         : 'Auto-revive off — after a server restart, each dead pane needs a revive click'
                     }
                   >
-                    <IconRefreshCcw /> Auto-revive
+                    <IconRefreshCcw /> <span className="tbtn-label">Auto-revive</span>
                   </button>
                 </AnimateIcon>
                 {consoleState.supported && (
@@ -1008,7 +1009,7 @@ export function App() {
                           : 'Show the Helm server console window'
                       }
                     >
-                      <IconTerminal /> Console
+                      <IconTerminal /> <span className="tbtn-label">Console</span>
                     </button>
                   </AnimateIcon>
                 )}
@@ -1017,7 +1018,7 @@ export function App() {
                   onClick={() => setDebugOpen((o) => !o)}
                   title="Live server event log (spawns, attaches, hooks, errors)"
                 >
-                  <IconBug /> Debug
+                  <IconBug /> <span className="tbtn-label">Debug</span>
                 </button>
                 <AnimateIcon asChild>
                   <button
@@ -1029,7 +1030,8 @@ export function App() {
                         : 'Alerts off — click to get desktop notifications when a pane needs input or finishes'
                     }
                   >
-                    {notify ? <IconBellRing /> : <IconBellOff />} Alerts
+                    {notify ? <IconBellRing /> : <IconBellOff />}{' '}
+                    <span className="tbtn-label">Alerts</span>
                   </button>
                 </AnimateIcon>
               </div>
