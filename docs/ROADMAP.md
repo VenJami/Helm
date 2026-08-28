@@ -605,7 +605,7 @@ no second server.
 
 Update notification (2026-08-28) - Helm now tells you when a newer version is
 out instead of leaving you to notice the repo moved. `server/src/update.mjs`
-asks GitHub for the latest published RELEASE at boot and every 6 h (tagged
+asks GitHub for the latest published RELEASE at boot and every 2 h (tagged
 releases, not commits on main - unreleased work in progress should not nag),
 compares it with this checkout's package version, and caches the answer so
 every tab shares one request; `GET /api/update` exposes it and a dismissible

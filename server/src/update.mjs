@@ -1,7 +1,7 @@
 // Helm ⎈ — "a newer Helm is on GitHub" check.
 //
 // This is the only network call Helm makes on its own: one anonymous GET to
-// the GitHub Releases API at boot and every 6 h. It sends nothing about the
+// the GitHub Releases API at boot and every 2 h. It sends nothing about the
 // user or their projects (no telemetry) — it reads a public endpoint and
 // compares the latest published release tag with this checkout's
 // package.json version. HELM_NO_UPDATE_CHECK=1 turns it off entirely; the
@@ -22,7 +22,7 @@ const REPO = process.env.HELM_REPO || 'VenJami/Helm';
 const RELEASES_URL =
   process.env.HELM_UPDATE_URL || `https://api.github.com/repos/${REPO}/releases/latest`;
 const DISABLED = process.env.HELM_NO_UPDATE_CHECK === '1';
-const CHECK_EVERY_MS = 6 * 60 * 60 * 1000;
+const CHECK_EVERY_MS = 2 * 60 * 60 * 1000;
 const FETCH_TIMEOUT_MS = 8000;
 
 const pkgPath = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'package.json');
@@ -108,7 +108,7 @@ export async function checkForUpdate() {
   return updateInfo();
 }
 
-/** Boot hook: check now, then every 6 h. Unref'd so it never holds the process. */
+/** Boot hook: check now, then every 2 h. Unref'd so it never holds the process. */
 export function startUpdateChecks() {
   if (DISABLED) {
     dbg('server', 'update check disabled (HELM_NO_UPDATE_CHECK=1)');

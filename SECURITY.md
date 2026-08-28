@@ -73,7 +73,7 @@ currently wires up.
 
 ## The update check (one anonymous outbound request)
 
-At boot and every 6 hours, the server asks GitHub for the repository's latest
+At boot and every 2 hours, the server asks GitHub for the repository's latest
 published release (`server/src/update.mjs`) so the UI can tell you a newer Helm
 exists. What that means concretely:
 

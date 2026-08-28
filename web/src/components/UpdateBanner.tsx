@@ -13,7 +13,7 @@ import { IconX } from './Icons';
 // but v0.4.0 speaks up again.
 
 const DISMISS_KEY = 'helm.updateDismissed';
-const POLL_MS = 30 * 60 * 1000; // server refreshes every 6 h; this just picks it up
+const POLL_MS = 30 * 60 * 1000; // server refreshes every 2 h; this just picks it up
 
 function loadDismissed(): string {
   try {

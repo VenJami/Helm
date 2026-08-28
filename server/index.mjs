@@ -1176,7 +1176,7 @@ app.get('/api/diagnostics', (_req, res) => {
 });
 
 // Is there a newer Helm on GitHub? Cached server-side (checked at boot, then
-// every 6 h) so every open tab is one shared, rate-limit-friendly answer.
+// every 2 h) so every open tab is one shared, rate-limit-friendly answer.
 app.get('/api/update', (_req, res) => {
   res.json(updateInfo());
 });

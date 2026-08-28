@@ -162,7 +162,7 @@ export interface Diagnostics {
 }
 
 // "A newer Helm is on GitHub" — the server checks the repo's latest RELEASE
-// (not commits on main) at boot and every 6 h, and caches the answer here.
+// (not commits on main) at boot and every 2 h, and caches the answer here.
 // `available` is the only field the banner reacts to; errors stay silent
 // because being offline is normal for a local-first app.
 export interface UpdateInfo {

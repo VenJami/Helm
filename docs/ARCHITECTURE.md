@@ -73,7 +73,7 @@ Browser (React + xterm.js grid) <--WS/REST--> Node server <--PTY--> claude.cmd
   (docs/CLAUDE_INTERNALS.md).
 - `GET /api/update` → `{current, latest, available, url, name, publishedAt,
   checkedAt, disabled, error}` — latest published GitHub RELEASE vs this
-  checkout's package version, checked at boot and every 6 h and cached
+  checkout's package version, checked at boot and every 2 h and cached
   server-side (one shared answer for every tab, kind to the anonymous API's
   60-requests/hour limit). Drives the update banner, which renders only when
   `available` is true; failures stay silent (offline is normal).

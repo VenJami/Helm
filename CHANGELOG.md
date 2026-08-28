@@ -46,7 +46,7 @@ All notable changes to Helm are documented here. Format follows
   extend and stop, with time remaining.
 
 - **Update notification** — Helm checks GitHub for a newer *released* version at
-  startup and every 6 hours, and shows a dismissible banner with the new
+  startup and every 2 hours, and shows a dismissible banner with the new
   version, the update commands and a link to the release notes. Dismissing it
   hides that version only. It is the one outbound request Helm makes on its
   own: anonymous, no telemetry, and `HELM_NO_UPDATE_CHECK=1` switches it off.
