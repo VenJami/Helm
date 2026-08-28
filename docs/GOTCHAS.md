@@ -171,6 +171,20 @@
   silently collapses to `dircloudflaredcloudflared.exe`, and the only symptom
   is "the program isn't installed". Cost a debugging round on 2026-08-26.
 
+- **`powershell -Command "..."` invoked from a .cmd file eats commas.** The
+  launcher's browser probe was `foreach($p in @('a','b','c'))`; powershell.exe
+  treats command-line commas as argument separators, so the array arrived as
+  ONE space-joined string, every `Test-Path` failed, and Helm silently opened
+  in a browser tab instead of an app window. Keep inline PowerShell comma-free,
+  or do the work in cmd (`start-helm.cmd` now uses plain `if exist` probes).
+  Same neighbourhood: unbraced `$env:ProgramFiles+'\x'` swallows the `+` into
+  the variable name - write `${env:ProgramFiles}` or cmd's `%ProgramFiles%`.
+- **An Edge/Chrome `--app=` window is hosted by the ALREADY-RUNNING browser
+  process**, so the process you spawned exits and no `msedge.exe` command line
+  contains `--app`. Don't verify the launcher that way; check the window
+  TITLE - an app window's title is just the page title (`Helm`), with no
+  "and N more pages - Microsoft Edge" suffix.
+
 ## Testing pattern that works
 `cd server && npm run e2e` now codifies this permanently
 (`server/test/e2e-real.mjs`): it drives a real `claude` pane through

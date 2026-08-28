@@ -45,6 +45,8 @@ notifications, all script-verified). Current backlog: see docs/ROADMAP.md.
 helm/
 ├── CLAUDE.md               # this file
 ├── README.md · LICENSE     # public-facing (repo is on GitHub, MIT)
+├── start-helm.cmd          # double-click launcher: deps/build if needed → server
+│                           #   console → Helm in a chrome-less browser app window
 ├── .github/workflows/ci.yml # CI: server syntax-check + web typecheck/build + smoke test
 ├── docs/
 │   ├── ARCHITECTURE.md     # files, REST/WS API, spawn specifics, hook relay, data dirs
@@ -65,7 +67,9 @@ helm/
 
 ## Development Commands
 ```bash
-cd server && npm start     # USE this when just using Helm → http://127.0.0.1:7777
+start-helm.cmd             # USE this when just using Helm (double-click it): first-run
+                           #   installs/build, server console, app window on :7777
+cd server && npm start     # the server alone → http://127.0.0.1:7777
 cd server && npm run dev   # DEV only: --watch restarts on edits and KILLS live panes
 cd server && npm test      # fast smoke test (real server + keep-alive claude stand-in)
 cd server && npm run e2e   # real-claude end-to-end (spawn→hooks→usage→revive); needs

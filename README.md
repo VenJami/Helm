@@ -58,10 +58,16 @@ cd ../web  && npm install && npm run build
 cd ../server && npm start        # → http://127.0.0.1:7777
 ```
 
+On **Windows** you can skip all of that: double-click `start-helm.cmd` in the
+repo root. It installs the dependencies and builds the web app on a first run,
+starts the server in its own console window, and opens Helm in its own app
+window (no tabs, no address bar) as soon as it is listening. It uses Edge,
+Chrome or Brave in app mode, falling back to a normal tab in your default
+browser. Double-clicking it again while Helm is already running just opens
+another window instead of starting a second server.
+
 Open http://127.0.0.1:7777, add a project folder as a workspace, and hit
-**New pane**. Set the `PORT` environment variable to change the port. On
-Windows, `start-helm.cmd` (repo root) starts the server in its own console
-window instead.
+**New pane**. Set the `PORT` environment variable to change the port.
 
 > `node-pty` is a native module. If `npm install` fails in `server/`, you may
 > need the standard Windows build tools (Visual Studio Build Tools + Python).
