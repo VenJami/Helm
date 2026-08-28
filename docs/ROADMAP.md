@@ -586,6 +586,23 @@ against the live server and a seeded isolated one: row/name/height measurements,
 hover overlay, dev-logs row, drag-resize + clamp + persistence across reload,
 light theme, and 1440/1100/820 widths with no horizontal overflow.
 
+One-click launcher + app window (2026-08-28) - `start-helm.cmd` now covers the
+whole job for a non-terminal user: on a first run it installs both packages and
+builds the web app, then starts the server in its own console window and, as
+soon as /health answers, opens Helm as a CHROME-LESS APP WINDOW (Edge, then
+Chrome, then Brave, `--app=`; plain tab in the default browser if none is
+found) - no tabs, no address bar, which is what the owner meant by "make it a
+web app" (the PWA manifest was already there; nothing was launching it as one).
+Double-clicking while Helm runs opens another window instead of a second server
+that dies on the busy port; a failed install stops with a build-tools hint
+instead of a vanishing window. Honours `PORT`. Two traps recorded in GOTCHAS:
+powershell.exe strips commas off a .cmd command line (killed the first
+browser-probe array, silently falling back to a tab), and an `--app=` window is
+hosted by the already-running browser process, so verify by window TITLE, not
+by command line. Verified on an isolated port + data dir: cold start - app
+window titled "Helm" appeared at bind time; re-run - "already running", exit 0,
+no second server.
+
 ## Short-term backlog (rough priority order, owner-approved direction)
 (empty — next items to be chosen with the owner)
 

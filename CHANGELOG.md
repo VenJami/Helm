@@ -26,6 +26,13 @@ All notable changes to Helm are documented here. Format follows
   terminal button opens them and never disturb the Claude grid. Stopping keeps
   the pane so a server that died on an error still shows why.
 
+- **Double-click launcher** — `start-helm.cmd` (repo root) is now the whole
+  start-up: it installs dependencies and builds the web app on a first run,
+  starts the server in its own console window, and opens Helm as a chrome-less
+  app window (Edge/Chrome/Brave `--app=`, falling back to a browser tab) as
+  soon as the server answers. Running it again while Helm is up just opens
+  another window instead of failing on the busy port.
+
 ### Security
 - Cleared four high-severity advisories in transitive dependencies
   (`body-parser`, `postcss`, `nanoid`, `brace-expansion`, `js-yaml`) — all
