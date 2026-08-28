@@ -8,6 +8,11 @@ body.target-cursor-hide .sidebar,
 body.target-cursor-hide .sidebar * {
   cursor: none !important;
 }
+/* …except the width drag-handle: "you can drag this edge" is the whole
+   affordance, and the custom cursor can't express it. */
+body.target-cursor-hide .sidebar-resizer {
+  cursor: col-resize !important;
+}
 
 .target-cursor-wrapper {
   position: fixed;

@@ -154,10 +154,36 @@
   Both are pinned by smoke tests that lstat the alias, run it through cmd.exe,
   and assert detection resolves an absolute path that was never on PATH.
 
+- **Frontend layout: `visibility: hidden` still reserves the box.** The
+  sidebar's row buttons were hidden that way and silently ate ~72px of every
+  workspace row (more than the name column itself), which is why project names
+  read as "N…" at a 220px sidebar. Hover-revealed controls must either be
+  `display: none` or taken out of flow (`position: absolute`) — Helm's rows
+  now overlay them. Measure a row's children in the browser before blaming the
+  font or the width.
+- **Never run `prettier --write` on `web/src/styles.css`.** The `format`
+  script is scoped to `.ts/.tsx` on purpose; CSS is hand-formatted (one-line
+  rules for small selectors). Running Prettier over it reformats ~1,000 lines
+  and buries the real change. Cost a full revert-and-reapply on 2026-08-27.
+
 - **Build Windows paths with `path.join`, not template literals.** A single
   backslash in a JS string is an escape: `` `${dir}\cloudflared\cloudflared.exe` ``
   silently collapses to `dircloudflaredcloudflared.exe`, and the only symptom
   is "the program isn't installed". Cost a debugging round on 2026-08-26.
+
+- **`powershell -Command "..."` invoked from a .cmd file eats commas.** The
+  launcher's browser probe was `foreach($p in @('a','b','c'))`; powershell.exe
+  treats command-line commas as argument separators, so the array arrived as
+  ONE space-joined string, every `Test-Path` failed, and Helm silently opened
+  in a browser tab instead of an app window. Keep inline PowerShell comma-free,
+  or do the work in cmd (`start-helm.cmd` now uses plain `if exist` probes).
+  Same neighbourhood: unbraced `$env:ProgramFiles+'\x'` swallows the `+` into
+  the variable name - write `${env:ProgramFiles}` or cmd's `%ProgramFiles%`.
+- **An Edge/Chrome `--app=` window is hosted by the ALREADY-RUNNING browser
+  process**, so the process you spawned exits and no `msedge.exe` command line
+  contains `--app`. Don't verify the launcher that way; check the window
+  TITLE - an app window's title is just the page title (`Helm`), with no
+  "and N more pages - Microsoft Edge" suffix.
 
 ## Testing pattern that works
 `cd server && npm run e2e` now codifies this permanently

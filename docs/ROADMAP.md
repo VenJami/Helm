@@ -388,7 +388,11 @@ light mode — claude's TUI/ANSI colors assume a dark background, so panes read
 as dark cards on light chrome. New `hooks/useTheme` + `modals/AppearanceModal`.
 20 vitest tests. Verified via CDP: opened the dialog, switched light+rose
 (screenshot), back to dark+blue (screenshot), attributes + localStorage
-round-trip asserted. Backlog item #1 done.
+round-trip asserted. Backlog item #1 done. (2026-08-27: the animated target
+cursor was missing from that sweep — TargetCursor paints its dot/corners with
+an INLINE style, which outranked the var(--accent) rules in its own CSS, so it
+stayed amber through every accent/theme switch. Its cursorColor default is now
+`var(--accent)`; CDP-verified amber→rose in dark and light.)
 
 Drag-resize panes (2026-07-09) — thin gutters between grid columns/rows (amber
 line on hover): dragging trades fr-weight between the two adjacent tracks (grid
@@ -559,6 +563,45 @@ test origin was published, fetched back over the public internet, then torn
 down — banner parse ~6 s, anonymous (no account), edge 502s after stop, no
 stray processes. SECURITY.md gained a section: this is the one feature that
 intentionally leaves loopback.
+
+Sidebar + toolbar layout fix (2026-08-27) — project names in the sidebar were
+being crushed to "N…" / "W.": the row's action buttons were hidden with
+`visibility: hidden`, which still reserves the box, so ~72px of every 192px row
+went to invisible buttons (GOTCHAS). Rows were also four stacked lines tall
+(82px) and ragged. Now: the name gets its own line and account · branch · port ·
+pane-count share ONE meta line that ellipsizes instead of growing (every card
+43px, uniform), the actions moved out of flow into a hover overlay that fades
+over the row (only the dev-logs button stands without hover, and it's the one
+line of reserved width), and the meta chips have a shrink order — the branch
+gives up space first, the port never does. Text column 50px → 182px, twice as
+many projects visible. The sidebar is also drag-resizable from its right edge
+(170–460px, double-click resets, persisted as `helm.sidebarWidth`; the
+responsive rules clamp with max-width since the stored width is inline).
+Toolbar: the right-hand group used to be one unbreakable ~600px block that
+overflowed off-screen on a narrow window and wrapped to a second row even at
+1440 — it now wraps inside itself, and below 1400px the toggles drop their
+labels to icons (tooltips already existed), so the bar stays one row down to
+~1000px and gives that height back to the panes. Verified headlessly (CDP)
+against the live server and a seeded isolated one: row/name/height measurements,
+hover overlay, dev-logs row, drag-resize + clamp + persistence across reload,
+light theme, and 1440/1100/820 widths with no horizontal overflow.
+
+One-click launcher + app window (2026-08-28) - `start-helm.cmd` now covers the
+whole job for a non-terminal user: on a first run it installs both packages and
+builds the web app, then starts the server in its own console window and, as
+soon as /health answers, opens Helm as a CHROME-LESS APP WINDOW (Edge, then
+Chrome, then Brave, `--app=`; plain tab in the default browser if none is
+found) - no tabs, no address bar, which is what the owner meant by "make it a
+web app" (the PWA manifest was already there; nothing was launching it as one).
+Double-clicking while Helm runs opens another window instead of a second server
+that dies on the busy port; a failed install stops with a build-tools hint
+instead of a vanishing window. Honours `PORT`. Two traps recorded in GOTCHAS:
+powershell.exe strips commas off a .cmd command line (killed the first
+browser-probe array, silently falling back to a tab), and an `--app=` window is
+hosted by the already-running browser process, so verify by window TITLE, not
+by command line. Verified on an isolated port + data dir: cold start - app
+window titled "Helm" appeared at bind time; re-run - "already running", exit 0,
+no second server.
 
 ## Short-term backlog (rough priority order, owner-approved direction)
 (empty — next items to be chosen with the owner)

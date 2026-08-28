@@ -110,14 +110,42 @@ html, body {
 
 /* ---------------------------------------------------------------- sidebar */
 
+/* Width comes from an inline style (drag-resized, persisted — see
+   Sidebar.tsx); 248px is only the pre-hydration fallback. */
 .sidebar {
-  width: 220px;
+  position: relative;
+  width: 248px;
   flex-shrink: 0;
+  max-width: 55vw;
   background: var(--panel);
   border-right: 1px solid var(--border);
   display: flex;
   flex-direction: column;
 }
+
+/* Drag handle on the sidebar's right edge (straddles the border). */
+.sidebar-resizer {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  right: -3px;
+  width: 7px;
+  z-index: 20;
+  cursor: col-resize;
+  touch-action: none;
+}
+.sidebar-resizer::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 3px;
+  width: 1px;
+  background: transparent;
+  transition: background 80ms ease-out;
+}
+.sidebar-resizer:hover::after,
+.sidebar-resizer:active::after { background: var(--accent); }
 
 .sidebar-brand {
   display: flex;
@@ -183,19 +211,30 @@ html, body {
 .sidebar-list {
   flex: 1;
   overflow-y: auto;
-  padding: 0 6px 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 2px 6px 6px;
 }
 
+/* One project card: name on top, a single meta line under it, actions
+   overlaid on the right (.ws-actions — they must not consume text width). */
 .ws-item {
+  position: relative;
+  /* Whatever surface this row is painted on — the action overlay fades text
+     into it, so it has to follow the hover/selected state. */
+  --row-bg: var(--panel);
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 6px 8px;
+  gap: 7px;
+  min-width: 0;
+  padding: 5px 6px;
   border-radius: 6px;
   color: var(--muted);
   cursor: pointer;
   user-select: none;
 }
+.ws-item:hover, .ws-item.selected { --row-bg: var(--raised); }
 .ws-item:hover { background: var(--raised); color: var(--text); }
 .ws-item.selected { background: var(--raised); color: var(--text); }
 .ws-item svg { flex-shrink: 0; color: var(--faint); }
@@ -223,32 +262,54 @@ html, body {
   flex-direction: column;
   gap: 1px;
 }
+/* The logs button is the only action that shows without hover, so it's the
+   only one that needs room reserved — the rest overlay on hover. */
+.ws-item.has-logs .ws-text { padding-right: 30px; }
 
 .ws-name {
+  font-size: 12.5px;
+  line-height: 1.35;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-/* Which account panes in this workspace run on — glanceable per project. */
-.ws-account {
-  font-size: 11px;
+/* Account · branch · port · pane count, all on ONE line: four stacked lines
+   made every card 82px tall and left ~30px for the name. Each chip shrinks
+   (and ellipsizes) instead of pushing the row taller. */
+.ws-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  font-size: 10.5px;
+  line-height: 1.5;
   color: var(--faint);
+}
+
+/* Which account panes in this workspace run on — glanceable per project.
+   Shrinks last (the branch gives up space first): an account label is short,
+   and "Cla…" tells you nothing. */
+.ws-account {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 50%;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 .ws-item.selected .ws-account { color: var(--muted); }
 
-/* Git branch + dirty indicator under the account line. */
+/* Git branch + dirty indicator. Absorbs the shrinking for the whole meta line
+   (shrink factor >> the account's): it's the longest chip and the one that
+   still reads truncated. */
 .ws-git {
   display: flex;
   align-items: center;
-  gap: 4px;
-  margin-top: 1px;
-  font-size: 10.5px;
-  color: var(--faint);
+  gap: 3px;
+  flex: 0 100 auto;
   min-width: 0;
+  color: var(--faint);
 }
 .ws-git svg { flex-shrink: 0; opacity: 0.8; }
 .ws-git-branch {
@@ -258,28 +319,27 @@ html, body {
 }
 .ws-git-dirty {
   flex-shrink: 0;
-  width: 6px;
-  height: 6px;
+  width: 5px;
+  height: 5px;
   border-radius: 50%;
   background: var(--accent); /* amber = uncommitted work */
 }
 .ws-git-track { flex-shrink: 0; font-variant-numeric: tabular-nums; }
 .ws-item.selected .ws-git { color: var(--muted); }
 
-/* Dev-server up/down indicator (only when a port is configured). */
+/* Dev-server up/down indicator (only when a port is configured). Never
+   shrinks — ":7777 + green dot" is the most load-bearing chip on the line. */
 .ws-server {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  margin-top: 1px;
-  font-size: 10.5px;
+  gap: 3px;
+  flex: 0 0 auto;
   color: var(--faint);
-  min-width: 0;
 }
 .ws-server-dot {
   flex-shrink: 0;
-  width: 6px;
-  height: 6px;
+  width: 5px;
+  height: 5px;
   border-radius: 50%;
   background: var(--faint);
 }
@@ -292,15 +352,17 @@ html, body {
 .ws-server-port { font-variant-numeric: tabular-nums; }
 .ws-item.selected .ws-server { color: var(--muted); }
 
-.ws-badges { display: inline-flex; gap: 4px; flex-shrink: 0; }
+/* Pane counts sit at the end of the meta line (pushed right), so they line up
+   in a column across rows without a fixed gutter. */
+.ws-badges { display: inline-flex; gap: 3px; flex-shrink: 0; margin-left: auto; }
 .ws-badge {
   background: var(--live-dim);
   color: var(--live);
-  font-size: 11px;
+  font-size: 10px;
   font-weight: 600;
   border-radius: 999px;
-  padding: 0 7px;
-  line-height: 16px;
+  padding: 0 5px;
+  line-height: 14px;
 }
 /* Working = green (default badge color); waiting = amber accent. */
 .ws-badge-waiting {
@@ -308,11 +370,33 @@ html, body {
   color: var(--accent);
 }
 
-/* Run controls on the project card: start/stop the project, then open its
-   dev-server output. Hidden until hover unless the server is actually up. */
-.ws-run { display: inline-flex; gap: 3px; flex-shrink: 0; }
-.ws-run-btn {
+/* Row actions (start/stop · logs · share · remove), overlaid on the row's
+   right edge instead of sitting in the flex flow. In the flow they reserved
+   ~72px of width even while invisible, which is what crushed project names to
+   "N…". Hover fades them in over the row; the strip's gradient hides whatever
+   text runs under them. */
+.ws-actions {
+  position: absolute;
+  top: 50%;
+  right: 4px;
+  transform: translateY(-50%);
+  z-index: 1;
   display: inline-flex;
+  align-items: center;
+  gap: 1px;
+  padding-left: 20px;
+  pointer-events: none; /* the fade strip isn't a click target — the row is */
+}
+.ws-item:hover .ws-actions,
+.ws-item:focus-within .ws-actions,
+.ws-item.has-logs .ws-actions {
+  background: linear-gradient(to right, transparent, var(--row-bg) 20px);
+}
+.ws-actions > * { pointer-events: auto; }
+
+.ws-run { display: inline-flex; align-items: center; gap: 1px; flex-shrink: 0; }
+.ws-run-btn {
+  display: none;
   align-items: center;
   background: none;
   border: 0;
@@ -321,13 +405,13 @@ html, body {
   cursor: pointer;
   /* Comfortably clickable: these are the row's action buttons, not decoration. */
   padding: 5px;
-  visibility: hidden;
 }
-.ws-item:hover .ws-run-btn { visibility: visible; }
+.ws-item:hover .ws-run-btn,
+.ws-item:focus-within .ws-run-btn { display: inline-flex; }
 .ws-run-btn:hover { color: var(--text); background: var(--hover); }
-/* A live dev server keeps its stop button (and the logs button) on screen. */
-.ws-run-btn.live,
-.ws-run-btn.open { visibility: visible; }
+/* The logs button stays on screen without hover — it's the only standing cue
+   that a project has dev panes running behind the grid. */
+.ws-item.has-logs .ws-run-logs { display: inline-flex; }
 .ws-run-btn.live { color: var(--live); }
 .ws-run-btn.open { color: var(--accent); }
 
@@ -372,17 +456,17 @@ html, body {
 .ws-edit-hint { color: var(--faint); font-size: 10px; }
 
 .ws-remove {
-  display: inline-flex;
+  display: none;
   align-items: center;
   background: none;
   border: 0;
   border-radius: 4px;
   color: var(--faint);
   cursor: pointer;
-  padding: 2px;
-  visibility: hidden;
+  padding: 4px;
 }
-.ws-item:hover .ws-remove { visibility: visible; }
+.ws-item:hover .ws-remove,
+.ws-item:focus-within .ws-remove { display: inline-flex; }
 .ws-remove:hover { color: var(--danger); }
 
 /* Inline rename / change-root editor (opened from the right-click menu) */
@@ -460,7 +544,7 @@ html, body {
   display: flex;
   flex-wrap: wrap; /* controls drop to a second row on narrow windows */
   align-items: center;
-  gap: 8px 8px;
+  gap: 8px 6px;
   padding: 8px 12px;
   background: var(--panel);
   border-bottom: 1px solid var(--border);
@@ -482,7 +566,9 @@ html, body {
   gap: 7px;
   height: 28px;
   padding: 0 8px 0 9px;
-  min-width: 200px;
+  /* Shrinks before anything else in the bar — it's a pill, not a real input. */
+  flex: 0 1 200px;
+  min-width: 132px;
   background: var(--bg);
   border: 1px solid var(--border-strong);
   border-radius: 7px;
@@ -870,10 +956,16 @@ html, body {
 .tbtn:disabled { opacity: 0.45; cursor: default; }
 .tbtn-icon { padding: 4px; margin-right: 2px; }
 
+/* Wraps inside itself: without this the right-hand group is one unbreakable
+   ~600px block that runs off the edge of a narrow window (it can't wrap, so it
+   overflows). Now it folds onto its own second line instead. */
 .toolbar-right {
   display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
   align-items: center;
-  gap: 2px;
+  gap: 4px 2px;
+  min-width: 0;
   margin-left: auto;
 }
 
@@ -1633,12 +1725,23 @@ input::placeholder { color: var(--faint); }
 @media (max-width: 1400px) {
   .grid.cols-3 { grid-template-columns: repeat(2, 1fr); }
 }
+/* Toolbar toggles shed their labels before the bar wraps to a second row — on
+   a terminal grid vertical space is worth more than the words, and every one
+   of these buttons has a tooltip. */
+@media (max-width: 1400px) {
+  .main-label,
+  .tbtn-label { display: none; }
+  .tbtn { padding: 3px 7px; }
+}
+
+/* The sidebar's width is a stored user choice (inline style), so these clamp
+   with max-width — a `width` rule here would simply be overridden. */
 @media (max-width: 1000px) {
   .grid.cols-2, .grid.cols-3 { grid-template-columns: 1fr; }
-  .sidebar { width: 180px; }
+  .sidebar { max-width: 40vw; }
 }
 @media (max-width: 640px) {
-  .sidebar { width: 150px; }
+  .sidebar { max-width: 210px; }
   .sidebar-brand { padding: 10px; }
   #root, .app { min-width: 0; }
   .usage-bar-label { width: 80px; }

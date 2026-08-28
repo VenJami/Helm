@@ -1,6 +1,7 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
 import type { GitInfo, Profile, ServerInfo, SessionInfo, TunnelInfo, Workspace } from '../types';
 import { accountLabel } from '../accounts';
+import { SIDEBAR_DEFAULT, SIDEBAR_MAX, SIDEBAR_MIN, storage } from '../lib/storage';
 import {
   IconFolder,
   IconGitBranch,
@@ -110,6 +111,31 @@ export function Sidebar({
   onDragEnd,
 }: Props) {
   const [query, setQuery] = useState('');
+  // Sidebar width: dragged from the right edge, clamped, persisted. Project
+  // names are as long as the owner's folders, so a fixed rail always fit
+  // someone badly — let it be sized once and remembered.
+  const [width, setWidth] = useState(() => storage.sidebarWidth.get());
+  const resize = useRef<{ left: number; last: number } | null>(null);
+  const beginResize = (e: ReactPointerEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    const box = e.currentTarget.parentElement?.getBoundingClientRect();
+    if (!box) return;
+    resize.current = { left: box.left, last: box.width };
+    e.currentTarget.setPointerCapture(e.pointerId);
+  };
+  const moveResize = (e: ReactPointerEvent<HTMLDivElement>) => {
+    if (!resize.current) return;
+    const w = Math.min(SIDEBAR_MAX, Math.max(SIDEBAR_MIN, e.clientX - resize.current.left));
+    resize.current.last = w;
+    setWidth(w);
+  };
+  const endResize = (e: ReactPointerEvent<HTMLDivElement>) => {
+    if (!resize.current) return;
+    e.currentTarget.releasePointerCapture(e.pointerId);
+    storage.sidebarWidth.set(resize.current.last);
+    resize.current = null;
+  };
+
   const shown = query.trim()
     ? workspaces.filter((w) => w.name.toLowerCase().includes(query.trim().toLowerCase()))
     : workspaces;
@@ -244,7 +270,7 @@ export function Sidebar({
   const menuWs = menu && workspaces.find((w) => w.id === menu.id);
 
   return (
-    <aside className="sidebar">
+    <aside className="sidebar" style={{ width }}>
       <div className="sidebar-brand">
         <IconHelm size={17} /> Helm
         <button className="sidebar-hide" title="Hide sidebar" onClick={onHide}>
@@ -261,8 +287,16 @@ export function Sidebar({
         />
       </div>
       <div className="sidebar-list">
-        {shown.map((ws) =>
-          edit && edit.id === ws.id ? (
+        {shown.map((ws) => {
+          // Per-row facts the layout depends on. The logs button is the one
+          // action that stays on screen without hover (it's the only cue that
+          // a project has dev panes at all), so the row reserves width for it;
+          // every other button overlays the row's right edge on hover.
+          const devPanes = devPanesFor(ws);
+          const panes = panesIn(ws);
+          const tunnel = tunnels[ws.id];
+          const g = git[ws.id];
+          return edit && edit.id === ws.id ? (
             <div key={ws.id} className="ws-item ws-editing">
               {edit.field === 'start' ? (
                 // Start commands are a LIST (one per line) — a project can need
@@ -333,7 +367,7 @@ export function Sidebar({
           ) : (
             <div
               key={ws.id}
-              className={`ws-item ${ws.id === selectedId ? 'selected' : ''}${dragOverId === ws.id && dragId && dragId !== ws.id ? ' drag-over' : ''}`}
+              className={`ws-item ${ws.id === selectedId ? 'selected' : ''}${devPanes.length ? ' has-logs' : ''}${dragOverId === ws.id && dragId && dragId !== ws.id ? ' drag-over' : ''}`}
               onClick={() => onSelect(ws.id)}
               onContextMenu={(e) => openMenu(e, ws.id)}
               onDragOver={(e) => {
@@ -346,7 +380,9 @@ export function Sidebar({
                 e.preventDefault();
                 onDrop(ws.id);
               }}
-              title={ws.dir}
+              // Name too, not just the path: the name column is narrow enough
+              // that a long project name ellipsizes.
+              title={`${ws.name}\n${ws.dir}`}
             >
               <span
                 className="ws-grip"
@@ -365,54 +401,78 @@ export function Sidebar({
               <IconFolder size={14} />
               <div className="ws-text">
                 <span className="ws-name">{ws.name}</span>
-                <span className="ws-account">
-                  {ws.profile || accountLabel('', defaultEmail, profiles)}
-                </span>
-                {git[ws.id]?.branch && (
-                  <span
-                    className="ws-git"
-                    title={git[ws.id].dirty ? 'uncommitted changes' : 'working tree clean'}
-                  >
-                    <IconGitBranch size={11} />
-                    <span className="ws-git-branch">{git[ws.id].branch}</span>
-                    {git[ws.id].dirty && (
-                      <span className="ws-git-dirty" title="uncommitted changes" />
-                    )}
-                    {git[ws.id].ahead > 0 && (
-                      <span className="ws-git-track">↑{git[ws.id].ahead}</span>
-                    )}
-                    {git[ws.id].behind > 0 && (
-                      <span className="ws-git-track">↓{git[ws.id].behind}</span>
-                    )}
+                {/* One meta line, not four stacked ones: account · branch ·
+                    port · pane count. Each chip ellipsizes rather than pushing
+                    the row taller, so every project card is the same height. */}
+                <span className="ws-meta">
+                  <span className="ws-account">
+                    {ws.profile || accountLabel('', defaultEmail, profiles)}
                   </span>
-                )}
-                {ws.port && (
-                  <span
-                    className="ws-server"
-                    title={
-                      !servers[ws.id]
-                        ? `checking dev server on :${ws.port}…`
-                        : servers[ws.id].up
-                          ? `dev server up on :${ws.port}`
-                          : `dev server down on :${ws.port}`
-                    }
-                  >
+                  {g?.branch && (
                     <span
-                      className={`ws-server-dot ${servers[ws.id] ? (servers[ws.id].up ? 'up' : 'down') : 'unknown'}`}
-                    />
-                    <span className="ws-server-port">:{ws.port}</span>
-                  </span>
-                )}
-                {tunnels[ws.id] && (
+                      className="ws-git"
+                      title={g.dirty ? 'uncommitted changes' : 'working tree clean'}
+                    >
+                      <IconGitBranch size={11} />
+                      <span className="ws-git-branch">{g.branch}</span>
+                      {g.dirty && <span className="ws-git-dirty" title="uncommitted changes" />}
+                      {g.ahead > 0 && <span className="ws-git-track">↑{g.ahead}</span>}
+                      {g.behind > 0 && <span className="ws-git-track">↓{g.behind}</span>}
+                    </span>
+                  )}
+                  {ws.port && (
+                    <span
+                      className="ws-server"
+                      title={
+                        !servers[ws.id]
+                          ? `checking dev server on :${ws.port}…`
+                          : servers[ws.id].up
+                            ? `dev server up on :${ws.port}`
+                            : `dev server down on :${ws.port}`
+                      }
+                    >
+                      <span
+                        className={`ws-server-dot ${servers[ws.id] ? (servers[ws.id].up ? 'up' : 'down') : 'unknown'}`}
+                      />
+                      <span className="ws-server-port">:{ws.port}</span>
+                    </span>
+                  )}
+                  {panes.total > 0 && (
+                    <span className="ws-badges">
+                      {panes.working > 0 && (
+                        <span
+                          className="ws-badge ws-badge-working"
+                          title={`${panes.working} working`}
+                        >
+                          {panes.working}
+                        </span>
+                      )}
+                      {panes.waiting > 0 && (
+                        <span
+                          className="ws-badge ws-badge-waiting"
+                          title={`${panes.waiting} waiting`}
+                        >
+                          {panes.waiting}
+                        </span>
+                      )}
+                      {panes.working === 0 && panes.waiting === 0 && (
+                        <span className="ws-badge" title={`${panes.total} running`}>
+                          {panes.total}
+                        </span>
+                      )}
+                    </span>
+                  )}
+                </span>
+                {tunnel && (
                   <span
-                    className={`ws-public ws-public-${tunnels[ws.id].status}`}
+                    className={`ws-public ws-public-${tunnel.status}`}
                     title={
-                      tunnels[ws.id].status === 'live'
-                        ? `PUBLIC on the internet — ${tunnels[ws.id].url}
-Click to open the link panel. Expires in ${expiryLabel(tunnels[ws.id].expiresAt)}.`
-                        : tunnels[ws.id].status === 'starting'
+                      tunnel.status === 'live'
+                        ? `PUBLIC on the internet — ${tunnel.url}
+Click to open the link panel. Expires in ${expiryLabel(tunnel.expiresAt)}.`
+                        : tunnel.status === 'starting'
                           ? 'opening the public tunnel…'
-                          : tunnels[ws.id].error || 'the tunnel failed'
+                          : tunnel.error || 'the tunnel failed'
                     }
                     onClick={(e) => {
                       // Opens the panel rather than copying silently: a click
@@ -422,112 +482,94 @@ Click to open the link panel. Expires in ${expiryLabel(tunnels[ws.id].expiresAt)
                     }}
                   >
                     <IconGlobe size={10} />
-                    {tunnels[ws.id].status === 'live' ? (
+                    {tunnel.status === 'live' ? (
                       // Just the flag here: the sidebar column is ~60px, so
                       // the countdown lives in the toolbar pill (which has the
                       // room and is visible from every workspace) and in the
                       // tooltip below.
                       <b>PUBLIC</b>
                     ) : (
-                      <b>{tunnels[ws.id].status === 'starting' ? 'OPENING…' : 'FAILED'}</b>
+                      <b>{tunnel.status === 'starting' ? 'OPENING…' : 'FAILED'}</b>
                     )}
                   </span>
                 )}
               </div>
+              {/* Row actions. Absolutely positioned so they cost the name and
+                  meta text NO width when idle (they used to reserve ~72px of
+                  invisible layout, which is what squeezed names to "N…").
+                  Only the logs button stays visible without hover. */}
               {(() => {
-                const p = panesIn(ws);
-                if (p.total === 0) return null;
-                return (
-                  <span className="ws-badges">
-                    {p.working > 0 && (
-                      <span className="ws-badge ws-badge-working" title={`${p.working} working`}>
-                        {p.working}
-                      </span>
-                    )}
-                    {p.waiting > 0 && (
-                      <span className="ws-badge ws-badge-waiting" title={`${p.waiting} waiting`}>
-                        {p.waiting}
-                      </span>
-                    )}
-                    {p.working === 0 && p.waiting === 0 && (
-                      <span className="ws-badge" title={`${p.total} running`}>
-                        {p.total}
-                      </span>
-                    )}
-                  </span>
-                );
-              })()}
-              {(() => {
-                // Start / stop the project itself. The dev pane's output opens
-                // from the terminal button next to it.
-                const panes = devPanesFor(ws);
-                const liveCount = panes.filter((p) => p.status === 'running').length;
+                const liveCount = devPanes.filter((p) => p.status === 'running').length;
                 const live = liveCount > 0;
                 const cmds = ws.startCommands ?? [];
                 const busy = asking === ws.id;
                 return (
-                  <span className="ws-run" onClick={(e) => e.stopPropagation()}>
+                  <span className="ws-actions">
+                    <span className="ws-run" onClick={(e) => e.stopPropagation()}>
+                      <button
+                        className={`ws-run-btn ${live ? 'live' : ''}`}
+                        disabled={busy}
+                        title={
+                          busy
+                            ? 'asking Claude how this project starts…'
+                            : live
+                              ? `Stop ${liveCount > 1 ? `${liveCount} processes` : `"${cmds[0] ?? 'dev server'}"`}`
+                              : cmds.length
+                                ? `Start: ${cmds.join(' · ')}`
+                                : 'Start project (Helm works out the command)'
+                        }
+                        onClick={() => (live ? onStopDev(ws.id) : void startOrAsk(ws.id))}
+                      >
+                        {live ? <IconStop size={15} /> : <IconPlay size={15} />}
+                      </button>
+                      {devPanes.length > 0 && (
+                        <button
+                          className={`ws-run-btn ws-run-logs ${devPanesOpen(ws.id) ? 'open' : live ? 'live' : ''}`}
+                          title={
+                            devPanesOpen(ws.id)
+                              ? `Hide the dev output (${devPanes.length} pane${devPanes.length > 1 ? 's' : ''})`
+                              : `Show the dev output (${devPanes.length} pane${devPanes.length > 1 ? 's' : ''})`
+                          }
+                          onClick={() => onShowDev(ws.id)}
+                        >
+                          <IconTerminal size={15} />
+                          {devPanes.length > 1 && (
+                            <span className="ws-run-count">{devPanes.length}</span>
+                          )}
+                        </button>
+                      )}
+                      {ws.port && (
+                        <button
+                          className={`ws-run-btn ${tunnel ? 'public' : ''}`}
+                          title={
+                            tunnel
+                              ? `Stop sharing :${ws.port} publicly`
+                              : tunnelsAvailable
+                                ? `Share :${ws.port} on the internet (unauthenticated — warns first)`
+                                : `Public sharing needs cloudflared. Install it with: ${installHint}`
+                          }
+                          onClick={() => (tunnel ? onUnshare(ws.id) : onShare(ws.id))}
+                        >
+                          <IconGlobe size={15} />
+                        </button>
+                      )}
+                    </span>
                     <button
-                      className={`ws-run-btn ${live ? 'live' : ''}`}
-                      disabled={busy}
-                      title={
-                        busy
-                          ? 'asking Claude how this project starts…'
-                          : live
-                            ? `Stop ${liveCount > 1 ? `${liveCount} processes` : `"${cmds[0] ?? 'dev server'}"`}`
-                            : cmds.length
-                              ? `Start: ${cmds.join(' · ')}`
-                              : 'Start project (Helm works out the command)'
-                      }
-                      onClick={() => (live ? onStopDev(ws.id) : void startOrAsk(ws.id))}
+                      className="ws-remove"
+                      title="Remove workspace (sessions keep running)"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onRemove(ws.id);
+                      }}
                     >
-                      {live ? <IconStop size={16} /> : <IconPlay size={16} />}
+                      <IconX size={13} />
                     </button>
-                    {panes.length > 0 && (
-                      <button
-                        className={`ws-run-btn ${devPanesOpen(ws.id) ? 'open' : live ? 'live' : ''}`}
-                        title={
-                          devPanesOpen(ws.id)
-                            ? `Hide the dev output (${panes.length} pane${panes.length > 1 ? 's' : ''})`
-                            : `Show the dev output (${panes.length} pane${panes.length > 1 ? 's' : ''})`
-                        }
-                        onClick={() => onShowDev(ws.id)}
-                      >
-                        <IconTerminal size={16} />
-                        {panes.length > 1 && <span className="ws-run-count">{panes.length}</span>}
-                      </button>
-                    )}
-                    {ws.port && (
-                      <button
-                        className={`ws-run-btn ${tunnels[ws.id] ? 'public' : ''}`}
-                        title={
-                          tunnels[ws.id]
-                            ? `Stop sharing :${ws.port} publicly`
-                            : tunnelsAvailable
-                              ? `Share :${ws.port} on the internet (unauthenticated — warns first)`
-                              : `Public sharing needs cloudflared. Install it with: ${installHint}`
-                        }
-                        onClick={() => (tunnels[ws.id] ? onUnshare(ws.id) : onShare(ws.id))}
-                      >
-                        <IconGlobe size={16} />
-                      </button>
-                    )}
                   </span>
                 );
               })()}
-              <button
-                className="ws-remove"
-                title="Remove workspace (sessions keep running)"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onRemove(ws.id);
-                }}
-              >
-                <IconX size={13} />
-              </button>
             </div>
-          ),
-        )}
+          );
+        })}
         {workspaces.length === 0 && (
           <div className="sidebar-empty">No workspaces yet — add a project folder.</div>
         )}
@@ -535,6 +577,17 @@ Click to open the link panel. Expires in ${expiryLabel(tunnels[ws.id].expiresAt)
       <button className="btn btn-secondary sidebar-add" onClick={onAddClick}>
         <IconPlus size={13} /> Add workspace
       </button>
+      <div
+        className="sidebar-resizer"
+        title="Drag to resize · double-click to reset"
+        onPointerDown={beginResize}
+        onPointerMove={moveResize}
+        onPointerUp={endResize}
+        onDoubleClick={() => {
+          setWidth(SIDEBAR_DEFAULT);
+          storage.sidebarWidth.set(SIDEBAR_DEFAULT);
+        }}
+      />
 
       {menu && menuWs && (
         <div
