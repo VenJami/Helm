@@ -25,18 +25,48 @@ All notable changes to Helm are documented here. Format follows
   as any pane — created minimized, so they sit in the tray until the card's
   terminal button opens them and never disturb the Claude grid. Stopping keeps
   the pane so a server that died on an error still shows why.
-
 - **Double-click launcher** — `start-helm.cmd` (repo root) is now the whole
   start-up: it installs dependencies and builds the web app on a first run,
   starts the server in its own console window, and opens Helm as a chrome-less
   app window (Edge/Chrome/Brave `--app=`, falling back to a browser tab) as
   soon as the server answers. Running it again while Helm is up just opens
   another window instead of failing on the busy port.
+- **Public share links** — a project with a dev-server port gets a globe button
+  that publishes it to the internet through a Cloudflare quick tunnel and copies
+  the `https://….trycloudflare.com` link. Those URLs have no password, so the
+  safety is deliberate and layered: a warning dialog that cannot be suppressed,
+  a red PUBLIC flag on the project plus an always-visible toolbar pill counting
+  live links and the time left, and a 30-minute self-expiry you can extend.
+  Helm’s own port is refused, and links are never persisted — a restart fails
+  closed. `cloudflared` is detected on PATH and in the usual install dirs; if
+  it is missing, an explainer says what it is and can install it for you in a
+  visible pane.
+- **Public links panel** — the toolbar pill (or the PUBLIC flag) opens a list of
+  every live link: the full URL as a real clickable anchor, plus copy, open,
+  extend and stop, with time remaining.
+
+### Changed
+- **Sidebar rows fit the names again** — project names get their own line while
+  account, branch, port and pane count share one meta line that ellipsizes;
+  row actions moved into a hover overlay instead of reserving invisible width,
+  so the text column went from 50px to 182px and every card is the same height.
+  The sidebar is drag-resizable from its right edge (double-click resets), and
+  the toolbar wraps inside itself instead of overflowing, dropping button
+  labels to icons below 1400px.
+
+### Fixed
+- **Ctrl+V pastes into a pane.** Only Ctrl+Shift+V worked before: xterm mapped
+  Ctrl+V to a control character and cancelled the browser’s own paste event.
+- **The animated target cursor follows the theme.** It painted its dot and
+  corner brackets with an inline color, so it stayed amber through every
+  accent and light/dark switch.
 
 ### Security
 - Cleared four high-severity advisories in transitive dependencies
   (`body-parser`, `postcss`, `nanoid`, `brace-expansion`, `js-yaml`) — all
   patch-level, no declared dependency changed and `node-pty` still pinned.
+- Public share links are the one feature that intentionally leaves loopback.
+  SECURITY.md documents what that exposes and what the three safety layers do.
 
 
 ## [0.2.0] — 2026-07-10
