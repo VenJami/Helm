@@ -1206,6 +1206,24 @@ input::placeholder { color: var(--faint); }
 }
 .drift-close:hover { color: var(--text); background: var(--panel); }
 
+/* "A newer Helm is on GitHub" — same shell as the drift banner, calmer surface
+   (this is news, not an alarm). Shown only on a positive check. */
+.update-banner { background: var(--panel); border-left-color: var(--live); }
+.update-banner .drift-icon { color: var(--live); }
+.update-current { font-weight: 400; color: var(--muted); }
+.update-banner code { font-family: ui-monospace, Consolas, monospace; }
+.update-cmd {
+  font-family: ui-monospace, Consolas, monospace;
+  background: var(--raised);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0 4px;
+  color: var(--text);
+  user-select: all;
+}
+.update-link { color: var(--accent); text-decoration: none; white-space: nowrap; }
+.update-link:hover { text-decoration: underline; }
+
 .pane-slot {
   display: flex;
   min-width: 0;

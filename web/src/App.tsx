@@ -12,6 +12,7 @@ import { ProfileSelect } from './components/ProfileSelect';
 import { TargetCursor } from './components/TargetCursor';
 import { Toaster, toast } from './components/Toaster';
 import { DriftBanner } from './components/DriftBanner';
+import { UpdateBanner } from './components/UpdateBanner';
 import { CommandPalette } from './components/CommandPalette';
 import { GridResizers } from './components/GridResizers';
 import { NewProfileModal } from './components/modals/NewProfileModal';
@@ -877,6 +878,7 @@ export function App() {
       )}
       <main className="main">
         <DriftBanner />
+        <UpdateBanner />
         {selected ? (
           <>
             <div className="main-bar">

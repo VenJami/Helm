@@ -160,7 +160,10 @@ Anthropic API and has no key to leak.
 
 **Is my code or conversation sent anywhere?**
 No. One local Node server on loopback; state stays in `%LOCALAPPDATA%\Helm`.
-No cloud, no telemetry.
+No cloud, no telemetry. Helm makes exactly one outbound request on its own: an
+anonymous check of this repo's latest GitHub release, so it can tell you when
+an update is out. It sends nothing about you, and `HELM_NO_UPDATE_CHECK=1`
+turns it off.
 
 **The browser crashed / I closed the tab mid-task. Did I lose the session?**
 No — sessions live on the server, and the pane repaints from a replay buffer

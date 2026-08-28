@@ -45,6 +45,12 @@ All notable changes to Helm are documented here. Format follows
   every live link: the full URL as a real clickable anchor, plus copy, open,
   extend and stop, with time remaining.
 
+- **Update notification** — Helm checks GitHub for a newer *released* version at
+  startup and every 6 hours, and shows a dismissible banner with the new
+  version, the update commands and a link to the release notes. Dismissing it
+  hides that version only. It is the one outbound request Helm makes on its
+  own: anonymous, no telemetry, and `HELM_NO_UPDATE_CHECK=1` switches it off.
+
 ### Changed
 - **Sidebar rows fit the names again** — project names get their own line while
   account, branch, port and pane count share one meta line that ellipsizes;

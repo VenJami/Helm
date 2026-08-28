@@ -71,6 +71,23 @@ If you need an authenticated share, a quick tunnel is the wrong tool — use a
 named Cloudflare tunnel with Access, or Tailscale, neither of which Helm
 currently wires up.
 
+## The update check (one anonymous outbound request)
+
+At boot and every 6 hours, the server asks GitHub for the repository's latest
+published release (`server/src/update.mjs`) so the UI can tell you a newer Helm
+exists. What that means concretely:
+
+- It is an **anonymous GET** to `api.github.com` with no credentials. Helm sends
+  no telemetry: not your projects, paths, sessions, usage, or version history.
+  GitHub sees what any web request shows it — your IP and a `Helm/<version>`
+  user agent.
+- The answer is cached server-side and shared by every open tab, so the number
+  of requests does not grow with the number of tabs or panes.
+- Failures are silent by design (being offline is normal for a local-first app);
+  the banner only ever appears on a positive result.
+- **`HELM_NO_UPDATE_CHECK=1` disables it completely** — the server then makes no
+  outbound request at all and reports `disabled` on `GET /api/update`.
+
 ## What is explicitly out of scope
 
 - **Multi-user / remote access.** Helm assumes one trusted user on the local

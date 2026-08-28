@@ -161,6 +161,22 @@ export interface Diagnostics {
   warnings: DriftWarning[];
 }
 
+// "A newer Helm is on GitHub" — the server checks the repo's latest RELEASE
+// (not commits on main) at boot and every 6 h, and caches the answer here.
+// `available` is the only field the banner reacts to; errors stay silent
+// because being offline is normal for a local-first app.
+export interface UpdateInfo {
+  current: string; // this checkout's package version
+  latest: string | null; // latest published release tag, `v` stripped
+  available: boolean; // latest is strictly newer than current
+  url: string | null; // release page (notes)
+  name: string | null; // release title
+  publishedAt: string | null; // ISO
+  checkedAt: string | null; // ISO — null until the first check returns
+  disabled: boolean; // HELM_NO_UPDATE_CHECK=1: no network call is ever made
+  error: string | null; // last failure (offline, rate limit) — not shown in the UI
+}
+
 // State of the server's own console window (start-helm.cmd terminal).
 // supported:false = non-Windows or launched detached with no console → hide the
 // toggle button entirely.

@@ -603,6 +603,25 @@ by command line. Verified on an isolated port + data dir: cold start - app
 window titled "Helm" appeared at bind time; re-run - "already running", exit 0,
 no second server.
 
+Update notification (2026-08-28) - Helm now tells you when a newer version is
+out instead of leaving you to notice the repo moved. `server/src/update.mjs`
+asks GitHub for the latest published RELEASE at boot and every 6 h (tagged
+releases, not commits on main - unreleased work in progress should not nag),
+compares it with this checkout's package version, and caches the answer so
+every tab shares one request; `GET /api/update` exposes it and a dismissible
+banner (`web/src/components/UpdateBanner.tsx`, same shell as the drift banner,
+green rather than amber) shows the new version, the update commands and a link
+to the release notes. Dismissal is per-version, so hiding v0.3.0 stays hidden
+but v0.4.0 speaks up again. Only positive results render - offline, rate-limited
+or "no releases yet" stay silent, because a local-first app that cannot reach
+GitHub is not broken. This is the ONLY outbound request Helm makes on its own
+(anonymous, no telemetry); `HELM_NO_UPDATE_CHECK=1` disables it and SECURITY.md
++ the README FAQ say so plainly. Verified: smoke suite 26 (a stub releases
+endpoint drives the route end-to-end + version-compare cases), a real GitHub
+call parsing the actual v0.2.0 release, and 10/10 CDP checks in a real browser
+(banner renders with version/commands/link, dismiss sticks across a reload, a
+newer version re-opens it).
+
 ## Short-term backlog (rough priority order, owner-approved direction)
 (empty — next items to be chosen with the owner)
 

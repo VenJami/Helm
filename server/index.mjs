@@ -39,6 +39,7 @@ import {
   stopTunnel,
   tunnelInfo,
 } from './src/tunnel.mjs';
+import { startUpdateChecks, updateInfo } from './src/update.mjs';
 
 const { spawn } = ptyPkg;
 
@@ -1174,6 +1175,12 @@ app.get('/api/diagnostics', (_req, res) => {
   res.json({ claude: diagnostics.claude, warnings: [...diagnostics.warnings.values()] });
 });
 
+// Is there a newer Helm on GitHub? Cached server-side (checked at boot, then
+// every 6 h) so every open tab is one shared, rate-limit-friendly answer.
+app.get('/api/update', (_req, res) => {
+  res.json(updateInfo());
+});
+
 // ------------------------------------------------------ console window toggle
 // Show/hide the OS console window this server is running in (the "Helm server"
 // terminal from start-helm.cmd) so the UI can offer a button for it. Windows
@@ -2001,6 +2008,7 @@ const server = app.listen(PORT, HOST, () => {
     `started (pid ${process.pid})${dead ? ` — ${dead} dead session(s) loaded, revivable` : ''}`,
   );
   checkClaudeVersion(); // async; populates /api/diagnostics for the drift banner
+  startUpdateChecks(); // async; populates /api/update for the update banner
 });
 
 server.on('error', (/** @type {NodeJS.ErrnoException} */ err) => {
