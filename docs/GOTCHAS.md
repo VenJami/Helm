@@ -210,6 +210,55 @@ handles this correctly; the cheap alternative for one-off scripts is to point
 the workspace at an ALREADY-TRUSTED directory so no dialog appears at all, and
 to send a `resize` on the attached socket before waiting for `activity`.
 
+## `--allowed-tools ""` does NOT disable tools (it cost 28x)
+For a headless `claude -p` call that only rewrites text (the dictation polish),
+the obvious flag is wrong in an expensive, silent way:
+
+- **`--allowed-tools ""`** is a *permission allowlist*. The built-in tool
+  DEFINITIONS still load — measured at 33,943 cache-creation tokens — and the
+  model still attempts a tool call, spending its single turn and ending on
+  `terminal_reason: max_turns` with **no `result` text at all**. $0.070 for
+  nothing, on every call, and the route silently falls back to raw so it looks
+  like the model is just bad.
+- **`--tools ""`** removes them from the context. Same prompt: 508 input
+  tokens, `stop_reason: end_turn`, $0.0025.
+- Pair it with **`--system-prompt`** (replaces claude's agent system prompt,
+  which a text rewriter needs none of). Keep that string short and quote-free —
+  it rides on the command line; put the real instructions on **stdin**.
+- **`--bare`** looks perfect for this (skips CLAUDE.md discovery, hooks, memory)
+  but it **refuses OAuth and demands `ANTHROPIC_API_KEY`** — it would turn a
+  subscription feature into a metered one. Not an option here.
+
+Also: a `claude -p` call racing a *pane's* claude boot can exceed 30 s (two CLI
+cold starts competing) where a settled machine answers in 5–10 s. Size timeouts
+around the contended case, not the quiet one.
+
+**A `claude -p` process cannot be pre-warmed.** The obvious latency trick —
+spawn it when the mic opens so its startup happens while you talk, then write
+the prompt when you stop — does not work, in two different ways:
+
+- Plain `-p` **gives up on stdin after 3 seconds**: `Warning: no stdin data
+  received in 3s, proceeding without it` followed by `Error: Input must be
+  provided either through stdin or as a prompt argument`, exit 1. A process
+  cannot be parked for the length of a spoken sentence. The failure is quiet
+  from the caller's side — the polish route just falls back to raw in ~50 ms,
+  which looks like a 96% speed-up until you check the `polished` flag.
+- `--input-format stream-json` **does** park indefinitely and answers correctly,
+  but it reloads the full agent context regardless of `--tools ""`: 98,850
+  cache-creation tokens, **$0.199 a call** against $0.0011 for spawning late.
+
+So the polish process is spawned when dictation STOPS, and the ~0.5–1.4 s of
+CLI startup is simply part of the 2.1 s. If you try this again, assert on
+`polished === true`, not on wall-clock time.
+
+**And check where the time actually goes before optimising anything else.** On
+the polish call the answer was not process startup (~0.4–1.4 s) or the network
+— it was **extended thinking**, burning ~984 of ~1000 output tokens on a task
+whose answer is 24 tokens. `MAX_THINKING_TOKENS=0` took it from 16 s / $0.0083
+to 2.1 s / $0.0011 per dictation with the 10-case bench still at 10/10. For any
+short, mechanical `claude -p` call, turn thinking off first and measure second;
+for a call that genuinely reasons (suggest-start), leave it on.
+
 ## Testing pattern that works
 `cd server && npm run e2e` now codifies this permanently
 (`server/test/e2e-real.mjs`): it drives a real `claude` pane through

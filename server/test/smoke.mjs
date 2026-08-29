@@ -1041,3 +1041,118 @@ test('deleting a profile clears its workspace pins', async () => {
   const after = (await (await authed('/workspaces')).json()).find((w) => w.id === ws.id);
   assert.equal(after.profile, undefined); // pin gone, not dangling
 });
+
+test('dictation: polish sanitizes the reply, /type lands it unsent', async () => {
+  const dir = mkdir(path.join(tmp, 'dictate'));
+  await authed('/workspaces', {
+    method: 'POST',
+    body: JSON.stringify({ name: 'dictate', dir }),
+  });
+  const session = await (
+    await authed('/sessions', { method: 'POST', body: JSON.stringify({ workspace: dir }) })
+  ).json();
+  const id = session.id;
+
+  // fake-claude answers with preamble + quotes, the messy shape a real model
+  // returns; the server must hand back bare text, ready to type into a pane.
+  const ok = await (
+    await authed(`/sessions/${id}/polish`, {
+      method: 'POST',
+      body: JSON.stringify({ text: 'um, add a mic button to the pane header' }),
+    })
+  ).json();
+  assert.equal(ok.polished, true);
+  assert.equal(ok.text, 'add a mic button to the pane header');
+  assert.equal(ok.cost, 0.0123);
+
+  // A reply far longer than what was said = the model answered instead of
+  // rewriting. The route falls back to the raw words rather than erroring:
+  // dictation must never lose what you said.
+  const raw = 'let me ramble about the login flow';
+  const fell = await (
+    await authed(`/sessions/${id}/polish`, { method: 'POST', body: JSON.stringify({ text: raw }) })
+  ).json();
+  assert.equal(fell.polished, false);
+  assert.equal(fell.text, raw);
+
+  // Empty and oversized transcripts are refused outright.
+  for (const bad of ['', '   ', 'x'.repeat(4001)]) {
+    const res = await authed(`/sessions/${id}/polish`, {
+      method: 'POST',
+      body: JSON.stringify({ text: bad }),
+    });
+    assert.equal(res.status, 400);
+  }
+  assert.equal(
+    (
+      await authed('/sessions/nope/polish', {
+        method: 'POST',
+        body: JSON.stringify({ text: 'hi' }),
+      })
+    ).status,
+    404,
+  );
+
+  // /type writes to the PTY without submitting.
+  const typed = await authed(`/sessions/${id}/type`, {
+    method: 'POST',
+    body: JSON.stringify({ text: 'add a mic button' }),
+  });
+  assert.equal(typed.status, 200);
+  assert.equal(
+    (await authed(`/sessions/${id}/type`, { method: 'POST', body: JSON.stringify({ text: '' }) }))
+      .status,
+    400,
+  );
+
+  await authed(`/sessions/${id}`, { method: 'DELETE' });
+});
+
+test('dictation: dev panes take no prompts', async () => {
+  const dir = mkdir(path.join(tmp, 'devpane-voice'));
+  await authed('/workspaces', {
+    method: 'POST',
+    body: JSON.stringify({
+      name: 'devpane-voice',
+      dir,
+      startCommands: [process.execPath + ' -e "setInterval(()=>{},1e9)"'],
+    }),
+  });
+  const wsRow = (await (await authed('/workspaces')).json()).find(
+    (w) => w.name === 'devpane-voice',
+  );
+  await authed(`/workspaces/${wsRow.id}/start`, { method: 'POST' });
+  const dev = (await (await authed('/sessions')).json()).find(
+    (s) => s.kind === 'dev' && s.workspace === path.resolve(dir),
+  );
+  assert.ok(dev, 'dev pane started');
+
+  // A dev pane runs a server, not a conversation — same refusal broadcast makes.
+  const typed = await authed(`/sessions/${dev.id}/type`, {
+    method: 'POST',
+    body: JSON.stringify({ text: 'hello' }),
+  });
+  assert.equal(typed.status, 400);
+
+  await authed(`/workspaces/${wsRow.id}/stop`, { method: 'POST' });
+});
+
+test('polish sanitizer: commentary wrapped around your words is stripped', async () => {
+  const { cleanPolished } = await import('../src/claude.mjs');
+  const said = 'can you make the thing do the other thing with the stuff in it';
+
+  // Seen in the wild: the model refuses to rewrite, then quotes you back. The
+  // essay is short enough to pass the length guard, so containment catches it.
+  assert.equal(cleanPolished(`This is too vague to rewrite with confidence. ${said}`, said), said);
+  // Whitespace/case differences must not defeat the containment check.
+  assert.equal(cleanPolished(`Too vague.\n\n  ${said.toUpperCase()}  `, said), said);
+  // A genuine rewrite that happens to be longer is NOT commentary.
+  assert.equal(
+    cleanPolished('Make the parser handle the trailing comma.', said),
+    'Make the parser handle the trailing comma.',
+  );
+  // Unchanged output still passes through untouched.
+  assert.equal(cleanPolished(said, said), said);
+  // A very short transcript can't trip containment on a coincidence.
+  assert.equal(cleanPolished('Fix the bug now.', 'fix the bug'), 'Fix the bug now.');
+});

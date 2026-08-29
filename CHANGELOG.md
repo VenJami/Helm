@@ -7,6 +7,18 @@ All notable changes to Helm are documented here. Format follows
 ## [Unreleased]
 
 ### Added
+- **Talk to a pane instead of typing** — a mic button on each pane (or
+  Ctrl+Shift+D) turns speech into a cleaned-up prompt: filler and false starts
+  removed, self-corrections resolved, mis-heard identifiers like "use effect"
+  restored to `useEffect`, punctuation put back. The text lands in the pane
+  **unsent**, so you read it before the agent acts on it. No extra subscription
+  and nothing to install — your browser does the speech-to-text and your
+  existing Claude Code account does the clean-up — about two seconds and a
+  tenth of a cent per dictation, on Haiku. If the clean-up fails for any reason you still get
+  exactly what you said. Note that while the mic is on, your browser sends the
+  audio to its speech service; SECURITY.md explains this in full. The button
+  only appears in browsers that support the API (Edge and Chrome; not Firefox
+  or Brave).
 - **Pop a pane out into a floating window** — a pane can leave the grid for its
   own always-on-top window that stays visible over your editor and browser, so
   you can watch an agent work while you use the project it is working on, and

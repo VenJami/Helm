@@ -110,7 +110,7 @@ Open http://127.0.0.1:7777, add a project folder as a workspace, and hit
   Electron). Terminals stay dark in light mode so Claude's TUI stays legible.
 
 **Keyboard:** Ctrl/Cmd+K palette · Ctrl+Shift+F find in scrollback ·
-Ctrl+Shift+M maximize · Ctrl+Shift+←/→ cycle panes.
+Ctrl+Shift+M maximize · Ctrl+Shift+D dictate · Ctrl+Shift+←/→ cycle panes.
 
 ## How it works
 

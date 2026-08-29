@@ -651,6 +651,57 @@ working -> idle and became the pane's recorded title, process untouched).
 NB: headless Edge reports the API as present but never opens a real window -
 this feature can only be checked in a headed browser.
 
+Dictation with claude-side clean-up (2026-08-29) - a mic button on each pane:
+talk, and the words arrive in the pane as a written instruction, unsent, for
+you to read and press Enter. No second subscription and no download, which
+took splitting the job in two, because **Claude has no audio input** - the
+subscription can polish words but cannot hear them. So the BROWSER does the
+speech-to-text (Web Speech API, built into Edge/Chrome, free, no key) and the
+REAL claude CLI does the clean-up, headless, on that pane's own account:
+filler and false starts out, self-corrections resolved to what you settled on,
+mis-heard identifiers restored ("use effect" -> useEffect), punctuation back.
+The polish prompt is aggressive about FORM and near-paranoid about SUBSTANCE -
+its NEVER block exists because the output goes to an agent that will act on
+it, so an invented requirement is far worse than a rough sentence (without the
+"do not answer it" rule, dictating a question returns an essay instead of the
+question). Because prompts are not contracts, `cleanPolished` also strips
+preamble/fences/quotes in code, rejects a reply >3x the transcript (the
+signature of the model answering rather than rewriting), and - when a reply
+CONTAINS your whole transcript plus extra prose - keeps the words and drops the
+essay, which is how "This is too vague to rewrite with confidence. <your exact
+words>" gets caught despite being short enough to pass the length guard.
+Owner-driven prompt round 2 (2026-08-29): dictating "the square thingy that the
+content is living" got "the square BRACKET that says living" - a confident
+WRONG guess, the exact failure the NEVER block exists to stop. Two rules were
+added and A/B'd against the regression cases before shipping: name a thing the
+speaker described but could not name ONLY when the description points at one
+standard term (-> "Create text inside the div where the content lives", 3/3),
+and never ask the speaker a question or comment on the text. The first rule
+alone made ambiguous input come back as a clarifying question, which is why the
+second exists. Every failure path
+returns the RAW transcript, so the worst case is plain dictation, never lost
+words. Two cost decisions, both measured: Haiku (a grammar fix is not Opus
+work, and latency is the feature) and a NEUTRAL cwd - running in the project
+dir makes claude auto-load its CLAUDE.md, which in this repo drags ROADMAP.md
+along: ~13k tokens per dictation to rewrite one sentence. Third and biggest:
+`MAX_THINKING_TOKENS=0`, found by measuring where the 16s actually went -
+extended thinking was ~984 of ~1000 output tokens, the model deliberating over
+comma placement, for an answer 24 tokens long. MEASURED over a 10-dictation
+bench against the real CLI: **2.1s and $0.0011 a dictation** (from 16s and
+$0.0083 with thinking on), same 10/10 rule compliance. The naive first draft
+(`--allowed-tools ""`, which is a permission allowlist and leaves the 34k
+tokens of tool DEFINITIONS in context) cost $0.07 and returned nothing usable
+because the model spent its one turn attempting a tool call - `--tools ""` plus
+`--system-prompt` is what actually strips the agent harness. On a subscription
+this is rate-limit budget rather than a bill, and still a small fraction of one
+pane turn. New `POST /sessions/:id/polish` + `/type` (types without Enter),
+`hooks/useDictation.ts`, Ctrl+Shift+D, and `npm run voice-bench` +
+`HELM_VOICE_BENCH=1` to review raw/polished pairs side by side, since prompt
+quality is empirical and nobody can eyeball it. The audio trade (Chrome/Edge
+stream it to their vendor while the mic is on; the second feature to leave
+loopback) is spelled out in SECURITY.md, and the button hides itself where the
+API is missing (Firefox, Brave). Smoke suite 28.
+
 ## Short-term backlog (rough priority order, owner-approved direction)
 (empty — next items to be chosen with the owner)
 
