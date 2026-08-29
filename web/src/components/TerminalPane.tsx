@@ -9,7 +9,15 @@ import { api, wsUrl } from '../api';
 import { accountLabel } from '../accounts';
 import { Modal } from './Modal';
 import { toast } from './Toaster';
-import { IconGrip, IconMinimize, IconMinus, IconUserSwitch, IconX } from './Icons';
+import {
+  IconGrip,
+  IconMinimize,
+  IconMinus,
+  IconPopIn,
+  IconPopOut,
+  IconUserSwitch,
+  IconX,
+} from './Icons';
 import {
   AnimateIcon,
   IconChart,
@@ -40,6 +48,14 @@ interface Props {
   // below to actually skip unchanged panes instead of every prop looking new.
   onToggleMax: (id: string) => void;
   onMinimize: (id: string) => void; // pull this pane out of the grid into the tray
+  // Pop this pane into a floating always-on-top window (and back). The pane is
+  // re-mounted inside that window's document, so its terminal is rebuilt and
+  // the socket reattaches with a ring-buffer replay — the same path minimize/
+  // restore already takes. canPop is false where the browser has no Document
+  // Picture-in-Picture, and the button hides rather than failing on click.
+  isPopped: boolean;
+  canPop: boolean;
+  onTogglePop: (id: string) => void;
   onGripDragStart: (id: string) => void; // drag-to-reorder, handled by the grid
   onGripDragEnd: () => void;
   // Registers a "focus my terminal" handle with the parent (ref-map pattern):
@@ -109,6 +125,9 @@ function TerminalPaneImpl({
   isMaximized,
   onToggleMax,
   onMinimize,
+  isPopped,
+  canPop,
+  onTogglePop,
   onGripDragStart,
   onGripDragEnd,
   onRegisterFocus,
@@ -229,7 +248,10 @@ function TerminalPaneImpl({
       e.stopPropagation();
       void uploadFiles(files);
     };
-    document.addEventListener('paste', onDocPaste, true);
+    // holder.ownerDocument, not `document`: a popped-out pane lives in the
+    // floating window's document, where the main page's listener never fires.
+    const ownDoc = holder.ownerDocument;
+    ownDoc.addEventListener('paste', onDocPaste, true);
     // Pane shortcuts intercepted before the PTY sees them:
     // Ctrl+V paste · Ctrl+Shift+C copy · Ctrl+Shift+F find · Ctrl+Shift+M maximize
     term.attachCustomKeyEventHandler((e) => {
@@ -278,7 +300,7 @@ function TerminalPaneImpl({
       cancelAnimationFrame(raf);
       holder.removeEventListener('mouseup', onMouseUp);
       holder.removeEventListener('paste', onPaste, true);
-      document.removeEventListener('paste', onDocPaste, true);
+      ownDoc.removeEventListener('paste', onDocPaste, true);
       inputSub.dispose();
       term.dispose();
       termRef.current = null;
@@ -507,7 +529,7 @@ function TerminalPaneImpl({
   return (
     <div className="pane" style={{ borderTopColor: session.color }}>
       <div className="pane-header">
-        {!isMaximized && (
+        {!isMaximized && !isPopped && (
           <span
             className="pane-grip"
             draggable
@@ -601,7 +623,20 @@ function TerminalPaneImpl({
             <IconUserSwitch size={14} />
           </button>
         )}
-        {!isMaximized && (
+        {canPop && (
+          <button
+            className={`ibtn ${isPopped ? 'on' : ''}`}
+            onClick={() => onTogglePop(session.id)}
+            title={
+              isPopped
+                ? 'Put this pane back in the grid'
+                : 'Pop out into a floating window that stays on top of other apps'
+            }
+          >
+            {isPopped ? <IconPopIn size={14} /> : <IconPopOut size={14} />}
+          </button>
+        )}
+        {!isMaximized && !isPopped && (
           <AnimateIcon asChild>
             <button
               className="ibtn"
@@ -612,15 +647,17 @@ function TerminalPaneImpl({
             </button>
           </AnimateIcon>
         )}
-        <AnimateIcon asChild>
-          <button
-            className="ibtn"
-            onClick={() => onToggleMax(session.id)}
-            title={isMaximized ? 'Back to grid (Esc)' : 'Maximize this pane (Ctrl+Shift+M)'}
-          >
-            {isMaximized ? <IconMinimize size={14} /> : <IconMaximize size={14} />}
-          </button>
-        </AnimateIcon>
+        {!isPopped && (
+          <AnimateIcon asChild>
+            <button
+              className="ibtn"
+              onClick={() => onToggleMax(session.id)}
+              title={isMaximized ? 'Back to grid (Esc)' : 'Maximize this pane (Ctrl+Shift+M)'}
+            >
+              {isMaximized ? <IconMinimize size={14} /> : <IconMaximize size={14} />}
+            </button>
+          </AnimateIcon>
+        )}
         {conn === 'disconnected' && (
           <button className="btn btn-small" onClick={() => setConnectNonce((n) => n + 1)}>
             Reconnect

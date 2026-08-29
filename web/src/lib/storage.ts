@@ -18,6 +18,7 @@ const KEYS = {
   sidebarWidth: 'helm.sidebarWidth',
   theme: 'helm.theme',
   accent: 'helm.accent',
+  pipSize: 'helm.pipSize',
 } as const;
 
 // Sidebar width bounds (px): narrow enough to be a rail, wide enough for long
@@ -25,6 +26,14 @@ const KEYS = {
 export const SIDEBAR_MIN = 170;
 export const SIDEBAR_MAX = 460;
 export const SIDEBAR_DEFAULT = 248;
+
+// Popped-out (picture-in-picture) pane window size, in px. Only the SIZE is
+// remembered: the browser controls where the floating window lands, and the
+// window itself can't be reopened without a click, so which pane was popped is
+// deliberately not persisted.
+export const PIP_DEFAULT_SIZE = { w: 560, h: 420 };
+const PIP_MIN = 240;
+const PIP_MAX = 4000;
 
 // Appearance choices — must match the CSS preset selectors in styles.css.
 export type Theme = 'dark' | 'light';
@@ -111,6 +120,15 @@ export const storage = {
       return Number.isFinite(n) && n >= SIDEBAR_MIN && n <= SIDEBAR_MAX ? n : SIDEBAR_DEFAULT;
     },
     set: (px: number): void => setRaw(KEYS.sidebarWidth, String(Math.round(px))),
+  },
+  pipSize: {
+    get: (): { w: number; h: number } => {
+      const v = getJSON<{ w: number; h: number }>(KEYS.pipSize, PIP_DEFAULT_SIZE);
+      const ok = (n: unknown) => typeof n === 'number' && n >= PIP_MIN && n <= PIP_MAX;
+      return ok(v?.w) && ok(v?.h) ? { w: Math.round(v.w), h: Math.round(v.h) } : PIP_DEFAULT_SIZE;
+    },
+    set: (size: { w: number; h: number }): void =>
+      setJSON(KEYS.pipSize, { w: Math.round(size.w), h: Math.round(size.h) }),
   },
   // unknown/corrupt stored values fall back to the defaults (dark / amber)
   theme: {

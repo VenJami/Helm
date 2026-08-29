@@ -7,6 +7,13 @@ All notable changes to Helm are documented here. Format follows
 ## [Unreleased]
 
 ### Added
+- **Pop a pane out into a floating window** — a pane can leave the grid for its
+  own always-on-top window that stays visible over your editor and browser, so
+  you can watch an agent work while you use the project it is working on, and
+  type into it without switching windows. The button sits in the pane header;
+  closing the window (or clicking the button again) puts the pane back. One pane
+  at a time, and only in browsers that support it — the button hides itself
+  elsewhere.
 - **Start a project from the sidebar** — a play button on each project card runs
   its start command(s); stop takes them down again. The command is detected from
   the project's `package.json` the first time and saved on the workspace, and

@@ -662,6 +662,31 @@ html, body {
   cursor: pointer;
 }
 .tray-chip:hover { background: var(--raised); }
+/* the pane that's currently in the floating always-on-top window */
+.tray-chip-popped { border-style: dashed; }
+.tray-chip-popped .tray-chip-note {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+/* ------------------------------------------- popped-out (floating) pane */
+/* Body of the picture-in-picture window: the pane is the whole window, so it
+   drops the card chrome (border, radius, page padding) and fills it. */
+.pip-body {
+  margin: 0;
+  padding: 0;
+  height: 100vh;
+  overflow: hidden;
+  display: flex;
+  background: var(--bg);
+}
+.pip-body > .pane {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  border-top: 2px solid var(--border); /* keep the pane-color stripe */
+  border-radius: 0;
+}
 
 /* ------------------------------------------------------------------ pane */
 

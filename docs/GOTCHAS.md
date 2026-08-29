@@ -185,6 +185,31 @@
   TITLE - an app window's title is just the page title (`Helm`), with no
   "and N more pages - Microsoft Edge" suffix.
 
+## The floating (picture-in-picture) pane can only be tested headed
+Document Picture-in-Picture is how a pane leaves the grid for an always-on-top
+window (`web/src/hooks/usePipWindow.ts`). In **headless** Edge,
+`'documentPictureInPicture' in window` is TRUE and `requestWindow()` resolves —
+the app state even advances (the pane leaves the grid) — but no separate window
+or CDP target is ever created, so every assertion about the floating window
+fails while the feature is fine. Launch a headed browser for this one.
+
+Two related traps in the same area, both fixed but easy to reintroduce:
+- Anything bound to the page's `document`/`window` (a document-level paste
+  fallback, a Modal's Esc handler) is invisible to the floating window, which
+  is a *different document*. Bind to `el.ownerDocument` instead.
+- The floating document starts BLANK: no stylesheets, no `data-theme`/
+  `data-accent`. They are copied/mirrored on open, and the mirror is a
+  MutationObserver because the Appearance dialog can change them mid-float.
+
+When driving a REAL claude pane in a script of your own, note that the
+folder-trust dialog's default option is **"No, exit"** — a blind `` nudge into
+a fresh temp dir can quit claude with exit 1 (the pane then reads `exited (1)`
+and, because the TUI's alternate screen is discarded on exit, the replay shows
+the trust dialog again, which looks like it never got past it). `npm run e2e`
+handles this correctly; the cheap alternative for one-off scripts is to point
+the workspace at an ALREADY-TRUSTED directory so no dialog appears at all, and
+to send a `resize` on the attached socket before waiting for `activity`.
+
 ## Testing pattern that works
 `cd server && npm run e2e` now codifies this permanently
 (`server/test/e2e-real.mjs`): it drives a real `claude` pane through

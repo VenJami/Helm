@@ -622,6 +622,35 @@ call parsing the actual v0.2.0 release, and 10/10 CDP checks in a real browser
 (banner renders with version/commands/link, dismiss sticks across a reload, a
 newer version re-opens it).
 
+Pop-out pane / floating window (2026-08-29) - a pane can leave the grid for a
+real always-on-top OS window that sits over VS Code and the browser, so one
+agent stays watchable (and typeable) while you work in the project it is
+working on. A web page cannot do this by itself; the mechanism is **Document
+Picture-in-Picture** (`web/src/hooks/usePipWindow.ts`), which Chrome/Edge/Brave
+expose - the browsers start-helm.cmd already launches - and the pop-out button
+hides itself where it is missing. The pane is portalled into that window's
+document, which re-mounts it: the terminal is rebuilt there and the socket
+reattaches with a ring-buffer replay, i.e. the exact path minimize/restore
+already took, so no scrollback is lost and the claude process never notices.
+Browser-imposed limits, documented in the hook: ONE window per page (popping B
+returns A), it needs a click so it can never be restored on load (the popped id
+is deliberately not persisted - only the window SIZE is, `helm.pipSize`), and
+the window starts blank, so stylesheets are copied in and `data-theme`/
+`data-accent` are mirrored with a MutationObserver (the Appearance dialog can
+change them mid-float). The popped pane is excluded from the grid's column
+count and shows a dashed "floating" chip in the existing tray; it is looked up
+across ALL workspaces so switching project doesn't yank it. Two small
+correctness fixes fell out: the pane's document-level paste fallback and the
+Modal's Esc handler were bound to the main `document`/`window`, which the
+floating window never sees - both now use their own document. Verified 18/18 by
+CDP against an isolated 3-pane server (window opens, grid re-flows, terminal +
+WebGL rebuilt, replay on the wire, keystrokes and resize reach the PTY, theme
+mirrors, close returns the pane) and 10/10 against the REAL claude CLI
+(TUI rebuilt in the floating window, a prompt typed THERE drove
+working -> idle and became the pane's recorded title, process untouched).
+NB: headless Edge reports the API as present but never opens a real window -
+this feature can only be checked in a headed browser.
+
 ## Short-term backlog (rough priority order, owner-approved direction)
 (empty — next items to be chosen with the owner)
 
