@@ -93,6 +93,20 @@ export const api = {
     }
     return res.json() as Promise<{ ok: boolean; path: string }>;
   },
+  // Dictation: clean a raw speech transcript into a written instruction. Never
+  // rejects on a bad polish — the server answers with the raw text and
+  // `polished: false` rather than losing what you said.
+  polish: (id: string, text: string) =>
+    req<{ text: string; polished: boolean; cost: number | null; ms: number }>(
+      `/sessions/${id}/polish`,
+      { method: 'POST', body: JSON.stringify({ text }) },
+    ),
+  // Type into a pane's input without submitting — you press Enter.
+  typeText: (id: string, text: string) =>
+    req<{ ok: boolean }>(`/sessions/${id}/type`, {
+      method: 'POST',
+      body: JSON.stringify({ text }),
+    }),
   updateSession: (id: string, patch: { name?: string; color?: string }) =>
     req<SessionInfo>(`/sessions/${id}`, { method: 'PATCH', body: JSON.stringify(patch) }),
   getGlobalUsage: () => req<AccountUsage[]>('/usage'),

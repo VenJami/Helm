@@ -73,6 +73,8 @@ start-helm.cmd             # USE this when just using Helm (double-click it): fi
 cd server && npm start     # the server alone → http://127.0.0.1:7777
 cd server && npm run dev   # DEV only: --watch restarts on edits and KILLS live panes
 cd server && npm test      # fast smoke test (real server + keep-alive claude stand-in)
+cd server && npm run voice-bench  # review dictation raw/polished pairs side by side
+                           #   (record them first: run the server with HELM_VOICE_BENCH=1)
 cd server && npm run e2e   # real-claude end-to-end (spawn→hooks→usage→revive); needs
                            #   a logged-in claude, spends a few tokens, NOT in CI
 cd web && npm test         # vitest unit tests (accounts.ts usage math)

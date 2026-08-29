@@ -98,6 +98,16 @@ Browser (React + xterm.js grid) <--WS/REST--> Node server <--PTY--> claude.cmd
   Deleted with the session; orphan dirs swept at server start. Note: claude
   2.1.198 shows the path as plain text (no [Image #N] chip) but reads the
   file fine when the prompt is submitted.
+- `POST /api/sessions/:id/polish` — `{text}` (1–4000 chars): clean a raw
+  dictation transcript into a written instruction via headless `claude -p` on
+  the pane's account. Returns `{text, polished, cost, ms}` and **never fails
+  closed** — on a timeout, a refused model or a reply that fails the sanity
+  check it answers with the raw transcript and `polished:false`, because
+  dictation must not lose what you said. See CLAUDE_INTERNALS §7 for the flags
+  (Haiku, no tools, neutral cwd) and why each one is there.
+- `POST /api/sessions/:id/type` — `{text}` (1–4000 chars): write into a running
+  pane's input WITHOUT Enter (the dictation path's last step, so you read the
+  text before the agent acts on it). Dev panes refuse it, like broadcast.
 - `GET/PATCH /api/settings` — server toggles, currently `{autoRevive}`.
 - `GET /api/logs?after=<seq>` — in-memory server event log for the UI's 🐞
   drawer; `startedAt`/`pid` identify the process (stale-server check).

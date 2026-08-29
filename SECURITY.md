@@ -88,6 +88,32 @@ exists. What that means concretely:
 - **`HELM_NO_UPDATE_CHECK=1` disables it completely** — the server then makes no
   outbound request at all and reports `disabled` on `GET /api/update`.
 
+## Dictation (where your voice goes)
+
+The mic button on a pane uses the **browser's** built-in speech recognition
+(Web Speech API). Claude has no audio input, so the subscription can clean the
+words up but cannot hear them, and this is the only engine that costs nothing
+and installs nothing. Being straight about the trade:
+
+- **While the mic is on, Chrome and Edge stream that audio to their vendor's
+  speech service** (Google / Microsoft) to turn it into text. After the public
+  share links, this is the second thing in Helm that leaves loopback.
+- It runs **only between your click and your stop**. Helm never opens the mic on
+  its own, and there is no always-listening or wake-word mode.
+- **Helm itself neither records, stores, nor forwards audio.** The server only
+  ever sees the finished text, and only when you stop dictating.
+- The resulting text goes to the real `claude` CLI for clean-up, on that pane's
+  own account — the same place your typed prompts already go.
+- **Nothing is written to disk** unless you deliberately set
+  `HELM_VOICE_BENCH=1`, which logs raw/polished pairs to `voice-bench.jsonl` so
+  a prompt-quality run can be reviewed. It is off by default; delete the log
+  with `npm run voice-bench -- --clear`.
+- Where the browser has no speech API (Firefox, and Brave, which ships Chromium
+  without the speech keys) the button does not appear and nothing is sent.
+
+If you would rather no audio ever left the machine, don't use the button — every
+other part of Helm works exactly as before without it.
+
 ## What is explicitly out of scope
 
 - **Multi-user / remote access.** Helm assumes one trusted user on the local
