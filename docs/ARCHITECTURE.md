@@ -24,7 +24,10 @@ Browser (React + xterm.js grid) <--WS/REST--> Node server <--PTY--> claude.cmd
 - `web/src/hooks/` — `useSessionsPoll` (3 s session+profile poll, stable
   references, desktop notifications) · `useWorkspaceStatus` (git/dev-server
   dots + share-link state) · `useTheme` (dark/light + accent → `data-*` attrs) ·
-  `useGridWeights` (per-workspace pane sizing).
+  `useGridWeights` (per-workspace pane sizing) · `usePipWindow` (floating
+  always-on-top pane) · `useDictation` (browser Web Speech API for the mic
+  button; reports `supported:false` where the API is missing so the caller can
+  hide the button, and restarts the recogniser across pauses).
 - `web/src/lib/storage.ts` — ALL localStorage behind typed, validated
   accessors (corrupt values fall back; per-workspace keys pruned on removal).
 - `web/src/components/` — `TerminalPane.tsx` (xterm +fit/webgl, WS

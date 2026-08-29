@@ -62,8 +62,9 @@ helm/
 │   └── hook-post.mjs       # runs inside panes; relays Claude Code hook events
 └── web/                    # React frontend → built to web/dist (server serves it)
     └── src/                # App.tsx (composition) · hooks/ (data polling, theme,
-                            #   grid weights) · lib/storage.ts (typed localStorage)
-                            #   · components/ (panes, sidebar, modals/…) · api.ts · types.ts
+                            #   grid weights, pop-out, dictation) · lib/storage.ts
+                            #   (typed localStorage) · components/ (panes, sidebar,
+                            #   modals/…) · api.ts · types.ts
 ```
 
 ## Development Commands

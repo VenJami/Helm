@@ -96,6 +96,14 @@ Open http://127.0.0.1:7777, add a project folder as a workspace, and hit
 - **Broadcast & attachments** — send one instruction to many panes ("commit
   your work, then summarize"); paste or drop images/files into a pane and
   Claude reads them from disk, like native terminal drag-drop.
+- **Talk to a pane** — a mic button (or Ctrl+Shift+D) turns speech into a
+  cleaned-up prompt: filler and false starts removed, self-corrections resolved
+  to what you settled on, mis-heard terms like "use effect" restored to
+  `useEffect`. It lands in the pane **unsent**, so you read it before the agent
+  acts. Your browser does the listening and your existing Claude account does
+  the clean-up — no extra subscription, nothing to install, about a tenth of a
+  cent per dictation. If the clean-up fails you still get exactly what you
+  said. ([Where does my voice go?](#faq))
 - **Workspace ops** — the sidebar shows each project's git branch, dirty
   marker, ahead/behind counts, and whether its dev server is up on its port.
 - **Start your project from the sidebar** — a play button on each project runs
@@ -160,10 +168,22 @@ Anthropic API and has no key to leak.
 
 **Is my code or conversation sent anywhere?**
 No. One local Node server on loopback; state stays in `%LOCALAPPDATA%\Helm`.
-No cloud, no telemetry. Helm makes exactly one outbound request on its own: an
+No telemetry, ever. Helm makes exactly one outbound request on its own: an
 anonymous check of this repo's latest GitHub release, so it can tell you when
 an update is out. It sends nothing about you, and `HELM_NO_UPDATE_CHECK=1`
-turns it off.
+turns it off. Two features do leave your machine, both only when you ask them
+to: a public share link (which is the whole point of it) and the mic — see the
+next answer and [SECURITY.md](SECURITY.md).
+
+**Where does my voice go when I use the mic?**
+Speech-to-text is done by your **browser**, not by Helm and not by Claude
+(Claude has no audio input). While the mic is on, Chrome and Edge stream that
+audio to their own speech service to turn it into text. Helm never records,
+stores or forwards audio — the server only ever sees the finished text, and
+only when you stop dictating. Nothing is written to disk unless you explicitly
+set `HELM_VOICE_BENCH=1`. The button only appears where the browser supports
+the API, and if you'd rather no audio ever left the machine, don't press it —
+everything else works exactly the same.
 
 **The browser crashed / I closed the tab mid-task. Did I lose the session?**
 No — sessions live on the server, and the pane repaints from a replay buffer
