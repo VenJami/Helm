@@ -10,6 +10,7 @@ import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn, execFileSync } from 'node:child_process';
 import fs from 'node:fs';
+import http from 'node:http';
 import os from 'node:os';
 import net from 'node:net';
 import path from 'node:path';
@@ -29,6 +30,10 @@ const wrapper = path.join(testDir, IS_WIN ? 'fake-claude.cmd' : 'fake-claude.sh'
 const cfWrapper = path.join(testDir, IS_WIN ? 'fake-cloudflared.cmd' : 'fake-cloudflared.sh');
 
 let child;
+// Stand-in for the GitHub releases API, so the update check is driven
+// end-to-end without a network (HELM_UPDATE_URL points the server at it).
+let ghStub;
+let ghUrl = '';
 let PORT = 0;
 let TOKEN = '';
 let HOOK_TOKEN = '';
@@ -83,6 +88,7 @@ async function tryBoot(port) {
     HELM_CLAUDE_CMD: wrapper,
     HELM_CLOUDFLARED_CMD: cfWrapper,
     HELM_USAGE_TTL_MS: '0', // usage tests append + immediately re-poll
+    HELM_UPDATE_URL: ghUrl, // fake "latest release" endpoint (see ghStub)
   };
   delete env.CLAUDE_CONFIG_DIR; // don't inherit a real default account
   child = spawn(process.execPath, ['index.mjs'], {
@@ -122,6 +128,19 @@ async function tryBoot(port) {
 
 before(async () => {
   if (!IS_WIN) fs.chmodSync(wrapper, 0o755);
+  ghStub = http.createServer((_req, res) => {
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(
+      JSON.stringify({
+        tag_name: 'v9.9.9',
+        html_url: 'https://example.invalid/releases/v9.9.9',
+        name: 'Test release',
+        published_at: '2026-08-28T00:00:00.000Z',
+      }),
+    );
+  });
+  await new Promise((r) => ghStub.listen(0, '127.0.0.1', r));
+  ghUrl = `http://127.0.0.1:${ghStub.address().port}/releases/latest`;
   for (let i = 0; i < 6; i++) {
     if (await tryBoot(await freePort())) return; // retry only guards the tiny bind race
     await sleep(100);
@@ -138,6 +157,7 @@ after(async () => {
     /* server may already be gone */
   }
   child?.kill();
+  ghStub?.close();
   await new Promise((r) => setTimeout(r, 300));
   fs.rmSync(tmp, { recursive: true, force: true });
 });
@@ -168,6 +188,37 @@ test('diagnostics report claude health (drift alarm)', async () => {
   assert.equal(d.claude.version, '2.1.198');
   assert.ok(Array.isArray(d.warnings));
   assert.equal(d.warnings.filter((w) => w.key.startsWith('claude-')).length, 0);
+});
+
+test('update check reports a newer release (cached server-side)', async () => {
+  let info;
+  for (let i = 0; i < 50; i++) {
+    info = await (await authed('/update')).json();
+    if (info.checkedAt) break; // the boot check has returned
+    await sleep(100);
+  }
+  assert.ok(info.checkedAt, 'the update check should run at boot');
+  assert.equal(info.error, null);
+  assert.equal(info.disabled, false);
+  assert.equal(info.available, true);
+  assert.equal(info.latest, '9.9.9'); // the `v` prefix is stripped
+  assert.equal(info.url, 'https://example.invalid/releases/v9.9.9');
+  assert.equal(
+    info.current,
+    JSON.parse(fs.readFileSync(path.join(serverDir, 'package.json'))).version,
+  );
+});
+
+test('update check only flags a strictly newer version', async () => {
+  const { isNewer } = await import('../src/update.mjs');
+  assert.equal(isNewer('v0.3.0', '0.2.0'), true);
+  assert.equal(isNewer('0.2.1', '0.2.0'), true);
+  assert.equal(isNewer('1.0.0', '0.9.9'), true);
+  assert.equal(isNewer('v0.2.0', '0.2.0'), false); // same version: silent
+  assert.equal(isNewer('0.1.0', '0.2.0'), false); // older release: silent
+  assert.equal(isNewer('v0.10.0', '0.9.0'), true); // numeric, not lexical
+  assert.equal(isNewer('nightly', '0.2.0'), false); // unparseable: never claim one
+  assert.equal(isNewer('', '0.2.0'), false);
 });
 
 test('GET /health is unauthenticated and reports liveness', async () => {

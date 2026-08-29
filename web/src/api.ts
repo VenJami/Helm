@@ -10,6 +10,7 @@ import type {
   SessionInfo,
   TunnelInfo,
   TunnelsResponse,
+  UpdateInfo,
   UsageInfo,
   Workspace,
 } from './types';
@@ -97,6 +98,7 @@ export const api = {
   getGlobalUsage: () => req<AccountUsage[]>('/usage'),
   getLogs: (after: number) => req<LogsResponse>(`/logs?after=${after}`),
   getDiagnostics: () => req<Diagnostics>('/diagnostics'),
+  getUpdate: () => req<UpdateInfo>('/update'),
   broadcast: (text: string, sessionIds: string[]) =>
     req<{ ok: boolean; results: Record<string, 'sent' | 'skipped'> }>('/broadcast', {
       method: 'POST',

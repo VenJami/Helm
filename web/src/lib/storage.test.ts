@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { storage } from './storage';
+import { PIP_DEFAULT_SIZE, storage } from './storage';
 
 // Minimal in-memory localStorage (vitest runs in node — no DOM). Matches the
 // Storage surface storage.ts touches: getItem/setItem/removeItem/length/key.
@@ -134,5 +134,25 @@ describe('gridWeights validate per-entry', () => {
     expect(storage.gridWeights.get('ws1')).toEqual({ r2: [1.5, 0.5] }); // bad entries dropped
     localStorage.setItem('helm.gridweights.ws1', '{broken');
     expect(storage.gridWeights.get('ws1')).toEqual({});
+  });
+});
+
+describe('pipSize (floating pane window)', () => {
+  it('defaults, round-trips, rounds, and rejects out-of-range/corrupt', () => {
+    expect(storage.pipSize.get()).toEqual(PIP_DEFAULT_SIZE);
+
+    storage.pipSize.set({ w: 700.4, h: 500.6 });
+    expect(storage.pipSize.get()).toEqual({ w: 700, h: 501 });
+
+    // a 40px-wide window would be unusable; a 9000px one isn't a real screen
+    localStorage.setItem('helm.pipSize', JSON.stringify({ w: 40, h: 500 }));
+    expect(storage.pipSize.get()).toEqual(PIP_DEFAULT_SIZE);
+    localStorage.setItem('helm.pipSize', JSON.stringify({ w: 9000, h: 500 }));
+    expect(storage.pipSize.get()).toEqual(PIP_DEFAULT_SIZE);
+
+    localStorage.setItem('helm.pipSize', JSON.stringify({ w: 'wide', h: 500 }));
+    expect(storage.pipSize.get()).toEqual(PIP_DEFAULT_SIZE);
+    localStorage.setItem('helm.pipSize', '{broken');
+    expect(storage.pipSize.get()).toEqual(PIP_DEFAULT_SIZE);
   });
 });
