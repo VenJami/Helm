@@ -9,7 +9,17 @@ import { api, wsUrl } from '../api';
 import { accountLabel } from '../accounts';
 import { Modal } from './Modal';
 import { toast } from './Toaster';
-import { IconGrip, IconMinimize, IconMinus, IconUserSwitch, IconX } from './Icons';
+import {
+  IconGrip,
+  IconMic,
+  IconMinimize,
+  IconMinus,
+  IconPopIn,
+  IconPopOut,
+  IconUserSwitch,
+  IconX,
+} from './Icons';
+import { useDictation } from '../hooks/useDictation';
 import {
   AnimateIcon,
   IconChart,
@@ -40,6 +50,14 @@ interface Props {
   // below to actually skip unchanged panes instead of every prop looking new.
   onToggleMax: (id: string) => void;
   onMinimize: (id: string) => void; // pull this pane out of the grid into the tray
+  // Pop this pane into a floating always-on-top window (and back). The pane is
+  // re-mounted inside that window's document, so its terminal is rebuilt and
+  // the socket reattaches with a ring-buffer replay — the same path minimize/
+  // restore already takes. canPop is false where the browser has no Document
+  // Picture-in-Picture, and the button hides rather than failing on click.
+  isPopped: boolean;
+  canPop: boolean;
+  onTogglePop: (id: string) => void;
   onGripDragStart: (id: string) => void; // drag-to-reorder, handled by the grid
   onGripDragEnd: () => void;
   // Registers a "focus my terminal" handle with the parent (ref-map pattern):
@@ -109,6 +127,9 @@ function TerminalPaneImpl({
   isMaximized,
   onToggleMax,
   onMinimize,
+  isPopped,
+  canPop,
+  onTogglePop,
   onGripDragStart,
   onGripDragEnd,
   onRegisterFocus,
@@ -166,6 +187,48 @@ function TerminalPaneImpl({
     }
     termRef.current?.focus(); // keep typing the prompt around the path
   };
+
+  // ------------------------------------------------------------- dictation
+  // Talk instead of type: the browser hears it, claude tidies it, and the
+  // result is TYPED INTO the pane unsent so you read it before the agent acts.
+  // A polish failure is not a dictation failure — the server hands back the raw
+  // transcript, so the worst case is plain speech-to-text.
+  const [polishing, setPolishing] = useState(false);
+  const dictation = useDictation((message) => toast.error(message));
+
+  const finishDictation = async () => {
+    const said = dictation.stop();
+    if (!said) return;
+    setPolishing(true);
+    let text = said;
+    try {
+      const res = await api.polish(session.id, said);
+      text = res.text;
+      if (!res.polished) toast.info('Used what you said — the clean-up step failed');
+    } catch {
+      toast.info('Used what you said — the clean-up step failed');
+    }
+    try {
+      await api.typeText(session.id, text);
+      termRef.current?.focus(); // ready to edit or press Enter
+    } catch (err) {
+      toast.error(`Could not type into the pane: ${(err as Error).message}`);
+    } finally {
+      setPolishing(false);
+    }
+  };
+
+  const toggleDictation = () => {
+    if (polishing) return;
+    if (dictation.listening) void finishDictation();
+    else dictation.start();
+  };
+  // The terminal's key handler is built once per session, so it reads the
+  // shortcut through a ref rather than closing over a stale toggle.
+  const toggleDictationRef = useRef(toggleDictation);
+  toggleDictationRef.current = toggleDictation;
+  const dictationSupportedRef = useRef(dictation.supported);
+  dictationSupportedRef.current = dictation.supported;
 
   // Terminal lives for the lifetime of the pane; sockets may come and go.
   useEffect(() => {
@@ -229,7 +292,10 @@ function TerminalPaneImpl({
       e.stopPropagation();
       void uploadFiles(files);
     };
-    document.addEventListener('paste', onDocPaste, true);
+    // holder.ownerDocument, not `document`: a popped-out pane lives in the
+    // floating window's document, where the main page's listener never fires.
+    const ownDoc = holder.ownerDocument;
+    ownDoc.addEventListener('paste', onDocPaste, true);
     // Pane shortcuts intercepted before the PTY sees them:
     // Ctrl+V paste · Ctrl+Shift+C copy · Ctrl+Shift+F find · Ctrl+Shift+M maximize
     term.attachCustomKeyEventHandler((e) => {
@@ -251,6 +317,13 @@ function TerminalPaneImpl({
       }
       if (e.code === 'KeyM') {
         onToggleMaxRef.current(session.id);
+        return false;
+      }
+      if (e.code === 'KeyD' && dictationSupportedRef.current) {
+        // Explicit preventDefault here: Ctrl+Shift+D is "bookmark all tabs" in
+        // a normal Chrome/Edge tab, and dictation must not open that dialog.
+        e.preventDefault();
+        toggleDictationRef.current();
         return false;
       }
       return true;
@@ -278,7 +351,7 @@ function TerminalPaneImpl({
       cancelAnimationFrame(raf);
       holder.removeEventListener('mouseup', onMouseUp);
       holder.removeEventListener('paste', onPaste, true);
-      document.removeEventListener('paste', onDocPaste, true);
+      ownDoc.removeEventListener('paste', onDocPaste, true);
       inputSub.dispose();
       term.dispose();
       termRef.current = null;
@@ -507,7 +580,7 @@ function TerminalPaneImpl({
   return (
     <div className="pane" style={{ borderTopColor: session.color }}>
       <div className="pane-header">
-        {!isMaximized && (
+        {!isMaximized && !isPopped && (
           <span
             className="pane-grip"
             draggable
@@ -560,6 +633,22 @@ function TerminalPaneImpl({
         <span className="pane-title" title={session.workspace}>
           {label}
         </span>
+        {!isDev && dictation.supported && (
+          <button
+            className={`ibtn${dictation.listening ? ' mic-live' : ''}`}
+            disabled={conn !== 'live' || polishing}
+            onClick={toggleDictation}
+            title={
+              polishing
+                ? 'Cleaning up what you said…'
+                : dictation.listening
+                  ? 'Stop dictating (the text lands in the pane unsent)'
+                  : 'Dictate a prompt (Ctrl+Shift+D)'
+            }
+          >
+            <IconMic size={14} />
+          </button>
+        )}
         {!isDev && (
           <AnimateIcon asChild>
             <button
@@ -601,7 +690,20 @@ function TerminalPaneImpl({
             <IconUserSwitch size={14} />
           </button>
         )}
-        {!isMaximized && (
+        {canPop && (
+          <button
+            className={`ibtn ${isPopped ? 'on' : ''}`}
+            onClick={() => onTogglePop(session.id)}
+            title={
+              isPopped
+                ? 'Put this pane back in the grid'
+                : 'Pop out into a floating window that stays on top of other apps'
+            }
+          >
+            {isPopped ? <IconPopIn size={14} /> : <IconPopOut size={14} />}
+          </button>
+        )}
+        {!isMaximized && !isPopped && (
           <AnimateIcon asChild>
             <button
               className="ibtn"
@@ -612,15 +714,17 @@ function TerminalPaneImpl({
             </button>
           </AnimateIcon>
         )}
-        <AnimateIcon asChild>
-          <button
-            className="ibtn"
-            onClick={() => onToggleMax(session.id)}
-            title={isMaximized ? 'Back to grid (Esc)' : 'Maximize this pane (Ctrl+Shift+M)'}
-          >
-            {isMaximized ? <IconMinimize size={14} /> : <IconMaximize size={14} />}
-          </button>
-        </AnimateIcon>
+        {!isPopped && (
+          <AnimateIcon asChild>
+            <button
+              className="ibtn"
+              onClick={() => onToggleMax(session.id)}
+              title={isMaximized ? 'Back to grid (Esc)' : 'Maximize this pane (Ctrl+Shift+M)'}
+            >
+              {isMaximized ? <IconMinimize size={14} /> : <IconMaximize size={14} />}
+            </button>
+          </AnimateIcon>
+        )}
         {conn === 'disconnected' && (
           <button className="btn btn-small" onClick={() => setConnectNonce((n) => n + 1)}>
             Reconnect
@@ -684,6 +788,16 @@ function TerminalPaneImpl({
       >
         <div className="pane-term" ref={holderRef} />
         {dropActive && <div className="drop-overlay">Drop to attach</div>}
+        {(dictation.listening || polishing) && (
+          <div className="dictation-strip">
+            <span className={`dictation-dot${polishing ? ' thinking' : ''}`} />
+            <span className="dictation-text">
+              {polishing
+                ? 'Cleaning that up…'
+                : dictation.transcript || 'Listening — click the mic again when you finish'}
+            </span>
+          </div>
+        )}
         {searchOpen && (
           <div className="search-bar">
             <input

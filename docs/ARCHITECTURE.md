@@ -12,7 +12,8 @@ Browser (React + xterm.js grid) <--WS/REST--> Node server <--PTY--> claude.cmd
   `claude.mjs` (ALL claude-internals: transcript parsing, pricing, drift alarm
   — see docs/CLAUDE_INTERNALS.md) · `tunnel.mjs` (public share links via
   cloudflared quick tunnels — read its header comment before touching it, it
-  is the one place Helm leaves loopback).
+  is the one place Helm leaves loopback) · `update.mjs` (is a newer Helm
+  released? one anonymous GitHub call, off with `HELM_NO_UPDATE_CHECK=1`).
   Sessions map (id → {pty, ring buffer, sockets, name, color, activity,
   claudeSessionId, transcriptPath…}), REST under `/api`, WS attach, hook
   endpoint, usage parsing, persistence.
@@ -70,13 +71,21 @@ Browser (React + xterm.js grid) <--WS/REST--> Node server <--PTY--> claude.cmd
 - `GET /api/diagnostics` — claude-CLI health (boot-time `--version` vs the
   tested floor) + accumulated drift warnings; drives the UI's top banner
   (docs/CLAUDE_INTERNALS.md).
+- `GET /api/update` → `{current, latest, available, url, name, publishedAt,
+  checkedAt, disabled, error}` — latest published GitHub RELEASE vs this
+  checkout's package version, checked at boot and every 2 h and cached
+  server-side (one shared answer for every tab, kind to the anonymous API's
+  60-requests/hour limit). Drives the update banner, which renders only when
+  `available` is true; failures stay silent (offline is normal).
 - `GET /health` — **unauthenticated** liveness (loopback-only, no CORS): `{ok,
   pid, startedAt, uptimeSec, claude:{version,ok}, sessions:{total,running,
   waiting,exited,dead}}`. For the stale-server-on-7777 check without the token.
 - Env knobs: `HELM_LOG_FILE` (append the debug log to a file — survives
   restarts), `HELM_USAGE_TTL_MS` (usage roll-up cache TTL, default 15 000),
   `HELM_DATA_DIR` (override the state dir; used by the e2e), `HELM_DEBUG_HOOKS`
-  (dump raw hook payloads). Log entries carry a coarse `level` (`error` for
+  (dump raw hook payloads), `HELM_NO_UPDATE_CHECK=1` (never contact GitHub),
+  `HELM_REPO` / `HELM_UPDATE_URL` (point the update check elsewhere — a fork,
+  or the smoke test's stub). Log entries carry a coarse `level` (`error` for
   error/drift tags, else `info`). On SIGINT/SIGTERM the server persists sessions
   and stops panes (no orphaned claude children).
 - `POST /api/broadcast {text, sessionIds[]}` — type one instruction into
@@ -89,6 +98,16 @@ Browser (React + xterm.js grid) <--WS/REST--> Node server <--PTY--> claude.cmd
   Deleted with the session; orphan dirs swept at server start. Note: claude
   2.1.198 shows the path as plain text (no [Image #N] chip) but reads the
   file fine when the prompt is submitted.
+- `POST /api/sessions/:id/polish` — `{text}` (1–4000 chars): clean a raw
+  dictation transcript into a written instruction via headless `claude -p` on
+  the pane's account. Returns `{text, polished, cost, ms}` and **never fails
+  closed** — on a timeout, a refused model or a reply that fails the sanity
+  check it answers with the raw transcript and `polished:false`, because
+  dictation must not lose what you said. See CLAUDE_INTERNALS §7 for the flags
+  (Haiku, no tools, neutral cwd) and why each one is there.
+- `POST /api/sessions/:id/type` — `{text}` (1–4000 chars): write into a running
+  pane's input WITHOUT Enter (the dictation path's last step, so you read the
+  text before the agent acts on it). Dev panes refuse it, like broadcast.
 - `GET/PATCH /api/settings` — server toggles, currently `{autoRevive}`.
 - `GET /api/logs?after=<seq>` — in-memory server event log for the UI's 🐞
   drawer; `startedAt`/`pid` identify the process (stale-server check).

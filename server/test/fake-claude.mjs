@@ -20,15 +20,26 @@ if (process.argv.includes('-p')) {
   process.stdin.on('data', (d) => (prompt += d));
   process.stdin.on('end', () => {
     const sawPrompt = /JSON array/i.test(prompt); // proves stdin carried the prompt
+    // The dictation-polish call. Answers in the messiest shape a real model
+    // plausibly returns — preamble, then the text in quotes — so the smoke
+    // test drives the sanitizer for real instead of a pre-cleaned string.
+    // "ramble" in the transcript triggers an over-long reply, the signature of
+    // a model answering the request instead of rewriting it.
+    const dictation = /<dictation>\n([\s\S]*)\n<\/dictation>/.exec(prompt);
+    const result = dictation
+      ? /ramble/i.test(dictation[1])
+        ? `Here's the cleaned version: "${'and then it kept going. '.repeat(40)}"`
+        : `Here's the cleaned version: "${dictation[1].replace(/\bum\b,?\s*/gi, '').trim()}"`
+      : sawPrompt
+        ? '["cd api && npm start", "cd web && npm run watch"]'
+        : '[] (no prompt arrived on stdin)';
     process.stdout.write(
       JSON.stringify({
         type: 'result',
         subtype: 'success',
         is_error: false,
         total_cost_usd: 0.0123,
-        result: sawPrompt
-          ? '["cd api && npm start", "cd web && npm run watch"]'
-          : '[] (no prompt arrived on stdin)',
+        result,
       }) + '\n',
     );
     process.exit(0);

@@ -343,13 +343,16 @@ export function accountEmail(configDir) {
 }
 
 // -------------------------------------------- headless `claude -p` answers
-// Helm asks claude how to start a project (workspace ▶ with nothing
-// configured) via `claude -p --output-format json`. The envelope is claude's,
-// so a shape change here is DRIFT, not a caller bug — flagged as such so the
-// UI banner shows it instead of the feature failing silently. Envelope fields
+// Helm makes two headless calls: "how do I start this project" (workspace ▶
+// with nothing configured) and "clean up this dictation" (the mic button).
+// Both use `claude -p --output-format json`, and the envelope is claude's, so
+// a shape change here is DRIFT, not a caller bug — flagged as such so the UI
+// banner shows it instead of the feature failing silently. Envelope fields
 // used (verified on 2.1.246): `result` (the model's text) and
-// `total_cost_usd`. Returns {commands, cost} or null when unreadable.
-export function parseStartSuggestion(stdout, label = '') {
+// `total_cost_usd`. Returns {text, cost} or null when unreadable. `key` names
+// the caller for the drift key (one dismissible warning per call site, not per
+// workspace); `label` only decorates the message.
+export function parseClaudeEnvelope(stdout, key, label = '') {
   let envelope;
   try {
     envelope = JSON.parse(stdout);
@@ -367,20 +370,27 @@ export function parseStartSuggestion(stdout, label = '') {
     }
     if (!envelope) {
       noteDrift(
-        'suggest-nonjson',
-        `claude -p returned non-JSON output (suggest-start${label ? ' ' + label : ''})`,
+        `${key}-nonjson`,
+        `claude -p returned non-JSON output (${key}${label ? ' ' + label : ''})`,
       );
       return null;
     }
   }
   const text = typeof envelope?.result === 'string' ? envelope.result : null;
   if (text === null) {
-    noteDrift(
-      'suggest-noresult',
-      "claude -p JSON envelope has no string 'result' field (suggest-start)",
-    );
+    noteDrift(`${key}-noresult`, `claude -p JSON envelope has no string 'result' field (${key})`);
     return null;
   }
+  return {
+    text,
+    cost: typeof envelope?.total_cost_usd === 'number' ? envelope.total_cost_usd : null,
+  };
+}
+
+export function parseStartSuggestion(stdout, label = '') {
+  const envelope = parseClaudeEnvelope(stdout, 'suggest', label);
+  if (!envelope) return null;
+  const { text } = envelope;
   // Models like to wrap JSON in prose or a code fence — take the first array.
   const match = /\[[\s\S]*?\]/.exec(text);
   let commands = [];
@@ -401,6 +411,44 @@ export function parseStartSuggestion(stdout, label = '') {
   }
   return {
     commands: commands.map((c) => c.trim()).filter(Boolean),
-    cost: typeof envelope?.total_cost_usd === 'number' ? envelope.total_cost_usd : null,
+    cost: envelope.cost,
   };
+}
+
+// ------------------------------------------------------ dictation clean-up
+// Trim a polish reply back to bare text, ready to type into a pane. Prompts
+// are not contracts: a model may still open with "Here's the cleaned version:",
+// wrap the answer in quotes, or fence it, and none of that should reach the
+// terminal. Returns null when the reply can't be trusted — the caller then
+// falls back to the raw transcript, because the words you actually said beat
+// anything invented.
+const POLISH_PREAMBLE =
+  /^(?:here(?:'s| is)[^\n:]{0,60}|(?:rewritten|cleaned|polished)[^\n:]{0,40}):\s*/i;
+
+export function cleanPolished(text, transcript) {
+  if (typeof text !== 'string') return null;
+  let out = text.trim();
+  const fence = /^```[a-z]*\s*\n([\s\S]*?)\n?```$/i.exec(out);
+  if (fence) out = fence[1].trim();
+  out = out.replace(POLISH_PREAMBLE, '').trim();
+  // Quotes wrapped around the WHOLE answer are the model's, not the speaker's
+  // — but only strip them when the transcript wasn't itself a quote.
+  const quoted = /^(["'“‘])([\s\S]*)(["'”’])$/.exec(out);
+  if (quoted && !/^["'“‘]/.test(transcript.trim())) out = quoted[2].trim();
+  if (!out) return null;
+  // A reply that CONTAINS the whole transcript plus extra prose is the model
+  // commentating on the text instead of rewriting it — seen in the wild as
+  // "This is too vague to rewrite with confidence. <your exact words>". Keep
+  // the words, drop the essay. Too short to survive the length guard below,
+  // which is why this check exists separately.
+  const flat = (s) => s.replace(/\s+/g, ' ').trim().toLowerCase();
+  const said = flat(transcript);
+  if (said.length > 12 && flat(out).includes(said) && flat(out).length > said.length + 8) {
+    return transcript.trim();
+  }
+  // A reply far longer than what was said is the signature of the model
+  // ANSWERING the request instead of rewriting it. The floor keeps a very
+  // short dictation ("fix the login bug") from tripping the ratio.
+  if (out.length > Math.max(240, transcript.trim().length * 3)) return null;
+  return out;
 }

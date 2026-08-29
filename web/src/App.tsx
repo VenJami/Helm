@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { api, ApiError } from './api';
 import { storage } from './lib/storage';
 import { useSessionsPoll } from './hooks/useSessionsPoll';
 import { useWorkspaceStatus } from './hooks/useWorkspaceStatus';
 import { useTheme } from './hooks/useTheme';
 import { useGridWeights } from './hooks/useGridWeights';
+import { pipSupported, usePipWindow } from './hooks/usePipWindow';
 import type { LogEntry, SessionInfo, Workspace } from './types';
 import { Sidebar } from './components/Sidebar';
 import { TerminalPane } from './components/TerminalPane';
@@ -12,6 +14,7 @@ import { ProfileSelect } from './components/ProfileSelect';
 import { TargetCursor } from './components/TargetCursor';
 import { Toaster, toast } from './components/Toaster';
 import { DriftBanner } from './components/DriftBanner';
+import { UpdateBanner } from './components/UpdateBanner';
 import { CommandPalette } from './components/CommandPalette';
 import { GridResizers } from './components/GridResizers';
 import { NewProfileModal } from './components/modals/NewProfileModal';
@@ -30,6 +33,7 @@ import {
   IconPalette,
   IconPanelLeftOpen,
   IconPlus,
+  IconPopOut,
 } from './components/Icons';
 import {
   AnimateIcon,
@@ -107,6 +111,12 @@ export function App() {
   // pruned against the live session list once it loads (stale ids dropped).
   const [maximizedId, setMaximizedId] = useState<string | null>(() => storage.maximized.get());
   const [minimizedIds, setMinimizedIds] = useState<Set<string>>(() => storage.minimized.get());
+  // Pane popped out into a floating always-on-top window. NOT persisted: the
+  // browser only opens such a window from a user gesture, so a remembered id
+  // would restore a pane that's nowhere on screen.
+  const [poppedId, setPoppedId] = useState<string | null>(null);
+  const { pipWindow, open: openPip, close: closePip } = usePipWindow();
+  const canPop = useMemo(() => pipSupported(), []);
   useEffect(() => {
     storage.minimized.set(minimizedIds);
   }, [minimizedIds]);
@@ -330,12 +340,12 @@ export function App() {
 
   // Panes minimized to the tray are excluded from the grid's column count.
   const minimizedPanes = useMemo(
-    () => panes.filter((p) => minimizedIds.has(p.id)),
-    [panes, minimizedIds],
+    () => panes.filter((p) => minimizedIds.has(p.id) && p.id !== poppedId),
+    [panes, minimizedIds, poppedId],
   );
   const shownPanes = useMemo(
-    () => panes.filter((p) => !minimizedIds.has(p.id)),
-    [panes, minimizedIds],
+    () => panes.filter((p) => !minimizedIds.has(p.id) && p.id !== poppedId),
+    [panes, minimizedIds, poppedId],
   );
   // A restored maximizedId can point at a pane in another workspace; only honor
   // it for display when that pane is actually on screen, else the grid blanks.
@@ -345,8 +355,8 @@ export function App() {
   // WebGL context (browsers cap ~16 live contexts). Unmounting them frees both;
   // restoring reconnects and the server's ring buffer replays recent output.
   const visiblePanes = useMemo(
-    () => (viewMax ? panes.filter((p) => p.id === viewMax) : shownPanes),
-    [viewMax, panes, shownPanes],
+    () => (viewMax ? panes.filter((p) => p.id === viewMax && p.id !== poppedId) : shownPanes),
+    [viewMax, panes, shownPanes, poppedId],
   );
 
   // Drag-resize: fr-weights for the grid's columns/rows, per workspace and per
@@ -727,6 +737,46 @@ export function App() {
     [restorePane],
   );
 
+  // Pop a pane into the floating always-on-top window (or put it back). Read
+  // through a ref so this callback stays stable — an unstable one would defeat
+  // React.memo on every pane each time the popped pane changes.
+  const poppedRef = useRef<string | null>(null);
+  poppedRef.current = poppedId;
+  const togglePop = useCallback(
+    (id: string) => {
+      if (poppedRef.current === id) {
+        closePip(); // 'pagehide' clears poppedId and the pane returns to the grid
+        return;
+      }
+      void openPip()
+        .then((win) => {
+          if (!win) return;
+          restorePane(id); // can't be in the tray and floating at once
+          setMaximizedId((m) => (m === id ? null : m));
+          setPoppedId(id);
+        })
+        .catch((err) => toast.error(`Could not pop out the pane: ${(err as Error).message}`));
+    },
+    [closePip, openPip, restorePane],
+  );
+
+  // The user closed the floating window with its own X — the pane comes home.
+  useEffect(() => {
+    if (!pipWindow) setPoppedId(null);
+  }, [pipWindow]);
+
+  // The popped pane was killed or deleted: don't leave an empty window behind.
+  useEffect(() => {
+    if (poppedId && !sessions.some((x) => x.id === poppedId)) closePip();
+  }, [sessions, poppedId, closePip]);
+
+  // Looked up across ALL workspaces, not just the selected one, so switching
+  // project doesn't yank the floating pane out from under you.
+  const poppedSession = useMemo(
+    () => (poppedId ? (sessions.find((x) => x.id === poppedId) ?? null) : null),
+    [sessions, poppedId],
+  );
+
   // Bring a pane front-and-center: scroll it into view, focus its terminal
   // (via its registered handle), and pulse it so the eye lands on it. The 60 ms
   // delay lets a just-restored/remounted pane register before we address it.
@@ -877,6 +927,7 @@ export function App() {
       )}
       <main className="main">
         <DriftBanner />
+        <UpdateBanner />
         {selected ? (
           <>
             <div className="main-bar">
@@ -1036,8 +1087,20 @@ export function App() {
                 </AnimateIcon>
               </div>
             </div>
-            {minimizedPanes.length > 0 && (
+            {(minimizedPanes.length > 0 || panes.some((p) => p.id === poppedId)) && (
               <div className="pane-tray">
+                {poppedSession && panes.some((p) => p.id === poppedSession.id) && (
+                  <button
+                    className="tray-chip tray-chip-popped"
+                    style={{ borderColor: poppedSession.color }}
+                    title={`"${poppedSession.name}" is in the floating window — click to bring it back`}
+                    onClick={() => togglePop(poppedSession.id)}
+                  >
+                    <IconPopOut size={12} />
+                    <span style={{ color: poppedSession.color }}>{poppedSession.name}</span>
+                    <span className="tray-chip-note">floating</span>
+                  </button>
+                )}
                 {minimizedPanes.map((s) => (
                   <button
                     key={s.id}
@@ -1117,6 +1180,9 @@ export function App() {
                       isMaximized={viewMax === s.id}
                       onToggleMax={toggleMaxPane}
                       onMinimize={minimizePane}
+                      isPopped={false}
+                      canPop={canPop}
+                      onTogglePop={togglePop}
                       onGripDragStart={onGripDragStart}
                       onGripDragEnd={onGripDragEnd}
                       onRegisterFocus={registerPaneFocus}
@@ -1262,6 +1328,34 @@ export function App() {
         />
       )}
       <Toaster />
+      {/* The floating always-on-top pane. Portalled into the picture-in-picture
+          window's document, which re-mounts the pane there: its terminal is
+          rebuilt and the socket reattaches with a ring-buffer replay, so no
+          scrollback is lost and the claude process never notices. */}
+      {pipWindow &&
+        poppedSession &&
+        createPortal(
+          <TerminalPane
+            session={poppedSession}
+            onKilled={onKilled}
+            onChanged={refresh}
+            isMaximized={false}
+            onToggleMax={toggleMaxPane}
+            onMinimize={minimizePane}
+            isPopped
+            canPop
+            onTogglePop={togglePop}
+            onGripDragStart={onGripDragStart}
+            onGripDragEnd={onGripDragEnd}
+            onRegisterFocus={registerPaneFocus}
+            isPasteFallback
+            profiles={profiles}
+            defaultEmail={defaultEmail}
+            mappedDefault={defaultMapped}
+            fontSize={fontSize}
+          />,
+          pipWindow.document.body,
+        )}
     </div>
   );
 }

@@ -135,6 +135,25 @@ export const IconMinus = (p: IconProps) => (
   </Icon>
 );
 
+// Pop a pane out into a floating always-on-top window (picture-in-picture)
+export const IconPopOut = (p: IconProps) => (
+  <Icon {...p}>
+    <path d="M21 9V6a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h4" />
+    <rect x="12" y="13" width="10" height="7" rx="2" />
+  </Icon>
+);
+
+// Put the floating pane back into the grid
+export const IconPopIn = (p: IconProps) => (
+  <Icon {...p}>
+    <path d="M3 10h6V4" />
+    <path d="m3 4 6 6" />
+    <path d="M21 10V7a2 2 0 0 0-2-2h-6" />
+    <path d="M3 15v1a2 2 0 0 0 2 2h3" />
+    <rect x="12" y="13" width="10" height="7" rx="2" />
+  </Icon>
+);
+
 export const IconGrip = (p: IconProps) => (
   <Icon {...p} stroke="none">
     <circle cx="9" cy="5" r="1.6" fill="currentColor" />
@@ -308,5 +327,13 @@ export const IconCopy = (p: IconProps) => (
   <Icon {...p}>
     <rect x="9" y="9" width="12" height="12" rx="2" />
     <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+  </Icon>
+);
+
+export const IconMic = (p: IconProps) => (
+  <Icon {...p}>
+    <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z" />
+    <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
+    <path d="M12 19v3" />
   </Icon>
 );

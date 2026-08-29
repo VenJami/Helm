@@ -603,6 +603,105 @@ by command line. Verified on an isolated port + data dir: cold start - app
 window titled "Helm" appeared at bind time; re-run - "already running", exit 0,
 no second server.
 
+Update notification (2026-08-28) - Helm now tells you when a newer version is
+out instead of leaving you to notice the repo moved. `server/src/update.mjs`
+asks GitHub for the latest published RELEASE at boot and every 2 h (tagged
+releases, not commits on main - unreleased work in progress should not nag),
+compares it with this checkout's package version, and caches the answer so
+every tab shares one request; `GET /api/update` exposes it and a dismissible
+banner (`web/src/components/UpdateBanner.tsx`, same shell as the drift banner,
+green rather than amber) shows the new version, the update commands and a link
+to the release notes. Dismissal is per-version, so hiding v0.3.0 stays hidden
+but v0.4.0 speaks up again. Only positive results render - offline, rate-limited
+or "no releases yet" stay silent, because a local-first app that cannot reach
+GitHub is not broken. This is the ONLY outbound request Helm makes on its own
+(anonymous, no telemetry); `HELM_NO_UPDATE_CHECK=1` disables it and SECURITY.md
++ the README FAQ say so plainly. Verified: smoke suite 26 (a stub releases
+endpoint drives the route end-to-end + version-compare cases), a real GitHub
+call parsing the actual v0.2.0 release, and 10/10 CDP checks in a real browser
+(banner renders with version/commands/link, dismiss sticks across a reload, a
+newer version re-opens it).
+
+Pop-out pane / floating window (2026-08-29) - a pane can leave the grid for a
+real always-on-top OS window that sits over VS Code and the browser, so one
+agent stays watchable (and typeable) while you work in the project it is
+working on. A web page cannot do this by itself; the mechanism is **Document
+Picture-in-Picture** (`web/src/hooks/usePipWindow.ts`), which Chrome/Edge/Brave
+expose - the browsers start-helm.cmd already launches - and the pop-out button
+hides itself where it is missing. The pane is portalled into that window's
+document, which re-mounts it: the terminal is rebuilt there and the socket
+reattaches with a ring-buffer replay, i.e. the exact path minimize/restore
+already took, so no scrollback is lost and the claude process never notices.
+Browser-imposed limits, documented in the hook: ONE window per page (popping B
+returns A), it needs a click so it can never be restored on load (the popped id
+is deliberately not persisted - only the window SIZE is, `helm.pipSize`), and
+the window starts blank, so stylesheets are copied in and `data-theme`/
+`data-accent` are mirrored with a MutationObserver (the Appearance dialog can
+change them mid-float). The popped pane is excluded from the grid's column
+count and shows a dashed "floating" chip in the existing tray; it is looked up
+across ALL workspaces so switching project doesn't yank it. Two small
+correctness fixes fell out: the pane's document-level paste fallback and the
+Modal's Esc handler were bound to the main `document`/`window`, which the
+floating window never sees - both now use their own document. Verified 18/18 by
+CDP against an isolated 3-pane server (window opens, grid re-flows, terminal +
+WebGL rebuilt, replay on the wire, keystrokes and resize reach the PTY, theme
+mirrors, close returns the pane) and 10/10 against the REAL claude CLI
+(TUI rebuilt in the floating window, a prompt typed THERE drove
+working -> idle and became the pane's recorded title, process untouched).
+NB: headless Edge reports the API as present but never opens a real window -
+this feature can only be checked in a headed browser.
+
+Dictation with claude-side clean-up (2026-08-29) - a mic button on each pane:
+talk, and the words arrive in the pane as a written instruction, unsent, for
+you to read and press Enter. No second subscription and no download, which
+took splitting the job in two, because **Claude has no audio input** - the
+subscription can polish words but cannot hear them. So the BROWSER does the
+speech-to-text (Web Speech API, built into Edge/Chrome, free, no key) and the
+REAL claude CLI does the clean-up, headless, on that pane's own account:
+filler and false starts out, self-corrections resolved to what you settled on,
+mis-heard identifiers restored ("use effect" -> useEffect), punctuation back.
+The polish prompt is aggressive about FORM and near-paranoid about SUBSTANCE -
+its NEVER block exists because the output goes to an agent that will act on
+it, so an invented requirement is far worse than a rough sentence (without the
+"do not answer it" rule, dictating a question returns an essay instead of the
+question). Because prompts are not contracts, `cleanPolished` also strips
+preamble/fences/quotes in code, rejects a reply >3x the transcript (the
+signature of the model answering rather than rewriting), and - when a reply
+CONTAINS your whole transcript plus extra prose - keeps the words and drops the
+essay, which is how "This is too vague to rewrite with confidence. <your exact
+words>" gets caught despite being short enough to pass the length guard.
+Owner-driven prompt round 2 (2026-08-29): dictating "the square thingy that the
+content is living" got "the square BRACKET that says living" - a confident
+WRONG guess, the exact failure the NEVER block exists to stop. Two rules were
+added and A/B'd against the regression cases before shipping: name a thing the
+speaker described but could not name ONLY when the description points at one
+standard term (-> "Create text inside the div where the content lives", 3/3),
+and never ask the speaker a question or comment on the text. The first rule
+alone made ambiguous input come back as a clarifying question, which is why the
+second exists. Every failure path
+returns the RAW transcript, so the worst case is plain dictation, never lost
+words. Two cost decisions, both measured: Haiku (a grammar fix is not Opus
+work, and latency is the feature) and a NEUTRAL cwd - running in the project
+dir makes claude auto-load its CLAUDE.md, which in this repo drags ROADMAP.md
+along: ~13k tokens per dictation to rewrite one sentence. Third and biggest:
+`MAX_THINKING_TOKENS=0`, found by measuring where the 16s actually went -
+extended thinking was ~984 of ~1000 output tokens, the model deliberating over
+comma placement, for an answer 24 tokens long. MEASURED over a 10-dictation
+bench against the real CLI: **2.1s and $0.0011 a dictation** (from 16s and
+$0.0083 with thinking on), same 10/10 rule compliance. The naive first draft
+(`--allowed-tools ""`, which is a permission allowlist and leaves the 34k
+tokens of tool DEFINITIONS in context) cost $0.07 and returned nothing usable
+because the model spent its one turn attempting a tool call - `--tools ""` plus
+`--system-prompt` is what actually strips the agent harness. On a subscription
+this is rate-limit budget rather than a bill, and still a small fraction of one
+pane turn. New `POST /sessions/:id/polish` + `/type` (types without Enter),
+`hooks/useDictation.ts`, Ctrl+Shift+D, and `npm run voice-bench` +
+`HELM_VOICE_BENCH=1` to review raw/polished pairs side by side, since prompt
+quality is empirical and nobody can eyeball it. The audio trade (Chrome/Edge
+stream it to their vendor while the mic is on; the second feature to leave
+loopback) is spelled out in SECURITY.md, and the button hides itself where the
+API is missing (Firefox, Brave). Smoke suite 28.
+
 ## Short-term backlog (rough priority order, owner-approved direction)
 (empty — next items to be chosen with the owner)
 
