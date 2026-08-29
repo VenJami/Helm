@@ -1134,7 +1134,17 @@ test('dictation: dev panes take no prompts', async () => {
   });
   assert.equal(typed.status, 400);
 
-  await authed(`/workspaces/${wsRow.id}/stop`, { method: 'POST' });
+  // Delete the pane, then WAIT for the process to actually be gone. On Windows
+  // a live child holds a lock on its cwd, so a still-dying dev pane makes the
+  // suite's temp-dir teardown fail with EBUSY — a file-level failure while
+  // every subtest passes, which is a confusing way to learn this.
+  await authed(`/sessions/${dev.id}`, { method: 'DELETE' });
+  for (let i = 0; i < 40; i++) {
+    const gone = !(await (await authed('/sessions')).json()).some((s) => s.id === dev.id);
+    if (gone) break;
+    await new Promise((r) => setTimeout(r, 50));
+  }
+  await new Promise((r) => setTimeout(r, 150)); // let Windows release the cwd handle
 });
 
 test('polish sanitizer: commentary wrapped around your words is stripped', async () => {
@@ -1155,4 +1165,36 @@ test('polish sanitizer: commentary wrapped around your words is stripped', async
   assert.equal(cleanPolished(said, said), said);
   // A very short transcript can't trip containment on a coincidence.
   assert.equal(cleanPolished('Fix the bug now.', 'fix the bug'), 'Fix the bug now.');
+});
+
+test('polish sanitizer: meta-commentary never reaches the pane', async () => {
+  const { cleanPolished } = await import('../src/claude.mjs');
+  const filler = 'um uh like you know so yeah um';
+
+  // Both seen from the real model on a dictation with no actual instruction.
+  // Short enough to pass the length guard, and sharing no text with the
+  // transcript, so the containment check misses them too.
+  assert.equal(
+    cleanPolished(
+      'The dictation contains only filler words and false starts with no actual ' +
+        'instruction or content. I cannot rewrite this into a meaningful instruction.',
+      filler,
+    ),
+    filler,
+  );
+  assert.equal(cleanPolished('(No instruction to rewrite.)', filler), filler);
+
+  // But a speaker who USES those words gets them back — the guard only fires
+  // when the phrasing is the model's, not theirs.
+  const about = 'why did the polish say there was no instruction to rewrite';
+  assert.equal(
+    cleanPolished('Why did the polish say there was no instruction to rewrite?', about),
+    'Why did the polish say there was no instruction to rewrite?',
+  );
+
+  // A normal rewrite mentioning nothing meta is untouched.
+  assert.equal(
+    cleanPolished('Add a retry to the update check.', 'um add a retry to the update check'),
+    'Add a retry to the update check.',
+  );
 });

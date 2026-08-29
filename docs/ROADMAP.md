@@ -670,6 +670,19 @@ signature of the model answering rather than rewriting), and - when a reply
 CONTAINS your whole transcript plus extra prose - keeps the words and drops the
 essay, which is how "This is too vague to rewrite with confidence. <your exact
 words>" gets caught despite being short enough to pass the length guard.
+Adversarial bench (`npm run voice-rough`, 24 cases) found three more and is
+committed so prompt edits get regression-checked: meta-commentary reaching the
+pane when a dictation was all filler ("The dictation contains only filler
+words... I cannot rewrite this" - both sanitizer guards missed it, so
+cleanPolished now echoes the transcript when the reply TALKS ABOUT it),
+inconsistent number spelling (1.2.3 and 7777 converted, "eight pixels" not),
+and one KNOWN LIMITATION left unfixed: filler-looking words inside text the
+speaker marked literal ("make the button say um yeah ok in quotes") still get
+stripped. That case is genuinely ambiguous - a human listener would likely drop
+the "um" too - and more prompt weight risks the filler removal that is the
+feature's core value, so the design's read-before-Enter is the mitigation.
+Negation ("dont add any tests"), stacked and self-reversing corrections,
+homophones, delimiter-spoofing and social-engineering injection all hold.
 Owner-driven prompt round 2 (2026-08-29): dictating "the square thingy that the
 content is living" got "the square BRACKET that says living" - a confident
 WRONG guess, the exact failure the NEVER block exists to stop. Two rules were

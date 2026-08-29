@@ -85,6 +85,21 @@ cd ../server && npm start # → http://127.0.0.1:7777
    claude-side looks off, `HELM_DEBUG_HOOKS=1` dumps raw hook payloads to the
    🐞 log.
 
+6. **If you touched the dictation prompt** (`POLISH_PROMPT` in index.mjs or
+   `cleanPolished` in `src/claude.mjs`), run the adversarial bench:
+
+   ```bash
+   cd server && npm run voice-rough
+   ```
+
+   24 cases against the real `claude` CLI (~$0.04), each hunting a specific
+   kind of damage: a dropped "don't" that inverts the ask, filler removal
+   eating text marked literal, stacked or self-reversing corrections, prompt
+   injection, meta-commentary reaching the pane. `?` rows are judgement calls —
+   read them rather than counting them. This prompt is the one place where a
+   change can look fine and quietly corrupt what an agent is told to do, so a
+   green build says nothing about it.
+
 CI (`.github/workflows/ci.yml`) runs lint + format check, the server syntax
 check, frontend typecheck + build, `npm audit`, and the Windows smoke test on
 every push/PR. `npm audit --audit-level=high` is a hard gate: when it goes red,
