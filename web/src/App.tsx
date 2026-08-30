@@ -15,7 +15,7 @@ import { TargetCursor } from './components/TargetCursor';
 import { Toaster, toast } from './components/Toaster';
 import { DriftBanner } from './components/DriftBanner';
 import { UpdateBanner } from './components/UpdateBanner';
-import { CommandPalette } from './components/CommandPalette';
+import { CommandPalette, type PaletteAction } from './components/CommandPalette';
 import { GridResizers } from './components/GridResizers';
 import { NewProfileModal } from './components/modals/NewProfileModal';
 import { ProfilesModal } from './components/modals/ProfilesModal';
@@ -832,6 +832,144 @@ export function App() {
     return () => window.removeEventListener('keydown', onKey);
   }, [shownPanes]);
 
+  // Everything Ctrl+K can DO. Kept here (not in the palette) because every one
+  // of these is App state; the palette just lists and runs them. An action that
+  // has no sensible target right now is simply left out rather than shown
+  // disabled — a command you can't run is noise in a search list.
+  const paletteActions: PaletteAction[] = (() => {
+    const list: PaletteAction[] = [];
+    if (selected)
+      list.push({
+        key: 'new-pane',
+        label: 'New pane',
+        icon: 'plus',
+        keywords: 'add session claude start',
+        run: newPane,
+      });
+    list.push({
+      key: 'add-workspace',
+      label: 'Add workspace…',
+      icon: 'folder',
+      keywords: 'new project folder directory',
+      run: () => setDialog({ kind: 'add-workspace' }),
+    });
+    if (runningPanes.length)
+      list.push({
+        key: 'broadcast',
+        label: 'Broadcast to panes…',
+        icon: 'broadcast',
+        keywords: 'send all message instruction every',
+        run: openBroadcast,
+      });
+    list.push({
+      key: 'usage',
+      label: 'Usage by account',
+      icon: 'chart',
+      keywords: 'tokens cost spend money limit',
+      run: openUsage,
+    });
+    // Pane commands act on the pane you were last typing in (falling back to
+    // the maximized one, then the first on screen) — resolved when the command
+    // RUNS, since the active-pane anchor is a ref and wouldn't re-run this memo.
+    const targetPane = () => maximizedId ?? activePaneRef.current ?? shownPanes[0]?.id ?? null;
+    if (shownPanes.length) {
+      list.push({
+        key: 'maximize',
+        label: maximizedId ? 'Restore pane from full screen' : 'Maximize current pane',
+        icon: 'maximize',
+        keywords: 'full screen expand zoom pane',
+        hint: 'Ctrl+Shift+M',
+        run: () => {
+          const id = targetPane();
+          if (id) toggleMaxPane(id);
+        },
+      });
+      list.push({
+        key: 'minimize',
+        label: 'Minimize current pane to tray',
+        icon: 'minimize',
+        keywords: 'hide pane tray collapse',
+        run: () => {
+          const id = targetPane();
+          if (id) minimizePane(id);
+        },
+      });
+      if (canPop)
+        list.push({
+          key: 'popout',
+          label: poppedId ? 'Put the floating pane back' : 'Pop current pane into a window',
+          icon: 'popout',
+          keywords: 'float window always on top detach',
+          run: () => {
+            const id = poppedId ?? targetPane();
+            if (id) togglePop(id);
+          },
+        });
+    }
+    list.push({
+      key: 'appearance',
+      label: 'Appearance…',
+      icon: 'palette',
+      keywords: 'theme dark light accent colour color font',
+      run: () => setDialog({ kind: 'appearance' }),
+    });
+    list.push({
+      key: 'sidebar',
+      label: sidebarHidden ? 'Show sidebar' : 'Hide sidebar',
+      icon: 'folder',
+      keywords: 'projects panel collapse toggle',
+      run: toggleSidebar,
+    });
+    list.push({
+      key: 'notify',
+      label: notify ? 'Turn off desktop alerts' : 'Turn on desktop alerts',
+      icon: 'bell',
+      keywords: 'notifications waiting alert sound',
+      run: () => void toggleNotify(),
+    });
+    list.push({
+      key: 'font-up',
+      label: 'Bigger terminal text',
+      icon: 'up',
+      keywords: 'font size zoom larger increase',
+      run: () => changeFont(1),
+    });
+    list.push({
+      key: 'font-down',
+      label: 'Smaller terminal text',
+      icon: 'down',
+      keywords: 'font size zoom smaller decrease',
+      run: () => changeFont(-1),
+    });
+    list.push({
+      key: 'debug',
+      label: debugOpen ? 'Hide debug log' : 'Show debug log',
+      icon: 'bug',
+      keywords: 'logs server drawer troubleshoot',
+      run: () => setDebugOpen((o) => !o),
+    });
+    if (consoleState.supported)
+      list.push({
+        key: 'console',
+        label: consoleState.visible ? 'Hide server console' : 'Show server console',
+        icon: 'terminal',
+        keywords: 'window terminal node backend',
+        run: () => void toggleConsole(),
+      });
+    if (liveTunnels.length)
+      list.push({
+        key: 'shares',
+        label: 'Public links…',
+        icon: 'server',
+        keywords: 'share tunnel url public cloudflare stop',
+        run: () => setDialog({ kind: 'shares' }),
+      });
+    return list;
+    // Built fresh each render rather than memoised: it is a dozen objects, and
+    // memoising would mean wrapping seven handlers in useCallback to keep the
+    // deps stable — more machinery than the work it saves.
+  })();
+
   // Modal callbacks — the modals validate + own their drafts; App handles the
   // state fallout. closeDialog is trivial now (no draft fields to reset).
   const closeDialog = () => setDialog(null);
@@ -1322,9 +1460,7 @@ export function App() {
           workspaces={workspaces}
           onJumpToPane={jumpToPane}
           onSelectWorkspace={select}
-          onNewPane={selected ? newPane : undefined}
-          onBroadcast={runningPanes.length ? openBroadcast : undefined}
-          onUsage={openUsage}
+          actions={paletteActions}
         />
       )}
       <Toaster />

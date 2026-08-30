@@ -1822,6 +1822,19 @@ input::placeholder { color: var(--faint); }
   text-transform: lowercase;
 }
 
+/* Key chord on a command row — the only place these are discoverable in-app. */
+.cmdk-hint {
+  margin-left: auto;
+  flex-shrink: 0;
+  padding: 1px 6px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--faint);
+  font-family: 'Cascadia Mono', Consolas, monospace;
+  font-size: 10px;
+  white-space: nowrap;
+}
+
 /* ------------------------------------------------------------ responsive */
 
 @media (max-width: 1400px) {

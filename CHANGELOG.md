@@ -7,6 +7,14 @@ All notable changes to Helm are documented here. Format follows
 ## [Unreleased]
 
 ### Added
+- **Ctrl+K now runs commands** — the palette was a way to jump to a pane; it is
+  now also the way to *do* things: new pane, add workspace, broadcast, usage,
+  appearance, show/hide the sidebar, desktop alerts, terminal text size, the
+  debug log, the server console, public links, and maximize/minimize/pop-out of
+  the pane you were last working in. Search by what you mean rather than the
+  exact name — "dark" finds Appearance, "cost" finds Usage — and any command
+  that also has a keyboard shortcut shows it, which makes the shortcuts
+  discoverable for the first time.
 - **Talk to a pane instead of typing** — a mic button on each pane (or
   Ctrl+Shift+D) turns speech into a cleaned-up prompt: filler and false starts
   removed, self-corrections resolved, mis-heard identifiers like "use effect"

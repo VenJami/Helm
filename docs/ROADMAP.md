@@ -715,6 +715,24 @@ stream it to their vendor while the mic is on; the second feature to leave
 loopback) is spelled out in SECURITY.md, and the button hides itself where the
 API is missing (Firefox, Brave). Smoke suite 28.
 
+Ctrl+K runs commands (2026-08-30) - the "command palette" had been a quick
+switcher with three actions bolted on (New pane, Broadcast, Usage) sitting
+BELOW every pane and workspace, so typing a verb showed you panes first. It now
+carries 14 commands: pane ones that act on whatever pane you were last typing
+in (maximize/restore, minimize, pop out - target resolved when the command RUNS,
+since the active-pane anchor is a ref), plus add-workspace, appearance, sidebar,
+alerts, font size, debug log, server console and public links. Each carries
+`keywords` so "dark" or "accent" finds Appearance and "tokens"/"cost" finds
+Usage, and any command with an existing chord shows it on the row - which is the
+only place those chords are discoverable in the app. Ranking rule: with no query
+this is still a switcher so panes lead; the moment the query matches a command,
+commands go first. Deliberately NOT more key chords: one shortcut to remember
+beats six nobody does. The three optional callbacks became one `actions` array
+so App owns the wiring and the palette stays presentational; built fresh each
+render rather than memoised, since memoising would mean wrapping seven handlers
+in useCallback to buy nothing. Verified 7/7 by CDP in a real browser (Ctrl+K
+opens, 14 commands listed, keyword search, ranking, the chord badge).
+
 ## Short-term backlog (rough priority order, owner-approved direction)
 (empty — next items to be chosen with the owner)
 

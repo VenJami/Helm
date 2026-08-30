@@ -35,7 +35,11 @@ Browser (React + xterm.js grid) <--WS/REST--> Node server <--PTY--> claude.cmd
   `GridResizers.tsx` (drag gutters) · `modals/` (each dialog owns its draft
   state: NewProfile, AddWorkspace, Profiles, Usage, Broadcast, Appearance, Share,
   Shares = the live public-link panel, InstallCloudflared) ·
-  `Modal.tsx` (shell) · `Toaster.tsx` · `CommandPalette.tsx` · `DriftBanner.tsx`.
+  `Modal.tsx` (shell) · `Toaster.tsx` · `DriftBanner.tsx` ·
+  `CommandPalette.tsx` (Ctrl+K: panes + workspaces to jump to, and the app's
+  commands — App passes them in as one `actions: PaletteAction[]` array, so the
+  palette stays presentational; each action carries optional `keywords` for
+  search-by-meaning and a `hint` naming its key chord).
 - `web/src/api.ts` — token + fetch wrapper (auto-reloads page once on 401),
   `types.ts` — shared shapes incl. the typed WS protocol union.
 

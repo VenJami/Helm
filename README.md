@@ -117,8 +117,11 @@ Open http://127.0.0.1:7777, add a project folder as a workspace, and hit
   font-size stepper, pane names & colors, PWA install (native-app feel, no
   Electron). Terminals stay dark in light mode so Claude's TUI stays legible.
 
-**Keyboard:** Ctrl/Cmd+K palette · Ctrl+Shift+F find in scrollback ·
-Ctrl+Shift+M maximize · Ctrl+Shift+D dictate · Ctrl+Shift+←/→ cycle panes.
+**Keyboard:** Ctrl/Cmd+K palette — jump to any pane or workspace *and* run any
+command (search by meaning: "dark" finds the theme, "cost" finds usage) ·
+Ctrl+Shift+F find in scrollback · Ctrl+Shift+M maximize · Ctrl+Shift+D dictate ·
+Ctrl+Shift+←/→ cycle panes. Every shortcut is listed on its command row in the
+palette, so there is nothing to memorise.
 
 ## How it works
 
