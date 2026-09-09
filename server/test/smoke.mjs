@@ -194,8 +194,19 @@ after(async () => {
   }
   child?.kill();
   ghStub?.close();
-  await new Promise((r) => setTimeout(r, 300));
-  fs.rmSync(tmp, { recursive: true, force: true });
+  await sleep(300);
+  // Windows holds a directory busy while a just-killed process still has a
+  // handle on it, so a single rmSync can lose the race (EBUSY on a CI runner).
+  // Retry a few times, then let it go: a leftover temp dir is the OS's problem,
+  // and failing the suite on cleanup would report a green run as broken.
+  for (let i = 0; i < 6; i++) {
+    try {
+      fs.rmSync(tmp, { recursive: true, force: true });
+      return;
+    } catch {
+      await sleep(400);
+    }
+  }
 });
 
 test('REST requires the bearer token', async () => {
