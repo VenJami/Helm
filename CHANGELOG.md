@@ -7,6 +7,16 @@ All notable changes to Helm are documented here. Format follows
 ## [Unreleased]
 
 ### Added
+- **"You're N commits behind" as well as "a new version is out"** — Helm is
+  installed by cloning `main`, where the newest release can be weeks old, so
+  the update check now also reports how far `main` has moved ahead of the copy
+  you are running, with the newest commit's subject and a link to exactly those
+  changes on GitHub. It is deliberately quieter than the release banner (one
+  small line, and never both at once): a release is news, a commit is not.
+  Dismissing it brings it back only once main has moved meaningfully further
+  ahead, or after a week. It stays silent whenever the answer would be a guess
+  — a ZIP download rather than a clone, no `git` installed, a commit GitHub has
+  never seen, or a copy carrying commits of its own.
 - **Ctrl+K now runs commands** — the palette was a way to jump to a pane; it is
   now also the way to *do* things: new pane, add workspace, broadcast, usage,
   appearance, show/hide the sidebar, desktop alerts, terminal text size, the

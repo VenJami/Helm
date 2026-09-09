@@ -715,6 +715,30 @@ stream it to their vendor while the mic is on; the second feature to leave
 loopback) is spelled out in SECURITY.md, and the button hides itself where the
 API is missing (Firefox, Brave). Smoke suite 28.
 
+Commit-level update signal (2026-08-30) - the update banner had never fired
+for anyone, and the reason was not a bug: the newest RELEASE was v0.2.0 while
+main had moved 17 commits and 7 weeks past it, so `isNewer` was correctly
+false. Since Helm is installed by cloning main, releases alone are the wrong
+yardstick. `update.mjs` now asks a second question - GitHub's compare API,
+`<local HEAD>...main`, with the SHA from `git rev-parse HEAD` - and reports
+`commits:{ahead,url,latest,latestAt}` alongside the release answer. The two
+signals are deliberately at DIFFERENT volumes: a release keeps the green
+banner, being behind main gets ONE quiet muted line (count, newest subject, its
+age, a compare link, `git pull`), and they are never both on screen. Reason:
+every docs fixup lands on main, and a full banner per commit trains people to
+dismiss the one that matters. Dismissal cannot be per-commit either (the next
+push would reopen what you just closed), so it returns after +5 commits or 7
+days. Silent on every ambiguous case, same rule as the rest of the module: no
+git checkout, no git on PATH, a commit GitHub 404s (local build/unpushed/fork),
+or compare status identical/behind/diverged (a copy with its own commits is a
+developer, not someone to nag). Verified: 16/16 CDP checks in a real browser
+against an isolated server with stubbed GitHub endpoints (renders, wording,
+age, compare link, one slim line at 30px, dismiss + persist across reload,
+returns at +5, release outranks it, silence when level) plus a live call
+against the real API (this checkout read as 6 behind main). Smoke suite 32.
+NB still open: anyone on the actual v0.2.0 TAG has neither checker, so the
+first release after this one needs a manual nudge to those users.
+
 Ctrl+K runs commands (2026-08-30) - the "command palette" had been a quick
 switcher with three actions bolted on (New pane, Broadcast, Usage) sitting
 BELOW every pane and workspace, so typing a verb showed you panes first. It now

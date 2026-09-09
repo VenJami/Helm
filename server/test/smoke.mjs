@@ -20,6 +20,7 @@ import { WebSocket } from 'ws';
 const IS_WIN = process.platform === 'win32';
 const testDir = path.dirname(fileURLToPath(import.meta.url));
 const serverDir = path.join(testDir, '..');
+const repoRoot = path.join(serverDir, '..'); // the clone the commit check asks git about
 // Isolated HOME so the server's data dir (~/.helm or %LOCALAPPDATA%\Helm) lands
 // in a temp folder we own — never the developer's real Helm store.
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'helm-smoke-'));
@@ -30,10 +31,29 @@ const wrapper = path.join(testDir, IS_WIN ? 'fake-claude.cmd' : 'fake-claude.sh'
 const cfWrapper = path.join(testDir, IS_WIN ? 'fake-cloudflared.cmd' : 'fake-cloudflared.sh');
 
 let child;
-// Stand-in for the GitHub releases API, so the update check is driven
-// end-to-end without a network (HELM_UPDATE_URL points the server at it).
+// Stand-in for the GitHub releases + compare APIs, so both halves of the
+// update check are driven end-to-end without a network (HELM_UPDATE_URL and
+// HELM_COMPARE_URL point the server at it).
 let ghStub;
 let ghUrl = '';
+let ghCompareUrl = '';
+// What /compare/... answers next. Tests reassign this to walk the cases where
+// the commit check must stay SILENT. 404 = "GitHub never saw that commit".
+let ghCompare = {
+  status: 'ahead',
+  ahead_by: 3,
+  behind_by: 0,
+  html_url: 'https://example.invalid/compare/abc...main',
+  commits: [
+    { commit: { message: 'Older thing', committer: { date: '2026-08-27T00:00:00Z' } } },
+    {
+      commit: {
+        message: 'Newest thing\n\nbody text',
+        committer: { date: '2026-08-28T00:00:00Z' },
+      },
+    },
+  ],
+};
 let PORT = 0;
 let TOKEN = '';
 let HOOK_TOKEN = '';
@@ -89,6 +109,7 @@ async function tryBoot(port) {
     HELM_CLOUDFLARED_CMD: cfWrapper,
     HELM_USAGE_TTL_MS: '0', // usage tests append + immediately re-poll
     HELM_UPDATE_URL: ghUrl, // fake "latest release" endpoint (see ghStub)
+    HELM_COMPARE_URL: ghCompareUrl, // fake branch-compare endpoint (same stub)
   };
   delete env.CLAUDE_CONFIG_DIR; // don't inherit a real default account
   child = spawn(process.execPath, ['index.mjs'], {
@@ -128,7 +149,17 @@ async function tryBoot(port) {
 
 before(async () => {
   if (!IS_WIN) fs.chmodSync(wrapper, 0o755);
-  ghStub = http.createServer((_req, res) => {
+  ghStub = http.createServer((req, res) => {
+    if (req.url.startsWith('/compare/')) {
+      if (ghCompare === 404) {
+        res.writeHead(404, { 'content-type': 'application/json' });
+        res.end('{}');
+        return;
+      }
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify(ghCompare));
+      return;
+    }
     res.writeHead(200, { 'content-type': 'application/json' });
     res.end(
       JSON.stringify({
@@ -141,6 +172,11 @@ before(async () => {
   });
   await new Promise((r) => ghStub.listen(0, '127.0.0.1', r));
   ghUrl = `http://127.0.0.1:${ghStub.address().port}/releases/latest`;
+  ghCompareUrl = `http://127.0.0.1:${ghStub.address().port}/compare`;
+  // The in-process import below reads these at module load, so set them before
+  // any test touches update.mjs.
+  process.env.HELM_UPDATE_URL = ghUrl;
+  process.env.HELM_COMPARE_URL = ghCompareUrl;
   for (let i = 0; i < 6; i++) {
     if (await tryBoot(await freePort())) return; // retry only guards the tiny bind race
     await sleep(100);
@@ -219,6 +255,61 @@ test('update check only flags a strictly newer version', async () => {
   assert.equal(isNewer('v0.10.0', '0.9.0'), true); // numeric, not lexical
   assert.equal(isNewer('nightly', '0.2.0'), false); // unparseable: never claim one
   assert.equal(isNewer('', '0.2.0'), false);
+});
+
+test('update check also reports unreleased commits on main', async () => {
+  // The commit half needs a git checkout to know where this copy stands. In a
+  // tarball download there is nothing to compare, and the documented behaviour
+  // is silence — so assert whichever rule applies to the tree we're run from.
+  const isGitCheckout = (() => {
+    try {
+      execFileSync('git', ['rev-parse', 'HEAD'], { cwd: repoRoot, stdio: 'ignore' });
+      return true;
+    } catch {
+      return false;
+    }
+  })();
+  const info = await (await authed('/update')).json();
+  if (!isGitCheckout) {
+    assert.equal(info.commits, null, 'not a git checkout: the commit line stays silent');
+    return;
+  }
+  assert.ok(info.commits, 'a git checkout behind main should report commits');
+  assert.equal(info.commits.ahead, 3);
+  assert.equal(info.commits.url, 'https://example.invalid/compare/abc...main');
+  assert.equal(info.commits.latest, 'Newest thing'); // subject only, body dropped
+  assert.equal(info.commits.latestAt, '2026-08-28T00:00:00Z');
+});
+
+test('commit check stays silent on every ambiguous answer', async (t) => {
+  const { checkCommits } = await import('../src/update.mjs');
+  if ((await checkCommits()) === null) {
+    t.skip('not a git checkout — the silent path is already covered above');
+    return;
+  }
+  const previous = ghCompare;
+  try {
+    // Level with main.
+    ghCompare = { status: 'identical', ahead_by: 0, behind_by: 0, commits: [] };
+    assert.equal(await checkCommits(), null, 'identical: nothing to say');
+    // This copy carries its own commits — a developer, not someone to nag.
+    ghCompare = { status: 'behind', ahead_by: 0, behind_by: 2, commits: [] };
+    assert.equal(await checkCommits(), null, 'behind: we are ahead of main');
+    ghCompare = { status: 'diverged', ahead_by: 4, behind_by: 2, commits: [] };
+    assert.equal(await checkCommits(), null, 'diverged: both sides moved');
+    // Ahead but with a zero count: contradictory, so say nothing.
+    ghCompare = { status: 'ahead', ahead_by: 0, behind_by: 0, commits: [] };
+    assert.equal(await checkCommits(), null, 'ahead_by 0: no news');
+    // GitHub has never seen this commit (local build, unpushed branch, fork).
+    ghCompare = 404;
+    assert.equal(await checkCommits(), null, '404: the commit is not on GitHub');
+    // And it recovers once main is plainly ahead again.
+    ghCompare = previous;
+    const back = await checkCommits();
+    assert.equal(back?.ahead, 3, 'a clean "ahead" is reported again');
+  } finally {
+    ghCompare = previous;
+  }
 });
 
 test('GET /health is unauthenticated and reports liveness', async () => {

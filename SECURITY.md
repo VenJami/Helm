@@ -71,16 +71,28 @@ If you need an authenticated share, a quick tunnel is the wrong tool — use a
 named Cloudflare tunnel with Access, or Tailscale, neither of which Helm
 currently wires up.
 
-## The update check (one anonymous outbound request)
+## The update check (two anonymous outbound requests)
 
-At boot and every 2 hours, the server asks GitHub for the repository's latest
-published release (`server/src/update.mjs`) so the UI can tell you a newer Helm
-exists. What that means concretely:
+At boot and every 2 hours, the server asks GitHub two questions
+(`server/src/update.mjs`) so the UI can tell you a newer Helm exists:
 
-- It is an **anonymous GET** to `api.github.com` with no credentials. Helm sends
-  no telemetry: not your projects, paths, sessions, usage, or version history.
-  GitHub sees what any web request shows it — your IP and a `Helm/<version>`
-  user agent.
+1. the repository's latest published **release**, compared with this checkout's
+   package version; and
+2. how far the `main` branch is **ahead of the commit you are checked out at**,
+   since Helm is installed by `git clone` and the last release can be weeks
+   behind main.
+
+What that means concretely:
+
+- Both are **anonymous GETs** to `api.github.com` with no credentials. Helm
+  sends no telemetry: not your projects, paths, sessions, usage, or version
+  history. GitHub sees what any web request shows it — your IP and a
+  `Helm/<version>` user agent.
+- The second one does send **the commit SHA your copy is checked out at**, which
+  is a public commit id in a public repository; it is read locally with
+  `git rev-parse HEAD` and used only as the comparison base. If your copy is not
+  a git checkout, or that commit is not on GitHub, the check is skipped and
+  nothing is sent.
 - The answer is cached server-side and shared by every open tab, so the number
   of requests does not grow with the number of tabs or panes.
 - Failures are silent by design (being offline is normal for a local-first app);
