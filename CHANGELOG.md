@@ -116,6 +116,9 @@ All notable changes to Helm are documented here. Format follows
   accent and light/dark switch.
 
 ### Security
+- Cleared new high-severity advisories in transitive dependencies (js-yaml and
+  qs on the server, js-yaml and browserslist in the frontend's dev tooling) —
+  lockfile-only, no declared dependency moved and node-pty stays pinned exact.
 - Cleared four high-severity advisories in transitive dependencies
   (`body-parser`, `postcss`, `nanoid`, `brace-expansion`, `js-yaml`) — all
   patch-level, no declared dependency changed and `node-pty` still pinned.
