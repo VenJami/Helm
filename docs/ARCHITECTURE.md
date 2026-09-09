@@ -13,7 +13,8 @@ Browser (React + xterm.js grid) <--WS/REST--> Node server <--PTY--> claude.cmd
   — see docs/CLAUDE_INTERNALS.md) · `tunnel.mjs` (public share links via
   cloudflared quick tunnels — read its header comment before touching it, it
   is the one place Helm leaves loopback) · `update.mjs` (is a newer Helm
-  released? one anonymous GitHub call, off with `HELM_NO_UPDATE_CHECK=1`).
+  released, and how far is `main` ahead of this checkout? two anonymous GitHub
+  calls, off with `HELM_NO_UPDATE_CHECK=1`).
   Sessions map (id → {pty, ring buffer, sockets, name, color, activity,
   claudeSessionId, transcriptPath…}), REST under `/api`, WS attach, hook
   endpoint, usage parsing, persistence.
@@ -24,7 +25,10 @@ Browser (React + xterm.js grid) <--WS/REST--> Node server <--PTY--> claude.cmd
 - `web/src/hooks/` — `useSessionsPoll` (3 s session+profile poll, stable
   references, desktop notifications) · `useWorkspaceStatus` (git/dev-server
   dots + share-link state) · `useTheme` (dark/light + accent → `data-*` attrs) ·
-  `useGridWeights` (per-workspace pane sizing).
+  `useGridWeights` (per-workspace pane sizing) · `usePipWindow` (floating
+  always-on-top pane) · `useDictation` (browser Web Speech API for the mic
+  button; reports `supported:false` where the API is missing so the caller can
+  hide the button, and restarts the recogniser across pauses).
 - `web/src/lib/storage.ts` — ALL localStorage behind typed, validated
   accessors (corrupt values fall back; per-workspace keys pruned on removal).
 - `web/src/components/` — `TerminalPane.tsx` (xterm +fit/webgl, WS
@@ -32,7 +36,11 @@ Browser (React + xterm.js grid) <--WS/REST--> Node server <--PTY--> claude.cmd
   `GridResizers.tsx` (drag gutters) · `modals/` (each dialog owns its draft
   state: NewProfile, AddWorkspace, Profiles, Usage, Broadcast, Appearance, Share,
   Shares = the live public-link panel, InstallCloudflared) ·
-  `Modal.tsx` (shell) · `Toaster.tsx` · `CommandPalette.tsx` · `DriftBanner.tsx`.
+  `Modal.tsx` (shell) · `Toaster.tsx` · `DriftBanner.tsx` ·
+  `CommandPalette.tsx` (Ctrl+K: panes + workspaces to jump to, and the app's
+  commands — App passes them in as one `actions: PaletteAction[]` array, so the
+  palette stays presentational; each action carries optional `keywords` for
+  search-by-meaning and a `hint` naming its key chord).
 - `web/src/api.ts` — token + fetch wrapper (auto-reloads page once on 401),
   `types.ts` — shared shapes incl. the typed WS protocol union.
 
@@ -72,11 +80,19 @@ Browser (React + xterm.js grid) <--WS/REST--> Node server <--PTY--> claude.cmd
   tested floor) + accumulated drift warnings; drives the UI's top banner
   (docs/CLAUDE_INTERNALS.md).
 - `GET /api/update` → `{current, latest, available, url, name, publishedAt,
-  checkedAt, disabled, error}` — latest published GitHub RELEASE vs this
-  checkout's package version, checked at boot and every 2 h and cached
-  server-side (one shared answer for every tab, kind to the anonymous API's
-  60-requests/hour limit). Drives the update banner, which renders only when
-  `available` is true; failures stay silent (offline is normal).
+  checkedAt, disabled, error, commits}` — two signals, checked at boot and
+  every 2 h and cached server-side (one shared answer for every tab, kind to
+  the anonymous API's 60-requests/hour limit):
+  - the latest published GitHub RELEASE vs this checkout's package version
+    (`available`) — drives the loud update banner;
+  - `commits: {ahead, url, latest, latestAt} | null` — how far `main` is ahead
+    of the commit `git rev-parse HEAD` reports here, via GitHub's compare API.
+    Drives one quiet line, shown only when there is no release to announce.
+    It is `null` on every ambiguous case: not a git checkout, git missing, the
+    commit unknown to GitHub (404), or a checkout carrying its own commits
+    (compare status `identical`/`behind`/`diverged`).
+
+  Failures stay silent throughout (offline is normal for a local-first app).
 - `GET /health` — **unauthenticated** liveness (loopback-only, no CORS): `{ok,
   pid, startedAt, uptimeSec, claude:{version,ok}, sessions:{total,running,
   waiting,exited,dead}}`. For the stale-server-on-7777 check without the token.
@@ -84,8 +100,9 @@ Browser (React + xterm.js grid) <--WS/REST--> Node server <--PTY--> claude.cmd
   restarts), `HELM_USAGE_TTL_MS` (usage roll-up cache TTL, default 15 000),
   `HELM_DATA_DIR` (override the state dir; used by the e2e), `HELM_DEBUG_HOOKS`
   (dump raw hook payloads), `HELM_NO_UPDATE_CHECK=1` (never contact GitHub),
-  `HELM_REPO` / `HELM_UPDATE_URL` (point the update check elsewhere — a fork,
-  or the smoke test's stub). Log entries carry a coarse `level` (`error` for
+  `HELM_REPO` / `HELM_UPDATE_URL` / `HELM_COMPARE_URL` / `HELM_REPO_BRANCH`
+  (point the update check elsewhere — a fork, another tracked branch, or the
+  smoke test's stub). Log entries carry a coarse `level` (`error` for
   error/drift tags, else `info`). On SIGINT/SIGTERM the server persists sessions
   and stops panes (no orphaned claude children).
 - `POST /api/broadcast {text, sessionIds[]}` — type one instruction into
@@ -247,6 +264,11 @@ any pane or workspace. Transient action errors surface as toasts
   token, hook-token      auth tokens (persist across restarts; delete to rotate)
   workspaces.json        sidebar workspaces
   sessions.json          running sessions → revivable as 'dead' after restart
+                         (at load, panes whose workspace dir is no longer in
+                         workspaces.json are dropped — the grid lists panes per
+                         project, so they could never be shown again; skipped
+                         when the workspace list is empty. One-shot panes, e.g.
+                         the cloudflared installer, are never written here)
   settings.json          server toggles (currently autoRevive)
   hook-settings.json     generated hook config passed via --settings
   imported-transcripts.json  transcript copies made by account switches

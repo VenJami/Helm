@@ -446,6 +446,16 @@ export function cleanPolished(text, transcript) {
   if (said.length > 12 && flat(out).includes(said) && flat(out).length > said.length + 8) {
     return transcript.trim();
   }
+  // The model TALKING ABOUT the dictation instead of rewriting it. Seen from a
+  // dictation that was all filler: "The dictation contains only filler words...
+  // I cannot rewrite this into a meaningful instruction", and "(No instruction
+  // to rewrite.)" — short enough to pass the length guard, and they share no
+  // text with the transcript so containment misses them too. Only fires when
+  // the speaker didn't use these words themselves, so dictating "why did the
+  // polish drop my second sentence" still passes through.
+  const META =
+    /\b(?:the dictation|no (?:actual )?instruction|nothing to rewrite|cannot rewrite|can'?t rewrite|too vague to rewrite|only filler)\b/i;
+  if (META.test(out) && !META.test(transcript)) return transcript.trim();
   // A reply far longer than what was said is the signature of the model
   // ANSWERING the request instead of rewriting it. The floor keeps a very
   // short dictation ("fix the login bug") from tripping the ratio.

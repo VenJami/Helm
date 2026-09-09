@@ -1,6 +1,6 @@
 {
   "name": "helm-server",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": true,
   "type": "module",
   "license": "MIT",
@@ -15,6 +15,7 @@
     "test": "node --test test/smoke.mjs",
     "e2e": "node test/e2e-real.mjs",
     "voice-bench": "node test/voice-bench.mjs",
+    "voice-rough": "node test/voice-rough.mjs",
     "typecheck": "tsc -p tsconfig.json",
     "lint": "eslint . --max-warnings 0",
     "format": "prettier --write \"*.mjs\" \"src/**/*.mjs\" \"test/**/*.mjs\"",

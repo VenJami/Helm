@@ -175,6 +175,18 @@ export interface UpdateInfo {
   checkedAt: string | null; // ISO — null until the first check returns
   disabled: boolean; // HELM_NO_UPDATE_CHECK=1: no network call is ever made
   error: string | null; // last failure (offline, rate limit) — not shown in the UI
+  commits: CommitsBehind | null; // null whenever the answer would be a guess
+}
+
+// Unreleased work: how far the tracked branch is ahead of this checkout. The
+// quiet half of the update check — most people run Helm from a `git clone` of
+// main, where the last release can be weeks behind. Only ever set when the
+// checkout is plainly behind (never when it carries commits of its own).
+export interface CommitsBehind {
+  ahead: number; // commits on main this copy doesn't have
+  url: string | null; // GitHub compare page for exactly that range
+  latest: string | null; // newest commit's subject line
+  latestAt: string | null; // ISO — when that commit landed
 }
 
 // State of the server's own console window (start-helm.cmd terminal).
