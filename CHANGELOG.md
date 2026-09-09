@@ -6,6 +6,7 @@ All notable changes to Helm are documented here. Format follows
 
 ## [Unreleased]
 
+## [0.3.0] — 2026-09-09
 ### Added
 - **"You're N commits behind" as well as "a new version is out"** — Helm is
   installed by cloning `main`, where the newest release can be weeks old, so
@@ -208,6 +209,7 @@ PTYs), each with a status badge, name/color, and usage.
 - Windows is the tested platform. macOS/Linux are supported in code but not yet
   verified on hardware.
 
-[Unreleased]: https://github.com/VenJami/Helm/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/VenJami/Helm/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/VenJami/Helm/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/VenJami/Helm/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/VenJami/Helm/releases/tag/v0.1.0
