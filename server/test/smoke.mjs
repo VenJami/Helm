@@ -20,6 +20,7 @@ import { WebSocket } from 'ws';
 const IS_WIN = process.platform === 'win32';
 const testDir = path.dirname(fileURLToPath(import.meta.url));
 const serverDir = path.join(testDir, '..');
+const repoRoot = path.join(serverDir, '..'); // the clone the commit check asks git about
 // Isolated HOME so the server's data dir (~/.helm or %LOCALAPPDATA%\Helm) lands
 // in a temp folder we own — never the developer's real Helm store.
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'helm-smoke-'));
@@ -30,10 +31,29 @@ const wrapper = path.join(testDir, IS_WIN ? 'fake-claude.cmd' : 'fake-claude.sh'
 const cfWrapper = path.join(testDir, IS_WIN ? 'fake-cloudflared.cmd' : 'fake-cloudflared.sh');
 
 let child;
-// Stand-in for the GitHub releases API, so the update check is driven
-// end-to-end without a network (HELM_UPDATE_URL points the server at it).
+// Stand-in for the GitHub releases + compare APIs, so both halves of the
+// update check are driven end-to-end without a network (HELM_UPDATE_URL and
+// HELM_COMPARE_URL point the server at it).
 let ghStub;
 let ghUrl = '';
+let ghCompareUrl = '';
+// What /compare/... answers next. Tests reassign this to walk the cases where
+// the commit check must stay SILENT. 404 = "GitHub never saw that commit".
+let ghCompare = {
+  status: 'ahead',
+  ahead_by: 3,
+  behind_by: 0,
+  html_url: 'https://example.invalid/compare/abc...main',
+  commits: [
+    { commit: { message: 'Older thing', committer: { date: '2026-08-27T00:00:00Z' } } },
+    {
+      commit: {
+        message: 'Newest thing\n\nbody text',
+        committer: { date: '2026-08-28T00:00:00Z' },
+      },
+    },
+  ],
+};
 let PORT = 0;
 let TOKEN = '';
 let HOOK_TOKEN = '';
@@ -89,6 +109,7 @@ async function tryBoot(port) {
     HELM_CLOUDFLARED_CMD: cfWrapper,
     HELM_USAGE_TTL_MS: '0', // usage tests append + immediately re-poll
     HELM_UPDATE_URL: ghUrl, // fake "latest release" endpoint (see ghStub)
+    HELM_COMPARE_URL: ghCompareUrl, // fake branch-compare endpoint (same stub)
   };
   delete env.CLAUDE_CONFIG_DIR; // don't inherit a real default account
   child = spawn(process.execPath, ['index.mjs'], {
@@ -128,7 +149,17 @@ async function tryBoot(port) {
 
 before(async () => {
   if (!IS_WIN) fs.chmodSync(wrapper, 0o755);
-  ghStub = http.createServer((_req, res) => {
+  ghStub = http.createServer((req, res) => {
+    if (req.url.startsWith('/compare/')) {
+      if (ghCompare === 404) {
+        res.writeHead(404, { 'content-type': 'application/json' });
+        res.end('{}');
+        return;
+      }
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify(ghCompare));
+      return;
+    }
     res.writeHead(200, { 'content-type': 'application/json' });
     res.end(
       JSON.stringify({
@@ -141,6 +172,11 @@ before(async () => {
   });
   await new Promise((r) => ghStub.listen(0, '127.0.0.1', r));
   ghUrl = `http://127.0.0.1:${ghStub.address().port}/releases/latest`;
+  ghCompareUrl = `http://127.0.0.1:${ghStub.address().port}/compare`;
+  // The in-process import below reads these at module load, so set them before
+  // any test touches update.mjs.
+  process.env.HELM_UPDATE_URL = ghUrl;
+  process.env.HELM_COMPARE_URL = ghCompareUrl;
   for (let i = 0; i < 6; i++) {
     if (await tryBoot(await freePort())) return; // retry only guards the tiny bind race
     await sleep(100);
@@ -158,8 +194,19 @@ after(async () => {
   }
   child?.kill();
   ghStub?.close();
-  await new Promise((r) => setTimeout(r, 300));
-  fs.rmSync(tmp, { recursive: true, force: true });
+  await sleep(300);
+  // Windows holds a directory busy while a just-killed process still has a
+  // handle on it, so a single rmSync can lose the race (EBUSY on a CI runner).
+  // Retry a few times, then let it go: a leftover temp dir is the OS's problem,
+  // and failing the suite on cleanup would report a green run as broken.
+  for (let i = 0; i < 6; i++) {
+    try {
+      fs.rmSync(tmp, { recursive: true, force: true });
+      return;
+    } catch {
+      await sleep(400);
+    }
+  }
 });
 
 test('REST requires the bearer token', async () => {
@@ -219,6 +266,61 @@ test('update check only flags a strictly newer version', async () => {
   assert.equal(isNewer('v0.10.0', '0.9.0'), true); // numeric, not lexical
   assert.equal(isNewer('nightly', '0.2.0'), false); // unparseable: never claim one
   assert.equal(isNewer('', '0.2.0'), false);
+});
+
+test('update check also reports unreleased commits on main', async () => {
+  // The commit half needs a git checkout to know where this copy stands. In a
+  // tarball download there is nothing to compare, and the documented behaviour
+  // is silence — so assert whichever rule applies to the tree we're run from.
+  const isGitCheckout = (() => {
+    try {
+      execFileSync('git', ['rev-parse', 'HEAD'], { cwd: repoRoot, stdio: 'ignore' });
+      return true;
+    } catch {
+      return false;
+    }
+  })();
+  const info = await (await authed('/update')).json();
+  if (!isGitCheckout) {
+    assert.equal(info.commits, null, 'not a git checkout: the commit line stays silent');
+    return;
+  }
+  assert.ok(info.commits, 'a git checkout behind main should report commits');
+  assert.equal(info.commits.ahead, 3);
+  assert.equal(info.commits.url, 'https://example.invalid/compare/abc...main');
+  assert.equal(info.commits.latest, 'Newest thing'); // subject only, body dropped
+  assert.equal(info.commits.latestAt, '2026-08-28T00:00:00Z');
+});
+
+test('commit check stays silent on every ambiguous answer', async (t) => {
+  const { checkCommits } = await import('../src/update.mjs');
+  if ((await checkCommits()) === null) {
+    t.skip('not a git checkout — the silent path is already covered above');
+    return;
+  }
+  const previous = ghCompare;
+  try {
+    // Level with main.
+    ghCompare = { status: 'identical', ahead_by: 0, behind_by: 0, commits: [] };
+    assert.equal(await checkCommits(), null, 'identical: nothing to say');
+    // This copy carries its own commits — a developer, not someone to nag.
+    ghCompare = { status: 'behind', ahead_by: 0, behind_by: 2, commits: [] };
+    assert.equal(await checkCommits(), null, 'behind: we are ahead of main');
+    ghCompare = { status: 'diverged', ahead_by: 4, behind_by: 2, commits: [] };
+    assert.equal(await checkCommits(), null, 'diverged: both sides moved');
+    // Ahead but with a zero count: contradictory, so say nothing.
+    ghCompare = { status: 'ahead', ahead_by: 0, behind_by: 0, commits: [] };
+    assert.equal(await checkCommits(), null, 'ahead_by 0: no news');
+    // GitHub has never seen this commit (local build, unpushed branch, fork).
+    ghCompare = 404;
+    assert.equal(await checkCommits(), null, '404: the commit is not on GitHub');
+    // And it recovers once main is plainly ahead again.
+    ghCompare = previous;
+    const back = await checkCommits();
+    assert.equal(back?.ahead, 3, 'a clean "ahead" is reported again');
+  } finally {
+    ghCompare = previous;
+  }
 });
 
 test('GET /health is unauthenticated and reports liveness', async () => {
@@ -1197,4 +1299,177 @@ test('polish sanitizer: meta-commentary never reaches the pane', async () => {
     cleanPolished('Add a retry to the update check.', 'um add a retry to the update check'),
     'Add a retry to the update check.',
   );
+});
+
+// ---- panes no project can show ------------------------------------------
+// Two halves of one failure: the grid lists a workspace's panes by dir, so a
+// pane whose project isn't in the list is invisible, unkillable from the UI,
+// and respawned by auto-revive at every boot. Driven on SEPARATE servers with
+// their own data dirs, because the behaviour under test happens at load and
+// the suite's main server boots once.
+
+// Boot an extra server on its own data dir. Returns a caller for its API and
+// a stop(), or throws if it never came up. Retried across candidate ports for
+// the same reason tryBoot is: Windows rejects scattered high ports with EACCES.
+async function bootAside(dataDir, extraEnv = {}) {
+  for (let i = 0; i < 5; i++) {
+    const aside = await tryBootAside(dataDir, extraEnv, await freePort());
+    if (aside) return aside;
+    await sleep(100);
+  }
+  throw new Error('aside server did not come up on any candidate port');
+}
+
+async function tryBootAside(dataDir, extraEnv, port) {
+  const env = {
+    ...process.env,
+    PORT: String(port),
+    HELM_DATA_DIR: dataDir,
+    HELM_CLAUDE_CMD: wrapper,
+    HELM_NO_UPDATE_CHECK: '1', // nothing to say here, and it needn't reach the stub
+    ...extraEnv,
+  };
+  delete env.CLAUDE_CONFIG_DIR;
+  const proc = spawn(process.execPath, ['index.mjs'], {
+    cwd: serverDir,
+    env,
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  proc.stdout.on('data', () => {}); // drain, so the child never blocks on a full pipe
+  proc.stderr.on('data', () => {});
+  const stop = () => proc.kill();
+  const deadline = Date.now() + 12000;
+  let token = '';
+  while (Date.now() < deadline) {
+    try {
+      if (!token) token = fs.readFileSync(path.join(dataDir, 'token'), 'utf8').trim();
+      const res = await fetch(`http://127.0.0.1:${port}/api/sessions`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (res.ok) {
+        const call = (p, opts = {}) =>
+          fetch(`http://127.0.0.1:${port}/api${p}`, {
+            ...opts,
+            headers: {
+              Authorization: `Bearer ${token}`,
+              'Content-Type': 'application/json',
+              ...opts.headers,
+            },
+          });
+        return { call, stop };
+      }
+    } catch {
+      /* not up yet */
+    }
+    if (proc.exitCode !== null) break; // bind refused — try another port
+    await sleep(150);
+  }
+  stop();
+  return null;
+}
+
+// Seed a data dir with the state a server should find at boot.
+function seedState(name, { workspaces, sessions }) {
+  const dir = mkdir(path.join(tmp, name));
+  if (workspaces) {
+    fs.writeFileSync(path.join(dir, 'workspaces.json'), JSON.stringify({ version: 1, workspaces }));
+  }
+  if (sessions) {
+    fs.writeFileSync(path.join(dir, 'sessions.json'), JSON.stringify({ version: 1, sessions }));
+  }
+  return dir;
+}
+
+const persistedSessions = (dataDir) => {
+  try {
+    return JSON.parse(fs.readFileSync(path.join(dataDir, 'sessions.json'), 'utf8')).sessions;
+  } catch {
+    return []; // never written = nothing persisted, which is the point
+  }
+};
+
+test('one-shot install pane never outlives the server that ran it', async () => {
+  // cloudflared must look ABSENT or the route refuses; the install command is
+  // pinned to something harmless, since the real one is a winget install.
+  const dir = seedState('oneshot', {});
+  const aside = await bootAside(dir, {
+    HELM_CLOUDFLARED_CMD: path.join(tmp, 'no-such-cloudflared'),
+    HELM_INSTALL_CMD: `"${process.execPath}" --version`,
+  });
+  try {
+    const res = await aside.call('/tunnels/install', { method: 'POST' });
+    assert.equal(res.status, 201);
+    const pane = await res.json();
+    assert.equal(pane.name, 'install cloudflared');
+
+    // It's a real pane while the server lives — that's the whole point of
+    // installing in one (you watch it, and answer any elevation prompt).
+    const live = await (await aside.call('/sessions')).json();
+    assert.ok(live.some((s) => s.id === pane.id));
+
+    // …but it belongs to no project, so it must not be written to disk. A dev
+    // pane that has exited normally IS persisted, so this only passes if the
+    // one-shot flag is doing its job.
+    await sleep(1200); // let it exit and the exit-time persist run
+    assert.deepEqual(
+      persistedSessions(dir).filter((s) => s.name === 'install cloudflared'),
+      [],
+    );
+  } finally {
+    aside.stop();
+  }
+});
+
+test('a pane whose project is gone is dropped at boot', async () => {
+  const kept = mkdir(path.join(tmp, 'kept-project'));
+  const gone = path.join(tmp, 'removed-project'); // never created, never listed
+  const dir = seedState('sweep', {
+    workspaces: [{ id: 'w1', name: 'Kept', dir: kept }],
+    sessions: [
+      { id: 'keep-me', name: 'Kept pane', workspace: kept, kind: 'claude' },
+      { id: 'drop-me', name: 'Stranded pane', workspace: gone, kind: 'claude' },
+      // The installer pane this fix stops creating — already stranded in the
+      // state files of anyone who used the install button before it.
+      {
+        id: 'drop-installer',
+        name: 'install cloudflared',
+        workspace: os.homedir(),
+        kind: 'dev',
+        command: 'winget install --id Cloudflare.cloudflared',
+      },
+    ],
+  });
+  const aside = await bootAside(dir);
+  try {
+    const list = await (await aside.call('/sessions')).json();
+    assert.deepEqual(
+      list.map((s) => s.id),
+      ['keep-me'],
+    );
+    // and the drop is permanent, not just hidden for this run
+    assert.deepEqual(
+      persistedSessions(dir).map((s) => s.id),
+      ['keep-me'],
+    );
+  } finally {
+    aside.stop();
+  }
+});
+
+test('an empty workspace list never wipes panes', async () => {
+  // "no projects yet" and "workspaces.json failed to load" look identical from
+  // the sweep, so with nothing to compare against it must drop nothing.
+  const dir = seedState('sweep-guard', {
+    sessions: [{ id: 'survivor', name: 'Pane', workspace: tmp, kind: 'claude' }],
+  });
+  const aside = await bootAside(dir);
+  try {
+    const list = await (await aside.call('/sessions')).json();
+    assert.deepEqual(
+      list.map((s) => s.id),
+      ['survivor'],
+    );
+  } finally {
+    aside.stop();
+  }
 });

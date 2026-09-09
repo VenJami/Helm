@@ -715,6 +715,69 @@ stream it to their vendor while the mic is on; the second feature to leave
 loopback) is spelled out in SECURITY.md, and the button hides itself where the
 API is missing (Firefox, Brave). Smoke suite 28.
 
+Commit-level update signal (2026-08-30) - the update banner had never fired
+for anyone, and the reason was not a bug: the newest RELEASE was v0.2.0 while
+main had moved 17 commits and 7 weeks past it, so `isNewer` was correctly
+false. Since Helm is installed by cloning main, releases alone are the wrong
+yardstick. `update.mjs` now asks a second question - GitHub's compare API,
+`<local HEAD>...main`, with the SHA from `git rev-parse HEAD` - and reports
+`commits:{ahead,url,latest,latestAt}` alongside the release answer. The two
+signals are deliberately at DIFFERENT volumes: a release keeps the green
+banner, being behind main gets ONE quiet muted line (count, newest subject, its
+age, a compare link, `git pull`), and they are never both on screen. Reason:
+every docs fixup lands on main, and a full banner per commit trains people to
+dismiss the one that matters. Dismissal cannot be per-commit either (the next
+push would reopen what you just closed), so it returns after +5 commits or 7
+days. Silent on every ambiguous case, same rule as the rest of the module: no
+git checkout, no git on PATH, a commit GitHub 404s (local build/unpushed/fork),
+or compare status identical/behind/diverged (a copy with its own commits is a
+developer, not someone to nag). Verified: 16/16 CDP checks in a real browser
+against an isolated server with stubbed GitHub endpoints (renders, wording,
+age, compare link, one slim line at 30px, dismiss + persist across reload,
+returns at +5, release outranks it, silence when level) plus a live call
+against the real API (this checkout read as 6 behind main). Smoke suite 32.
+NB still open: anyone on the actual v0.2.0 TAG has neither checker, so the
+first release after this one needs a manual nudge to those users.
+
+Ctrl+K runs commands (2026-08-30) - the "command palette" had been a quick
+switcher with three actions bolted on (New pane, Broadcast, Usage) sitting
+BELOW every pane and workspace, so typing a verb showed you panes first. It now
+carries 14 commands: pane ones that act on whatever pane you were last typing
+in (maximize/restore, minimize, pop out - target resolved when the command RUNS,
+since the active-pane anchor is a ref), plus add-workspace, appearance, sidebar,
+alerts, font size, debug log, server console and public links. Each carries
+`keywords` so "dark" or "accent" finds Appearance and "tokens"/"cost" finds
+Usage, and any command with an existing chord shows it on the row - which is the
+only place those chords are discoverable in the app. Ranking rule: with no query
+this is still a switcher so panes lead; the moment the query matches a command,
+commands go first. Deliberately NOT more key chords: one shortcut to remember
+beats six nobody does. The three optional callbacks became one `actions` array
+so App owns the wiring and the palette stays presentational; built fresh each
+render rather than memoised, since memoising would mean wrapping seven handlers
+in useCallback to buy nothing. Verified 7/7 by CDP in a real browser (Ctrl+K
+opens, 14 commands listed, keyword search, ranking, the chord badge).
+
+Panes no project can show (2026-09-09) - found by audit, not by report: the
+owner's real state held 13 persisted panes, two of them `install cloudflared`
+dev panes created by the share-link installer, whose workspace is the HOME dir
+and therefore matches no project. The grid lists a workspace's panes by dir, so
+those two were invisible, unkillable from the UI, and - autoRevive being on -
+re-ran `winget install cloudflared` at every server start, forever. Two closes:
+one-shot panes are marked `ephemeral` (createDevSession; never written to
+sessions.json, so an exited dev pane's normal persistence doesn't catch them),
+and loadPersistedSessions now sweeps panes whose dir isn't in workspaces.json,
+logging each drop under a `prune` tag and rewriting the file so a drop is a
+drop. The sweep is SKIPPED when the workspace list is empty: "no projects yet"
+and "workspaces.json failed to load" are indistinguishable from there, and the
+second must never wipe every pane. Writing the test found a second bug it would
+have shipped: persistSessions' `let persistTimer` was declared BELOW the load
+call, so the first server that actually had a pane to drop died at boot with a
+TDZ error - invisible to a build, a lint, and a manual start on clean state
+(both traps now in GOTCHAS). Verified: smoke 35 (one-shot pane not persisted,
+stranded pane dropped, empty-list guard), real-claude e2e 10/10 on claude
+2.1.260, and a boot against a COPY of the owner's real state - the two
+installer panes gone, all 11 real panes kept.
+
 ## Short-term backlog (rough priority order, owner-approved direction)
 (empty — next items to be chosen with the owner)
 

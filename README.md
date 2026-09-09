@@ -117,8 +117,11 @@ Open http://127.0.0.1:7777, add a project folder as a workspace, and hit
   font-size stepper, pane names & colors, PWA install (native-app feel, no
   Electron). Terminals stay dark in light mode so Claude's TUI stays legible.
 
-**Keyboard:** Ctrl/Cmd+K palette · Ctrl+Shift+F find in scrollback ·
-Ctrl+Shift+M maximize · Ctrl+Shift+D dictate · Ctrl+Shift+←/→ cycle panes.
+**Keyboard:** Ctrl/Cmd+K palette — jump to any pane or workspace *and* run any
+command (search by meaning: "dark" finds the theme, "cost" finds usage) ·
+Ctrl+Shift+F find in scrollback · Ctrl+Shift+M maximize · Ctrl+Shift+D dictate ·
+Ctrl+Shift+←/→ cycle panes. Every shortcut is listed on its command row in the
+palette, so there is nothing to memorise.
 
 ## How it works
 
@@ -168,11 +171,12 @@ Anthropic API and has no key to leak.
 
 **Is my code or conversation sent anywhere?**
 No. One local Node server on loopback; state stays in `%LOCALAPPDATA%\Helm`.
-No telemetry, ever. Helm makes exactly one outbound request on its own: an
-anonymous check of this repo's latest GitHub release, so it can tell you when
-an update is out. It sends nothing about you, and `HELM_NO_UPDATE_CHECK=1`
-turns it off. Two features do leave your machine, both only when you ask them
-to: a public share link (which is the whole point of it) and the mic — see the
+No telemetry, ever. Helm's only outbound requests on its own are two anonymous
+GitHub calls that ask whether there is a newer Helm: the latest release, and how
+far `main` is ahead of the commit you have. They send nothing about you (only
+that public commit id), and `HELM_NO_UPDATE_CHECK=1` turns them off. Two
+features do leave your machine, both only when you ask them to: a public share
+link (which is the whole point of it) and the mic — see the
 next answer and [SECURITY.md](SECURITY.md).
 
 **Where does my voice go when I use the mic?**

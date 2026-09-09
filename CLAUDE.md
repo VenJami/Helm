@@ -58,7 +58,7 @@ helm/
 │   ├── src/                # log.mjs · persist.mjs (atomic state) · claude.mjs
 │   │                       #   (ALL claude-internals: parsing/pricing/drift)
 │   │                       #   · tunnel.mjs (public share links — leaves loopback)
-│   │                       #   · update.mjs (is a newer Helm released?)
+│   │                       #   · update.mjs (newer release? behind main?)
 │   └── hook-post.mjs       # runs inside panes; relays Claude Code hook events
 └── web/                    # React frontend → built to web/dist (server serves it)
     └── src/                # App.tsx (composition) · hooks/ (data polling, theme,

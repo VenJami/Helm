@@ -11,9 +11,21 @@ import { IconX } from './Icons';
 // Self-contained like DriftBanner (fetch + dismiss live here) so App stays out
 // of it. The dismissal remembers the VERSION, so hiding v0.3.0 stays hidden
 // but v0.4.0 speaks up again.
+//
+// Two volumes, because the server reports two things (server/src/update.mjs):
+// a newer RELEASE gets this banner, while merely being behind `main` gets the
+// one quiet line below it — every docs fixup lands on main, so a full banner
+// for each would train people to dismiss the one that matters. The release
+// always wins: they are never both on screen.
 
 const DISMISS_KEY = 'helm.updateDismissed';
+const COMMITS_DISMISS_KEY = 'helm.commitsDismissed';
 const POLL_MS = 30 * 60 * 1000; // server refreshes every 2 h; this just picks it up
+// Dismissing the commit line can't be remembered per-commit — the next push
+// would re-open what you just closed. It comes back once main has moved on
+// meaningfully, or after a week.
+const RENAG_AFTER_COMMITS = 5;
+const RENAG_AFTER_MS = 7 * 24 * 60 * 60 * 1000;
 
 function loadDismissed(): string {
   try {
@@ -23,9 +35,36 @@ function loadDismissed(): string {
   }
 }
 
+type CommitsDismissal = { ahead: number; at: number };
+
+function loadCommitsDismissal(): CommitsDismissal | null {
+  try {
+    const raw = JSON.parse(localStorage.getItem(COMMITS_DISMISS_KEY) || 'null');
+    if (raw && typeof raw.ahead === 'number' && typeof raw.at === 'number') return raw;
+  } catch {
+    /* corrupt or unavailable — treat as never dismissed */
+  }
+  return null;
+}
+
+/** Short "how old" label for the newest commit: 3h, 2d, 3w. */
+function age(iso: string | null): string {
+  if (!iso) return '';
+  const ms = Date.now() - new Date(iso).getTime();
+  if (!Number.isFinite(ms) || ms < 0) return '';
+  const h = Math.floor(ms / 3600000);
+  if (h < 1) return 'just now';
+  if (h < 24) return `${h}h ago`;
+  const d = Math.floor(h / 24);
+  return d < 14 ? `${d}d ago` : `${Math.floor(d / 7)}w ago`;
+}
+
 export function UpdateBanner() {
   const [info, setInfo] = useState<UpdateInfo | null>(null);
   const [dismissed, setDismissed] = useState<string>(loadDismissed);
+  const [commitsDismissal, setCommitsDismissal] = useState<CommitsDismissal | null>(
+    loadCommitsDismissal,
+  );
 
   useEffect(() => {
     let alive = true;
@@ -46,7 +85,54 @@ export function UpdateBanner() {
     };
   }, []);
 
-  if (!info?.available || !info.latest || dismissed === info.latest) return null;
+  const releaseHidden = !info?.available || !info.latest || dismissed === info.latest;
+
+  // No release to announce → fall back to the quiet "you're behind main" line.
+  if (releaseHidden) {
+    const c = info?.commits;
+    if (!c || c.ahead <= 0) return null;
+    const d = commitsDismissal;
+    const stillDismissed =
+      d && c.ahead < d.ahead + RENAG_AFTER_COMMITS && Date.now() - d.at < RENAG_AFTER_MS;
+    if (stillDismissed) return null;
+
+    const dismissCommits = () => {
+      const next = { ahead: c.ahead, at: Date.now() };
+      setCommitsDismissal(next);
+      try {
+        localStorage.setItem(COMMITS_DISMISS_KEY, JSON.stringify(next));
+      } catch {
+        /* private mode / quota — the line just returns next load */
+      }
+    };
+
+    const when = age(c.latestAt);
+    return (
+      <div className="commits-note" role="status">
+        <span className="commits-count">
+          {c.ahead} new commit{c.ahead === 1 ? '' : 's'}
+        </span>
+        <span className="commits-msg">
+          on main since your copy{c.latest ? ` — ${c.latest}` : ''}
+          {when ? ` (${when})` : ''}
+        </span>
+        {c.url && (
+          <a className="update-link" href={c.url} target="_blank" rel="noreferrer">
+            View changes ↗
+          </a>
+        )}
+        <code className="update-cmd">git pull</code>
+        <button
+          className="drift-close"
+          title="Dismiss (returns when main moves further ahead)"
+          onClick={dismissCommits}
+        >
+          <IconX size={13} />
+        </button>
+      </div>
+    );
+  }
+  if (!info?.latest) return null; // narrowing for TS; releaseHidden covers it
 
   const dismiss = () => {
     setDismissed(info.latest as string);

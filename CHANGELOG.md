@@ -6,7 +6,26 @@ All notable changes to Helm are documented here. Format follows
 
 ## [Unreleased]
 
+## [0.3.0] — 2026-09-09
 ### Added
+- **"You're N commits behind" as well as "a new version is out"** — Helm is
+  installed by cloning `main`, where the newest release can be weeks old, so
+  the update check now also reports how far `main` has moved ahead of the copy
+  you are running, with the newest commit's subject and a link to exactly those
+  changes on GitHub. It is deliberately quieter than the release banner (one
+  small line, and never both at once): a release is news, a commit is not.
+  Dismissing it brings it back only once main has moved meaningfully further
+  ahead, or after a week. It stays silent whenever the answer would be a guess
+  — a ZIP download rather than a clone, no `git` installed, a commit GitHub has
+  never seen, or a copy carrying commits of its own.
+- **Ctrl+K now runs commands** — the palette was a way to jump to a pane; it is
+  now also the way to *do* things: new pane, add workspace, broadcast, usage,
+  appearance, show/hide the sidebar, desktop alerts, terminal text size, the
+  debug log, the server console, public links, and maximize/minimize/pop-out of
+  the pane you were last working in. Search by what you mean rather than the
+  exact name — "dark" finds Appearance, "cost" finds Usage — and any command
+  that also has a keyboard shortcut shows it, which makes the shortcuts
+  discoverable for the first time.
 - **Talk to a pane instead of typing** — a mic button on each pane (or
   Ctrl+Shift+D) turns speech into a cleaned-up prompt: filler and false starts
   removed, self-corrections resolved, mis-heard identifiers like "use effect"
@@ -80,6 +99,16 @@ All notable changes to Helm are documented here. Format follows
   labels to icons below 1400px.
 
 ### Fixed
+- **Panes no project can show no longer haunt you.** A pane is listed under its
+  project, so one whose project isn't in the sidebar was invisible: you couldn't
+  see it, couldn't kill it, and auto-revive respawned it at every start. Two
+  ways in are closed. The cloudflared installer ran in a pane belonging to no
+  project, which was then saved forever — it is now a one-shot pane that lives
+  only as long as the server that ran it. And any pane already stranded, from
+  that or from a removed project, is dropped at start-up with a line in the
+  debug log saying which and why. If the project list is empty the sweep does
+  nothing at all, since "no projects yet" and "the file failed to load" look
+  identical from there and the second must never wipe your panes.
 - **Ctrl+V pastes into a pane.** Only Ctrl+Shift+V worked before: xterm mapped
   Ctrl+V to a control character and cancelled the browser’s own paste event.
 - **The animated target cursor follows the theme.** It painted its dot and
@@ -87,6 +116,9 @@ All notable changes to Helm are documented here. Format follows
   accent and light/dark switch.
 
 ### Security
+- Cleared new high-severity advisories in transitive dependencies (js-yaml and
+  qs on the server, js-yaml and browserslist in the frontend's dev tooling) —
+  lockfile-only, no declared dependency moved and node-pty stays pinned exact.
 - Cleared four high-severity advisories in transitive dependencies
   (`body-parser`, `postcss`, `nanoid`, `brace-expansion`, `js-yaml`) — all
   patch-level, no declared dependency changed and `node-pty` still pinned.
@@ -180,6 +212,7 @@ PTYs), each with a status badge, name/color, and usage.
 - Windows is the tested platform. macOS/Linux are supported in code but not yet
   verified on hardware.
 
-[Unreleased]: https://github.com/VenJami/Helm/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/VenJami/Helm/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/VenJami/Helm/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/VenJami/Helm/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/VenJami/Helm/releases/tag/v0.1.0
