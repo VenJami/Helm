@@ -264,6 +264,11 @@ any pane or workspace. Transient action errors surface as toasts
   token, hook-token      auth tokens (persist across restarts; delete to rotate)
   workspaces.json        sidebar workspaces
   sessions.json          running sessions → revivable as 'dead' after restart
+                         (at load, panes whose workspace dir is no longer in
+                         workspaces.json are dropped — the grid lists panes per
+                         project, so they could never be shown again; skipped
+                         when the workspace list is empty. One-shot panes, e.g.
+                         the cloudflared installer, are never written here)
   settings.json          server toggles (currently autoRevive)
   hook-settings.json     generated hook config passed via --settings
   imported-transcripts.json  transcript copies made by account switches

@@ -14,6 +14,24 @@
   are logged (🐞 drawer + console) instead of crashing all terminals; boot
   failures still exit loudly. Don't add code that relies on a crash-restart
   to recover state.
+- **Boot-time code runs during module evaluation — mind the temporal dead
+  zone (2026-09-09).** `loadPersistedSessions()` is called where it is
+  defined, part-way down index.mjs, so anything it touches must already be
+  initialized. It calls `persistSessions()`, whose `let persistTimer` used to
+  be declared further down: the server then died at start-up with "Cannot
+  access 'persistTimer' before initialization" — but ONLY for someone whose
+  state actually had a pane to drop, which is exactly the case a build and a
+  quick manual start don't reach. Function declarations hoist; `let`/`const`
+  do not. The smoke test that seeds a stranded pane is what caught it.
+- **A pane belongs to a project, and the grid lists panes by workspace dir.**
+  A pane whose dir isn't in `workspaces.json` cannot be rendered, killed, or
+  reached at all — while auto-revive still respawns it at every boot. So never
+  create a pane for a directory that isn't a workspace unless it is marked
+  `ephemeral` (never persisted; the cloudflared installer is the one case).
+  Sessions loaded with no matching workspace are swept at start-up, but the
+  sweep is skipped when the workspace list is empty, because a failed
+  `workspaces.json` read is indistinguishable from "no projects yet" and must
+  never wipe every pane.
 - **State files are atomic + versioned + backed up (2026-07-05):** all JSON
   state (`sessions`, `workspaces`, `settings`, imported-transcripts ledger,
   tokens) is written temp+rename with the previous good copy kept as
@@ -202,7 +220,8 @@ Two related traps in the same area, both fixed but easy to reintroduce:
   MutationObserver because the Appearance dialog can change them mid-float.
 
 When driving a REAL claude pane in a script of your own, note that the
-folder-trust dialog's default option is **"No, exit"** — a blind `` nudge into
+folder-trust dialog's default option is **"No, exit"** — a blind `
+` nudge into
 a fresh temp dir can quit claude with exit 1 (the pane then reads `exited (1)`
 and, because the TUI's alternate screen is discarded on exit, the replay shows
 the trust dialog again, which looks like it never got past it). `npm run e2e`

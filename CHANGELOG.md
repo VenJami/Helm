@@ -98,6 +98,16 @@ All notable changes to Helm are documented here. Format follows
   labels to icons below 1400px.
 
 ### Fixed
+- **Panes no project can show no longer haunt you.** A pane is listed under its
+  project, so one whose project isn't in the sidebar was invisible: you couldn't
+  see it, couldn't kill it, and auto-revive respawned it at every start. Two
+  ways in are closed. The cloudflared installer ran in a pane belonging to no
+  project, which was then saved forever — it is now a one-shot pane that lives
+  only as long as the server that ran it. And any pane already stranded, from
+  that or from a removed project, is dropped at start-up with a line in the
+  debug log saying which and why. If the project list is empty the sweep does
+  nothing at all, since "no projects yet" and "the file failed to load" look
+  identical from there and the second must never wipe your panes.
 - **Ctrl+V pastes into a pane.** Only Ctrl+Shift+V worked before: xterm mapped
   Ctrl+V to a control character and cancelled the browser’s own paste event.
 - **The animated target cursor follows the theme.** It painted its dot and

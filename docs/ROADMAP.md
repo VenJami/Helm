@@ -757,6 +757,27 @@ render rather than memoised, since memoising would mean wrapping seven handlers
 in useCallback to buy nothing. Verified 7/7 by CDP in a real browser (Ctrl+K
 opens, 14 commands listed, keyword search, ranking, the chord badge).
 
+Panes no project can show (2026-09-09) - found by audit, not by report: the
+owner's real state held 13 persisted panes, two of them `install cloudflared`
+dev panes created by the share-link installer, whose workspace is the HOME dir
+and therefore matches no project. The grid lists a workspace's panes by dir, so
+those two were invisible, unkillable from the UI, and - autoRevive being on -
+re-ran `winget install cloudflared` at every server start, forever. Two closes:
+one-shot panes are marked `ephemeral` (createDevSession; never written to
+sessions.json, so an exited dev pane's normal persistence doesn't catch them),
+and loadPersistedSessions now sweeps panes whose dir isn't in workspaces.json,
+logging each drop under a `prune` tag and rewriting the file so a drop is a
+drop. The sweep is SKIPPED when the workspace list is empty: "no projects yet"
+and "workspaces.json failed to load" are indistinguishable from there, and the
+second must never wipe every pane. Writing the test found a second bug it would
+have shipped: persistSessions' `let persistTimer` was declared BELOW the load
+call, so the first server that actually had a pane to drop died at boot with a
+TDZ error - invisible to a build, a lint, and a manual start on clean state
+(both traps now in GOTCHAS). Verified: smoke 35 (one-shot pane not persisted,
+stranded pane dropped, empty-list guard), real-claude e2e 10/10 on claude
+2.1.260, and a boot against a COPY of the owner's real state - the two
+installer panes gone, all 11 real panes kept.
+
 ## Short-term backlog (rough priority order, owner-approved direction)
 (empty — next items to be chosen with the owner)
 

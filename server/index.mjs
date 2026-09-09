@@ -186,6 +186,8 @@ function saveSettings() {
  * @property {string|null} claudeSessionId  claude's own session id (from hooks) — for --resume
  * @property {string|null} transcriptPath
  * @property {string} createdAt
+ * @property {boolean} [ephemeral]     one-shot pane (the cloudflared installer):
+ *                                     lives for this server only, never persisted
  */
 
 /** @type {Map<string, Session>} id → session */
@@ -449,7 +451,11 @@ function devSessionsFor(workspaceDir) {
   );
 }
 
-function createDevSession({ workspace, command, name, cols, rows }) {
+// `ephemeral` marks a one-shot pane (the cloudflared installer): it belongs to
+// no project, so the grid — which lists a workspace's panes by dir — could
+// never show it again after a restart. Persisting one leaves an invisible,
+// unkillable pane that auto-revive re-runs at every boot.
+function createDevSession({ workspace, command, name, cols, rows, ephemeral = false }) {
   /** @type {Session} */
   const session = {
     id: crypto.randomUUID(),
@@ -471,6 +477,7 @@ function createDevSession({ workspace, command, name, cols, rows }) {
     claudeSessionId: null, // dev panes have no conversation
     transcriptPath: null,
     createdAt: new Date().toISOString(),
+    ephemeral,
   };
   spawnPty(session, [], { cols, rows });
   sessions.set(session.id, session);
@@ -503,13 +510,46 @@ function reviveSession(session, { cols, rows }) {
 // ---- persistence: running sessions survive a server restart as 'dead'
 // entries that can be revived via `claude --resume <claudeSessionId>`.
 
+// Loaded here, ahead of its own section below, because loadPersistedSessions
+// prunes against it: a pane whose project is gone can never be shown again.
+/** @type {any[]} */
+let workspaces = loadWorkspaces();
+
+// Declared up here, not beside persistSessions below, because the load-time
+// sweep calls that function while this module is still evaluating — a `let`
+// declared after the call is still in its temporal dead zone and throws.
+let persistTimer = null;
+
+// Same dir written two ways is the same project — Windows paths differ in case
+// and separators without meaning anything by it.
+function dirKey(dir) {
+  const resolved = path.resolve(String(dir || ''));
+  return IS_WIN ? resolved.toLowerCase() : resolved;
+}
+
 function loadPersistedSessions() {
   const saved = readJsonWithBackup(SESSIONS_FILE, 'sessions');
   // v1 files wrap the list ({version, sessions}); pre-version files were bare arrays
   const list = Array.isArray(saved) ? saved : saved?.sessions;
   if (!Array.isArray(list)) return;
+  // Panes are shown per project (the grid lists a workspace's panes by dir), so
+  // one whose project is no longer in the list is unreachable: invisible in the
+  // UI, impossible to kill from it, and respawned by auto-revive at every boot
+  // for as long as the file exists. Drop those, loudly. Skipped when the list is
+  // empty, because "no projects yet" and "workspaces.json failed to load" look
+  // identical from here and the second must never wipe every pane.
+  const knownDirs = new Set(workspaces.map((w) => dirKey(w.dir)));
+  let dropped = 0;
   for (const s of list) {
     if (!s?.id || !s?.workspace) continue;
+    if (knownDirs.size && !knownDirs.has(dirKey(s.workspace))) {
+      dbg(
+        'prune',
+        `dropped ${s.name ?? 'pane'} (${String(s.id).slice(0, 8)}) — no project at ${s.workspace}`,
+      );
+      dropped++;
+      continue;
+    }
     sessions.set(s.id, {
       id: s.id,
       name: s.name ?? 'Pane',
@@ -532,6 +572,9 @@ function loadPersistedSessions() {
       createdAt: s.createdAt ?? new Date().toISOString(),
     });
   }
+  // Write the shorter list back now, rather than leaving stale entries on disk
+  // until something else happens to persist — a drop should be a drop.
+  if (dropped) persistSessions();
 }
 loadPersistedSessions();
 
@@ -566,15 +609,15 @@ if (settings.autoRevive) {
   }
 }
 
-let persistTimer = null;
-
 function persistSessions() {
   clearTimeout(persistTimer);
   persistTimer = null;
   // running/dead sessions always survive a restart; exited ones only when a
   // conversation id was captured — they reload as revivable 'dead' entries.
   // A stopped dev pane always survives: its command is all it needs to restart.
+  // One-shot panes (`ephemeral`) never do — see createDevSession.
   const list = [...sessions.values()]
+    .filter((s) => !s.ephemeral)
     .filter(
       (s) =>
         s.status === 'running' ||
@@ -1668,7 +1711,6 @@ function loadWorkspaces() {
   }
   return list;
 }
-let workspaces = loadWorkspaces();
 
 function saveWorkspaces() {
   writeJsonAtomic(WORKSPACES_FILE, { version: 1, workspaces });
@@ -2020,6 +2062,7 @@ app.post('/api/tunnels/install', async (req, res) => {
       workspace: os.homedir(),
       command: INSTALL_COMMAND,
       name: 'install cloudflared',
+      ephemeral: true, // a one-off install belongs to no project — never persist it
       cols: Number(cols) || 120,
       rows: Number(rows) || 30,
     });

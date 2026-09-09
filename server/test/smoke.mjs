@@ -1289,3 +1289,176 @@ test('polish sanitizer: meta-commentary never reaches the pane', async () => {
     'Add a retry to the update check.',
   );
 });
+
+// ---- panes no project can show ------------------------------------------
+// Two halves of one failure: the grid lists a workspace's panes by dir, so a
+// pane whose project isn't in the list is invisible, unkillable from the UI,
+// and respawned by auto-revive at every boot. Driven on SEPARATE servers with
+// their own data dirs, because the behaviour under test happens at load and
+// the suite's main server boots once.
+
+// Boot an extra server on its own data dir. Returns a caller for its API and
+// a stop(), or throws if it never came up. Retried across candidate ports for
+// the same reason tryBoot is: Windows rejects scattered high ports with EACCES.
+async function bootAside(dataDir, extraEnv = {}) {
+  for (let i = 0; i < 5; i++) {
+    const aside = await tryBootAside(dataDir, extraEnv, await freePort());
+    if (aside) return aside;
+    await sleep(100);
+  }
+  throw new Error('aside server did not come up on any candidate port');
+}
+
+async function tryBootAside(dataDir, extraEnv, port) {
+  const env = {
+    ...process.env,
+    PORT: String(port),
+    HELM_DATA_DIR: dataDir,
+    HELM_CLAUDE_CMD: wrapper,
+    HELM_NO_UPDATE_CHECK: '1', // nothing to say here, and it needn't reach the stub
+    ...extraEnv,
+  };
+  delete env.CLAUDE_CONFIG_DIR;
+  const proc = spawn(process.execPath, ['index.mjs'], {
+    cwd: serverDir,
+    env,
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  proc.stdout.on('data', () => {}); // drain, so the child never blocks on a full pipe
+  proc.stderr.on('data', () => {});
+  const stop = () => proc.kill();
+  const deadline = Date.now() + 12000;
+  let token = '';
+  while (Date.now() < deadline) {
+    try {
+      if (!token) token = fs.readFileSync(path.join(dataDir, 'token'), 'utf8').trim();
+      const res = await fetch(`http://127.0.0.1:${port}/api/sessions`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (res.ok) {
+        const call = (p, opts = {}) =>
+          fetch(`http://127.0.0.1:${port}/api${p}`, {
+            ...opts,
+            headers: {
+              Authorization: `Bearer ${token}`,
+              'Content-Type': 'application/json',
+              ...opts.headers,
+            },
+          });
+        return { call, stop };
+      }
+    } catch {
+      /* not up yet */
+    }
+    if (proc.exitCode !== null) break; // bind refused — try another port
+    await sleep(150);
+  }
+  stop();
+  return null;
+}
+
+// Seed a data dir with the state a server should find at boot.
+function seedState(name, { workspaces, sessions }) {
+  const dir = mkdir(path.join(tmp, name));
+  if (workspaces) {
+    fs.writeFileSync(path.join(dir, 'workspaces.json'), JSON.stringify({ version: 1, workspaces }));
+  }
+  if (sessions) {
+    fs.writeFileSync(path.join(dir, 'sessions.json'), JSON.stringify({ version: 1, sessions }));
+  }
+  return dir;
+}
+
+const persistedSessions = (dataDir) => {
+  try {
+    return JSON.parse(fs.readFileSync(path.join(dataDir, 'sessions.json'), 'utf8')).sessions;
+  } catch {
+    return []; // never written = nothing persisted, which is the point
+  }
+};
+
+test('one-shot install pane never outlives the server that ran it', async () => {
+  // cloudflared must look ABSENT or the route refuses; the install command is
+  // pinned to something harmless, since the real one is a winget install.
+  const dir = seedState('oneshot', {});
+  const aside = await bootAside(dir, {
+    HELM_CLOUDFLARED_CMD: path.join(tmp, 'no-such-cloudflared'),
+    HELM_INSTALL_CMD: `"${process.execPath}" --version`,
+  });
+  try {
+    const res = await aside.call('/tunnels/install', { method: 'POST' });
+    assert.equal(res.status, 201);
+    const pane = await res.json();
+    assert.equal(pane.name, 'install cloudflared');
+
+    // It's a real pane while the server lives — that's the whole point of
+    // installing in one (you watch it, and answer any elevation prompt).
+    const live = await (await aside.call('/sessions')).json();
+    assert.ok(live.some((s) => s.id === pane.id));
+
+    // …but it belongs to no project, so it must not be written to disk. A dev
+    // pane that has exited normally IS persisted, so this only passes if the
+    // one-shot flag is doing its job.
+    await sleep(1200); // let it exit and the exit-time persist run
+    assert.deepEqual(
+      persistedSessions(dir).filter((s) => s.name === 'install cloudflared'),
+      [],
+    );
+  } finally {
+    aside.stop();
+  }
+});
+
+test('a pane whose project is gone is dropped at boot', async () => {
+  const kept = mkdir(path.join(tmp, 'kept-project'));
+  const gone = path.join(tmp, 'removed-project'); // never created, never listed
+  const dir = seedState('sweep', {
+    workspaces: [{ id: 'w1', name: 'Kept', dir: kept }],
+    sessions: [
+      { id: 'keep-me', name: 'Kept pane', workspace: kept, kind: 'claude' },
+      { id: 'drop-me', name: 'Stranded pane', workspace: gone, kind: 'claude' },
+      // The installer pane this fix stops creating — already stranded in the
+      // state files of anyone who used the install button before it.
+      {
+        id: 'drop-installer',
+        name: 'install cloudflared',
+        workspace: os.homedir(),
+        kind: 'dev',
+        command: 'winget install --id Cloudflare.cloudflared',
+      },
+    ],
+  });
+  const aside = await bootAside(dir);
+  try {
+    const list = await (await aside.call('/sessions')).json();
+    assert.deepEqual(
+      list.map((s) => s.id),
+      ['keep-me'],
+    );
+    // and the drop is permanent, not just hidden for this run
+    assert.deepEqual(
+      persistedSessions(dir).map((s) => s.id),
+      ['keep-me'],
+    );
+  } finally {
+    aside.stop();
+  }
+});
+
+test('an empty workspace list never wipes panes', async () => {
+  // "no projects yet" and "workspaces.json failed to load" look identical from
+  // the sweep, so with nothing to compare against it must drop nothing.
+  const dir = seedState('sweep-guard', {
+    sessions: [{ id: 'survivor', name: 'Pane', workspace: tmp, kind: 'claude' }],
+  });
+  const aside = await bootAside(dir);
+  try {
+    const list = await (await aside.call('/sessions')).json();
+    assert.deepEqual(
+      list.map((s) => s.id),
+      ['survivor'],
+    );
+  } finally {
+    aside.stop();
+  }
+});

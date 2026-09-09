@@ -107,11 +107,14 @@ function wingetCommand() {
 }
 
 export const INSTALL_COMMAND =
-  process.platform === 'win32'
+  // The test suite pins a harmless stand-in here, the way HELM_CLOUDFLARED_CMD
+  // pins the binary — a suite that really ran winget would be unrunnable.
+  process.env.HELM_INSTALL_CMD ||
+  (process.platform === 'win32'
     ? wingetCommand()
     : process.platform === 'darwin'
       ? 'brew install cloudflared'
-      : null;
+      : null);
 
 export const INSTALL_DOCS =
   'https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/';
