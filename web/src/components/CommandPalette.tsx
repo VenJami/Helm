@@ -15,6 +15,7 @@ import {
   IconPopOut,
   IconServer,
   IconTerminal,
+  IconTrash,
 } from './Icons';
 import { IconSearch } from './AnimatedIcons';
 
@@ -41,7 +42,8 @@ export type PaletteIcon =
   | 'minimize'
   | 'popout'
   | 'up'
-  | 'down';
+  | 'down'
+  | 'trash';
 
 export interface PaletteAction {
   key: string;
@@ -251,6 +253,7 @@ export function CommandPalette({
                       {it.icon === 'popout' && <IconPopOut size={13} />}
                       {it.icon === 'up' && <IconChevronUp size={13} />}
                       {it.icon === 'down' && <IconChevronDown size={13} />}
+                      {it.icon === 'trash' && <IconTrash size={13} />}
                     </span>
                     <span className="cmdk-name">{it.label}</span>
                     {it.hint && <span className="cmdk-hint">{it.hint}</span>}

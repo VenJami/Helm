@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { api } from '../api';
 import type { UpdateInfo } from '../types';
 import { IconX } from './Icons';
+import { age } from '../lib/time';
 
 // "A newer Helm is out" notice. The server does the actual GitHub check (once,
 // cached, shared by every tab — see server/src/update.mjs); this only renders a
@@ -45,18 +46,6 @@ function loadCommitsDismissal(): CommitsDismissal | null {
     /* corrupt or unavailable — treat as never dismissed */
   }
   return null;
-}
-
-/** Short "how old" label for the newest commit: 3h, 2d, 3w. */
-function age(iso: string | null): string {
-  if (!iso) return '';
-  const ms = Date.now() - new Date(iso).getTime();
-  if (!Number.isFinite(ms) || ms < 0) return '';
-  const h = Math.floor(ms / 3600000);
-  if (h < 1) return 'just now';
-  if (h < 24) return `${h}h ago`;
-  const d = Math.floor(h / 24);
-  return d < 14 ? `${d}d ago` : `${Math.floor(d / 7)}w ago`;
 }
 
 export function UpdateBanner() {

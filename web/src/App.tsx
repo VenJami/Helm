@@ -26,6 +26,7 @@ import { AppearanceModal } from './components/modals/AppearanceModal';
 import { ShareModal } from './components/modals/ShareModal';
 import { InstallCloudflaredModal } from './components/modals/InstallCloudflaredModal';
 import { SharesModal } from './components/modals/SharesModal';
+import { CleanupModal } from './components/modals/CleanupModal';
 import {
   IconBug,
   IconGlobe,
@@ -64,6 +65,7 @@ type Dialog =
   // The live public links: full URLs, copy/open/extend/stop. A share URL needs
   // somewhere permanent to live — a toast and a tooltip weren't it.
   | { kind: 'shares' }
+  | { kind: 'cleanup' }
   | null;
 
 // ⌘K on Mac, Ctrl K elsewhere — for the command-palette hint.
@@ -868,6 +870,14 @@ export function App() {
       keywords: 'tokens cost spend money limit',
       run: openUsage,
     });
+    if (sessions.some((s) => s.status !== 'running'))
+      list.push({
+        key: 'cleanup',
+        label: 'Clean up old panes…',
+        icon: 'trash',
+        keywords: 'dead remove delete stale tidy prune old',
+        run: () => setDialog({ kind: 'cleanup' }),
+      });
     // Pane commands act on the pane you were last typing in (falling back to
     // the maximized one, then the first on screen) — resolved when the command
     // RUNS, since the active-pane anchor is a ref and wouldn't re-run this memo.
@@ -973,6 +983,21 @@ export function App() {
   // Modal callbacks — the modals validate + own their drafts; App handles the
   // state fallout. closeDialog is trivial now (no draft fields to reset).
   const closeDialog = () => setDialog(null);
+
+  // Bulk pane removal for the cleanup dialog. One DELETE per pane (the server
+  // has no bulk route and doesn't need one), each failure reported but never
+  // stopping the rest — a pane the server already forgot shouldn't strand the
+  // other nine.
+  const removePanes = async (ids: string[]) => {
+    const results = await Promise.allSettled(ids.map((id) => api.killSession(id)));
+    const gone = ids.filter((_, i) => results[i].status === 'fulfilled');
+    gone.forEach(onKilled);
+    const failed = ids.length - gone.length;
+    if (failed) toast.error(`${failed} pane${failed === 1 ? '' : 's'} could not be removed`);
+    else if (gone.length)
+      toast.success(`Removed ${gone.length} pane${gone.length === 1 ? '' : 's'}`);
+    refresh();
+  };
 
   const createProfile = (name: string) => {
     chooseProfile(name); // pin the new account to this workspace
@@ -1443,6 +1468,15 @@ export function App() {
 
       {dialog?.kind === 'usage' && (
         <UsageModal profiles={profiles} defaultMapped={defaultMapped} onClose={closeDialog} />
+      )}
+
+      {dialog?.kind === 'cleanup' && (
+        <CleanupModal
+          sessions={sessions}
+          workspaces={workspaces}
+          onRemove={removePanes}
+          onClose={closeDialog}
+        />
       )}
 
       {dialog?.kind === 'broadcast' && (
