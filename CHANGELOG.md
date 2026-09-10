@@ -5,6 +5,16 @@ All notable changes to Helm are documented here. Format follows
 [SemVer](https://semver.org/). Dates are YYYY-MM-DD.
 
 ## [Unreleased]
+### Added
+- **A crash in the window no longer looks like Helm dying.** Any error while
+  drawing the page used to blank the whole window with nothing said, even
+  though every pane was still running in the server. Now you get a card that
+  says so, shows what broke, and offers the reload that fixes it.
+- **Clean up old panes** (Ctrl+K → "Clean up old panes…"). Panes whose process
+  died with a server restart used to pile up forever, and one from July looked
+  exactly like one from this morning. Dead panes now say how old they are, and
+  one dialog lists every non-running pane oldest-first with its project and
+  age, pre-ticking anything past a fortnight.
 
 ## [0.3.0] — 2026-09-09
 ### Added

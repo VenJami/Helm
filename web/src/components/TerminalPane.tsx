@@ -7,6 +7,7 @@ import { SearchAddon } from '@xterm/addon-search';
 import '@xterm/xterm/css/xterm.css';
 import { api, wsUrl } from '../api';
 import { accountLabel } from '../accounts';
+import { age } from '../lib/time';
 import { Modal } from './Modal';
 import { toast } from './Toaster';
 import {
@@ -552,6 +553,7 @@ function TerminalPaneImpl({
   }, [conn, session.activity]);
 
   const activity = conn === 'live' ? session.activity : null;
+  const paneAge = age(session.createdAt);
   const dotClass =
     conn === 'live'
       ? { working: 'dot-working', waiting: 'dot-waiting', idle: 'dot-live' }[activity ?? 'idle']
@@ -574,7 +576,9 @@ function TerminalPaneImpl({
         : `${activity ?? 'live'}${since} · ${profileText}`,
     disconnected: 'disconnected',
     exited: `exited (${exitCode ?? session.exitCode})`,
-    dead: 'dead — server restarted',
+    // Dead panes outlive whatever you were doing in them, and one from July
+    // looks exactly like one from this morning without the age.
+    dead: `dead — server restarted${paneAge ? ` · started ${paneAge}` : ''}`,
   }[conn];
 
   return (
@@ -887,7 +891,8 @@ function TerminalPaneImpl({
         {conn === 'dead' && (
           <div className="pane-overlay">
             <p>
-              This pane's process died with a server restart.
+              This pane&rsquo;s process died with a server restart.
+              {paneAge && ` It was started ${paneAge}.`}
               {isDev
                 ? ` Start it again to run "${session.command}" in this folder.`
                 : session.canResume

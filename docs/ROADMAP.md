@@ -778,6 +778,30 @@ stranded pane dropped, empty-list guard), real-claude e2e 10/10 on claude
 2.1.260, and a boot against a COPY of the owner's real state - the two
 installer panes gone, all 11 real panes kept.
 
+Crash screen + old-pane cleanup (2026-09-10) - the two hygiene items left over
+from the v0.3.0 audit. (1) `main.tsx` rendered `<App/>` bare, so any render
+throw unmounted the entire tree: a white window, no message, no hint that the
+panes were fine and a reload would bring them back. New
+`components/ErrorBoundary.tsx` catches it and says exactly that (message shown,
+stack to the console + a Copy details button). (2) Dead panes accumulated with
+nothing showing their age - the owner's own store held 5-53 day-old panes, all
+looking alike. A dead pane's badge and revive overlay now say "started 7w ago",
+and a new `modals/CleanupModal` (Ctrl+K -> "Clean up old panes...") lists every
+non-running pane oldest-first with project + age, pre-ticking anything older
+than 14 days (past "I'll get back to it", short of claude's own ~30-day
+transcript cleanup, so a listed pane can usually still be revived). Removal is
+one DELETE per pane through the existing route - Promise.allSettled, so one
+failure doesn't strand the rest - since "delete these ids" is a loop, not a
+server feature. The duplicated `age()` formatter in UpdateBanner moved to a
+shared `lib/time.ts` (+`daysSince`, which returns Infinity for an unusable date
+so such a pane is offered for cleanup rather than hidden forever). 26 vitest
+tests. Verified by CDP in a real browser against a seeded isolated server:
+13/13 on the cleanup path (ages rendered, oldest-first, the 14-day pre-tick,
+the count following a tick, and the server REALLY deleting the three), 7/7 on
+the boundary (a deliberately injected render throw caught, real message shown,
+normal render restored after), and 4/4 that a LIVE pane still renders with the
+changed component and carries no age line.
+
 ## Short-term backlog (rough priority order, owner-approved direction)
 (empty — next items to be chosen with the owner)
 
