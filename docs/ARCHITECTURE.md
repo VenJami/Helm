@@ -26,7 +26,8 @@ Browser (React + xterm.js grid) <--WS/REST--> Node server <--PTY--> claude.cmd
   references, desktop notifications) · `useWorkspaceStatus` (git/dev-server
   dots + share-link state) · `useTheme` (dark/light + accent → `data-*` attrs) ·
   `useGridWeights` (per-workspace pane sizing) · `usePipWindow` (floating
-  always-on-top pane) · `useDictation` (browser Web Speech API for the mic
+  always-on-top pane) · `useFocusRequests` (the app's end of the focus long
+  poll — a click in another window moves this one) · `useDictation` (browser Web Speech API for the mic
   button; reports `supported:false` where the API is missing so the caller can
   hide the button, and restarts the recogniser across pauses).
 - `web/src/lib/storage.ts` — ALL localStorage behind typed, validated
@@ -41,6 +42,51 @@ Browser (React + xterm.js grid) <--WS/REST--> Node server <--PTY--> claude.cmd
   commands — App passes them in as one `actions: PaletteAction[]` array, so the
   palette stays presentational; each action carries optional `keywords` for
   search-by-meaning and a `hint` naming its key chord).
+- `desktop/HelmNotch/` — the NATIVE notch window (C# / WPF, Windows-only,
+  entirely optional; Helm runs fine without it). It renders nothing itself: a
+  frameless, always-on-top WPF window hosting a WebView2 pointed at
+  `/hud?notch=1`, so the whole UI stays React + CSS in `web/`. Deliberately NOT
+  `AllowsTransparency` — that hosts it as a layered window, which renders the
+  prettier version and then swallows all mouse input (GOTCHAS). The silhouette
+  is a window REGION instead: flush to the top of the screen with square top
+  corners, a deep curve on the bottom two, re-cut on every resize. `HELMNOTCH_DEBUG_PORT` opens its DevTools port, the only
+  way to drive the window from a test. The page talks to
+  it through `window.chrome.webview` (`web/src/lib/nativeHost.ts` ↔
+  `MainWindow.OnWebMessage`): `config`, `resize`, `close`, and one message the
+  other way (host→page `{compact}`, via `PostWebMessageAsJson` → `onHostMessage`)
+  — the host owns hover detection because a 24px strip cannot tell where the
+  cursor is relative to the screen edge. Window WIDTH is a function of the mode
+  (200 compact / 460 expanded), never of measured content; only height comes
+  from the page. It is deliberately
+  NOT movable. While following (the default) it hides whenever a visible,
+  non-minimised window whose title ends "Helm ⎈" exists, so it is only ever on
+  screen when Helm is not; while auto-compacting (also default) it rests as a
+  strip of per-pane status lights (`NotchStrip`), or — when a pane is blocked —
+  that project's name and "Needs you", and grows into the full list on hover.
+  The compact window has two FIXED widths for those two faces; the page picks
+  one by state (`compactWidthFor`) and never measures. Pure pane-state helpers
+  live in `lib/paneStatus.ts` so both faces and the HUD share one definition.
+  What it lists is filtered by `notchPanes`: panes idle beyond 30 min (and dead
+  ones) collapse to a "+N quiet" line, and projects muted with `notch:false`
+  drop out entirely and are not counted. The notch only — `/hud` in a browser
+  window stays the full view.
+  The notch renders `AgentHud` with `chrome={false}` — no header, no count, no
+  spend, no collapse or close buttons — and closes on right-click instead. Following outranks compacting. There is deliberately NO
+  click-through message — a window that ignores the mouse stops receiving mouse
+  messages, so the page could never turn it back off; instead the window HUGS its
+  content (a `ResizeObserver` drives `resize`), which leaves nothing around the
+  card to click through. Built with `desktop/start-notch.cmd` (needs a .NET SDK;
+  the WebView2 + WindowsDesktop runtimes ship with Windows). Traps in GOTCHAS.
+- `web/index.html` + `web/hud.html` — TWO built pages (Vite `rollupOptions.input`),
+  each served by the Node server with `%%HELM_TOKEN%%` substituted: the app at
+  `/`, and the floating agent HUD at `/hud`. The HUD exists as a standalone
+  document so it can live in a window that is NOT a child of the app's — a
+  second browser window today, a native always-on-top shell later. `HudApp.tsx`
+  is its root: it fetches its own data over the same REST API (polling only what
+  it renders — sessions, profiles, workspaces, git), mirrors the app's theme out
+  of localStorage, and sends jumps through `POST /api/focus`. `AgentHud.tsx`
+  itself is shared verbatim with the picture-in-picture copy App portals — only
+  the `onJumpToPane`/`onClose` props differ.
 - `web/src/api.ts` — token + fetch wrapper (auto-reloads page once on 401),
   `types.ts` — shared shapes incl. the typed WS protocol union.
 
@@ -125,7 +171,37 @@ Browser (React + xterm.js grid) <--WS/REST--> Node server <--PTY--> claude.cmd
 - `POST /api/sessions/:id/type` — `{text}` (1–4000 chars): write into a running
   pane's input WITHOUT Enter (the dictation path's last step, so you read the
   text before the agent acts on it). Dev panes refuse it, like broadcast.
-- `GET/PATCH /api/settings` — server toggles, currently `{autoRevive}`.
+- `POST /api/hud/ping` — heartbeat from the floating agent HUD. This and only
+  this ARMS Approve/Deny: with no ping in the last 8 s, every `PermissionRequest`
+  hook is answered the instant it arrives, so a Helm without the HUD open adds
+  no latency to any pane and behaves exactly as it did before the feature.
+- `POST /api/sessions/:id/approve` — `{requestId, decision:'allow'|'deny'}`:
+  answer the tool call the pane is blocked on. `requestId` is Helm's own id for
+  the held request (from `pendingId` on the session — claude sends no id of its
+  own). 409 = that request is no longer waiting: it lapsed back into the pane's
+  own prompt after 12 s, or the pane died. The UI treats 409 as information,
+  not failure.
+- `POST /api/focus` — `{sessionId}`: "bring that pane to the front", raised by
+  a HUD running in its own window. `GET /api/focus/wait?since=<ms>` is the other
+  half: the app parks a LONG POLL there and the server answers the instant a
+  request lands (or after ~25 s with a null `sessionId`, and the client
+  reconnects). Deliberately server-mediated rather than a `BroadcastChannel`,
+  which only reaches documents in the same browser — the window this exists for
+  may be a separate process. `since` is the cursor: a request raised while
+  nobody was parked is still delivered to the next poll that asks from before
+  it, and never replayed to one that asks from after.
+- `GET/POST /api/notch` — `{supported, running, started}`: open the native notch
+  window. `supported` is false off Windows and in a checkout that has never
+  built it, so the UI hides the entry instead of offering something that cannot
+  work; POST is a no-op when one is already up (checked with `tasklist` at click
+  time rather than polled). Spawned detached and unref'd, so the notch outlives
+  the request and a Helm shutdown doesn't close a window you opened on purpose.
+- `GET/PATCH /api/settings` — server toggles:
+  `{autoRevive, notchFollowsHelm, notchAutoHide}`.
+  `notchFollowsHelm` lives here rather than in localStorage because the native
+  notch runs in its own WebView2 profile and shares no storage with the browser;
+  the notch page polls it and relays it to the host, so the auth token stays in
+  the page.
 - `GET /api/logs?after=<seq>` — in-memory server event log for the UI's 🐞
   drawer; `startedAt`/`pid` identify the process (stale-server check).
 - `GET/POST /api/console` → `{supported, visible}` — show/hide the server's own
@@ -194,7 +270,15 @@ and the header of `server/src/tunnel.mjs`.
 
 - `GET /api/profiles` → `{default:{email}, profiles:[{name,email}]}`;
   `DELETE /api/profiles/:name` (refused while a running session uses it).
-- `POST /api/hook` — hook relay (own token via `x-helm-hook` header).
+- `POST /api/hook` — hook relay (own token via `x-helm-hook` header). Answers
+  `{ok:true}` for every event except `PermissionRequest`, where the reply is a
+  DECISION (`{decision:'allow'|'deny'|'ask'}`) and the response may be HELD
+  OPEN for up to 12 s while the HUD offers Approve/Deny. `'ask'` — the answer
+  whenever the HUD is closed, the hold lapses, or the pane dies — means "no
+  opinion", and the pane prompts for itself exactly as it always did. The relay
+  turns a decision into claude's own reply shape on stdout
+  (CLAUDE_INTERNALS §5a; the shape is undocumented and the published docs are
+  wrong about it).
 - `GET /ws?session=<id>&token=<t>` — attach. Server→client: `data`, `replay`
   (ring-buffer catch-up), `exit {code}`. Client→server: `input {data}`,
   `resize {cols, rows}`.

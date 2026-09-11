@@ -211,6 +211,17 @@ the app state even advances (the pane leaves the grid) — but no separate windo
 or CDP target is ever created, so every assertion about the floating window
 fails while the feature is fine. Launch a headed browser for this one.
 
+**Never close the old floating window before opening the new one.**
+`requestWindow()` needs *transient user activation* — the few seconds of
+permission a click grants — and `Window.close()` can spend it, so a
+close-then-request sequence throws `Document PiP requires user activation` even
+though the user really did click. There is only ever one such window per
+document, so requesting a new one already replaces the old: just request, and
+let the old window's `pagehide` teardown run on its own (the caller's
+in-flight guard is what stops that teardown from clearing the state you are
+about to set). A rejected open must also reset the "it's floating" state, or
+the grid is left missing a pane that is nowhere on screen.
+
 Two related traps in the same area, both fixed but easy to reintroduce:
 - Anything bound to the page's `document`/`window` (a document-level paste
   fallback, a Modal's Esc handler) is invisible to the floating window, which
@@ -228,6 +239,24 @@ the trust dialog again, which looks like it never got past it). `npm run e2e`
 handles this correctly; the cheap alternative for one-off scripts is to point
 the workspace at an ALREADY-TRUSTED directory so no dialog appears at all, and
 to send a `resize` on the attached socket before waiting for `activity`.
+
+## `mkdirSync`'s return value is a `\\?\` path, and ConPTY silently rejects it
+`fs.mkdirSync(p, { recursive: true })` does not return `p` — on Windows it
+returns the extended-length form, `\\?\C:\Users\...`. Node accepts that
+everywhere, so it looks fine; node-pty does not, and rather than failing it
+starts the process in **`C:\Windows`**. The pane runs, hooks fire, the
+transcript appears — and every relative file operation inside it lands in a
+directory that isn't writable, which surfaces as claude reporting
+`EPERM ... C:\Windows\<file>` long after the real mistake.
+
+```js
+const dir = fs.mkdirSync(path.join(tmp, 'proj'), { recursive: true }); // WRONG
+const dir = path.join(tmp, 'proj');                                    // right
+fs.mkdirSync(dir, { recursive: true });
+```
+
+This sat unnoticed in `test/e2e-real.mjs` until a check finally depended on the
+pane's cwd being writable.
 
 ## `--allowed-tools ""` does NOT disable tools (it cost 28x)
 For a headless `claude -p` call that only rewrites text (the dictation polish),
@@ -277,6 +306,142 @@ whose answer is 24 tokens. `MAX_THINKING_TOKENS=0` took it from 16 s / $0.0083
 to 2.1 s / $0.0011 per dictation with the 10-case bench still at 10/10. For any
 short, mechanical `claude -p` call, turn thinking off first and measure second;
 for a call that genuinely reasons (suggest-start), leave it on.
+
+## The native notch: two Windows traps that look like "it doesn't work"
+Both cost a debugging cycle on the WPF + WebView2 notch (`desktop/HelmNotch`).
+
+**1. `AllowsTransparency="True"` on a WPF window hosting WebView2 renders
+beautifully and accepts NO MOUSE INPUT.** The flag makes WPF host the window as
+a LAYERED window (`WS_EX_LAYERED`), and the hosted WebView2 never receives a
+mouse message. Shipped exactly once; the owner reported "i cant click the notch,
+i cant close it". Every visual check passed — transparent corners, drop shadow
+over the live desktop, the window resizing to its content — because rendering
+and input are different subsystems and I had only tested the first.
+A/B, same binary, same synthetic OS click at the window's centre:
+`WS_EX_LAYERED=True` → the click goes nowhere; `WS_EX_LAYERED=False` → the click
+reaches the page. So: NO `AllowsTransparency`. Shape comes from DWM instead —
+`DwmSetWindowAttribute(hwnd, DWMWA_WINDOW_CORNER_PREFERENCE=33, DWMWCP_ROUND=2)`
+in `SourceInitialized` — which rounds the window itself, costs no input, and is
+ignored harmlessly on pre-22H2 Windows. The trade is real: no per-pixel alpha
+and no soft shadow. Worth it, because a window you cannot click is not a window.
+
+**Two testing lessons under this one.** A screenshot proves rendering and
+NOTHING about input — for anything interactive, assert on an interaction with a
+consequence (here: click the close button, assert the PROCESS exits). And CDP's
+`Input.dispatchMouseEvent` injects straight into the renderer, BYPASSING the OS
+window message queue — precisely the path a layered window breaks — so it would
+have passed against the broken build. Real `SetCursorPos` + `mouse_event` is
+what actually proves a window is clickable. `HELMNOTCH_DEBUG_PORT` opens the
+notch's DevTools port for the DOM-level half of such a test.
+
+**2. Sizing a window from the page it hosts is a FEEDBACK LOOP if you do both
+axes.** Shipped and immediately reported as "it's shaking left and right on my
+screen". The page measured its own width and asked the window to match; the new
+window width reflowed the content and made the page-level scrollbar appear or
+disappear, which changed the measured width straight back. It settled into an
+oscillation between two widths, and because the window re-centred itself after
+each change (`Left += (before - Width) / 2`), that read as the whole notch
+shaking sideways several times a second. Three parts to the fix, all needed:
+**the window owns its WIDTH and only height follows content** (content height
+depends on width, not the reverse, so height alone cannot loop); `overflow:
+hidden` on the notch document so no scrollbar can flip the layout; and a 2px
+dead band at both ends for CSS-pixel-vs-DIP rounding. Cap long content with a
+FIXED pixel `max-height`, never a `vh` one — the viewport height is the thing
+being driven, so sizing content off it is circular again. Regression-checked by
+sampling `GetWindowRect` 40 times over 10 s and asserting one distinct left and
+one distinct width.
+
+**3. Animating a window: proportional steps and separate property sets both
+show up as jitter.** Owner-reported on the notch's open/close morph. Three
+causes, all in one small loop: (a) moving a FRACTION of the remaining distance
+per tick never really converges, so it ran a long tail of sub-pixel frames, each
+repainting and re-cutting the window region; (b) setting WPF's `Left`, `Width`
+and `Height` separately issues a window reposition PER PROPERTY, so one
+animation frame moved the window two or three times — visible as wobble; (c)
+fractional sizes made each frame land on a different sub-pixel rounding. Fix:
+time-based easing over a fixed duration (easeOutCubic, 160 ms) that lands
+exactly, whole-pixel sizes, and ONE `SetWindowPos` per frame with the region
+re-cut only when the size actually changed. Jitter is measurable, so measure it:
+sample `GetWindowRect` every ~8 ms through the transition and assert the width
+never reverses, the window stays centred on every frame, it lands exactly on the
+target, and nothing moves afterwards.
+
+**4. A page cannot raise its own window; a native process can.** The notch's
+"click an agent to go to it" did the pane selection correctly and then called
+`window.focus()` in Helm's page to bring it forward — which browsers ignore for
+a minimised or background window. So the right pane was selected inside a Helm
+that stayed hidden, in exactly the situation the notch exists for. The notch
+raises it instead (`ShowWindow(SW_RESTORE)` + `SetForegroundWindow`); Windows
+only grants foreground rights to a process with recent input, and the user has
+just clicked the notch, so it qualifies. A CDP-injected click would NOT qualify
+— test this one with a real `SetCursorPos`+`mouse_event`.
+
+**5. Stale `--app=` windows will frame the app for your test's bug.** Killing the
+launcher PID does not close an `--app=` window (it is hosted by the shared
+browser process — see the title-matching note above), so failed runs pile up
+Helm windows. The raise test then minimised ITS window while the notch quite
+correctly raised a leftover one that was NOT minimised, and the result read as
+"the feature is broken". Close them by title with `WM_CLOSE` at the start of any
+test that cares, and assert on the handle the host reports rather than one the
+test found independently.
+
+**6. `Process.MainWindowHandle` is 0 for a frameless, taskbar-less window.**
+The .NET heuristic wants a visible top-level window with a title bar, and the
+notch has `WindowStyle="None"` + `ShowInTaskbar="False"`. Any script that
+measures or drives the window must enumerate instead — `EnumWindows` +
+`GetWindowThreadProcessId`, first visible top-level window for the pid. A check
+written against `MainWindowHandle` reports `0x0` and reads as "the window never
+opened" when it is sitting right there on screen.
+
+Related: `DragMove()` throws unless called during a mouse-down, and the notch's
+drag request arrives asynchronously from the page. Post
+`WM_NCLBUTTONDOWN`/`HTCAPTION` to the window instead — it also gets you snapping
+and Aero shake for free.
+
+## `proc.kill()` kills the shell, not the program, whenever you spawned via one
+`spawn(cmd, { shell: true })` — which Node needs for a `.cmd`/`.bat` — makes
+`proc` the shell, and the thing you actually wanted is its CHILD. Killing the
+parent orphans the child, and nothing ever reaps it. Helm's share links hit this:
+`stopTunnel` deleted the tunnel from its map and called `proc.kill()`, so the
+bookkeeping was right and `/api/tunnels` correctly reported none — while the
+process kept running. The smoke suite leaked exactly TWO stand-in processes per
+run, on every machine that ran it, for weeks; 24 had piled up before anyone
+counted. NOT only a test artifact: `needsShell` fires for any `.cmd`, and
+`cloudflared` on PATH is a `.cmd` shim under several package managers, so a REAL
+tunnel could survive being closed — a live public URL nobody is left holding.
+Fix: kill the TREE (`taskkill /PID <pid> /T /F` on Windows), synchronously,
+because shutdown exits a few hundred ms later and an async kill loses that race.
+
+**Test it by pid, not by absence of complaints.** The regression test has the
+stand-in write its OWN pid to a file (the pid Helm holds is the shim's) and
+asserts `process.kill(pid, 0)` throws after the stop. Verified to have teeth by
+reverting the fix and watching it fail. A leak like this is invisible to every
+green test run — the suite passed the whole time.
+
+## Line endings are MIXED in this repo, and prettier will fail you for it
+`.gitattributes` says `* text=auto` and `.prettierrc` says `endOfLine: "auto"`,
+so files are checked out with CRLF on Windows — but not all of them: some
+(`server/index.mjs`, `web/vite.config.ts`, `web/src/components/AgentHud.tsx`)
+are LF in the working copy while others (`web/src/App.tsx`, `api.ts`,
+`types.ts`, `docs/*.md`) are CRLF. Two traps follow:
+
+1. **A multi-line anchor written with `
+` silently will not match a CRLF
+   file.** Single-line anchors match either way, which is worse — a script can
+   half-apply and look like it worked. Read with universal newlines
+   (`open(p, encoding='utf-8')`) and write the file's own ending back
+   (`newline='
+
+'`), or use the Edit tool.
+2. **`endOfLine: "auto"` means "match the file's FIRST line ending"**, so
+   appending LF content to a CRLF file makes it MIXED and `npm run format:check`
+   fails on it — a confusing failure, since the diff looks like whitespace-only
+   noise. Normalize the whole file, or just run `npx prettier --write <file>`
+   after editing and let it settle both formatting and endings.
+
+Markdown and CSS are not in prettier's globs (`*.{ts,tsx,mjs}` only), so a
+mixed `.md`/`.css` breaks nothing — but keep them uniform anyway so diffs stay
+readable.
 
 ## Testing pattern that works
 `cd server && npm run e2e` now codifies this permanently

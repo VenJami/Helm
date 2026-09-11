@@ -802,6 +802,378 @@ the boundary (a deliberately injected render throw caught, real message shown,
 normal render restored after), and 4/4 that a LIVE pane still renders with the
 changed component and carries no age line.
 
+Floating agent HUD + Approve/Deny (2026-09-11) — owner saw AgentNotch (a macOS
+notch app for coding agents) and asked for the same. Most of that panel was
+data Helm already had, so the work split in two. (1) The HUD
+(`components/AgentHud.tsx`): a small always-on-top strip listing every claude
+pane across ALL projects — dot, name, project, elapsed, what it's blocked on —
+that reuses the existing Document-PiP window. **First cut was too loose** (the
+owner: "doesn't look like the notch, not really a useful small compact
+toolbar") — rebuilt dense to match the reference: a 26px header carrying the
+agent count, a waiting badge and a compact `1.2M · $12.40` local-usage readout;
+ONE 25px line per agent (dot · name · project · ⑂branch · account · elapsed)
+with chips that give way in a fixed order as the window narrows, branch first;
+a row only grows a second line when it actually needs you, and only the asking
+row takes the accent. Branch comes from the git poll App already runs and
+account from the session, so neither costs a request. A collapse toggle drops
+to a status-light pill plus just the rows wanting an answer. It (`usePipWindow`, which now takes a
+`kind` so the HUD remembers its own size) and is portalled into it from App, so
+it sits in the same React tree and calls `jumpToPane` directly rather than
+inventing a channel back. Toolbar button + Ctrl+K entry, both hidden where PiP
+is missing. The usage footer is Helm's LOCAL 7-day cost, labelled as an
+estimate: plan percentages are a live Anthropic call and "local only, $0" is
+locked. (2) Approve/Deny, the half Helm genuinely lacked, via claude's
+`PermissionRequest` hook — a real decision channel, not keystrokes fired at a
+menu whose shape moves. Armed ONLY while the HUD is open (it heartbeats
+`POST /api/hud/ping`; without one the hook is answered the instant it arrives,
+so non-users pay nothing and no pane is ever delayed). An armed request is held
+≤12 s in `pendingApprovals` and surfaces as four FLAT `pending*` fields on
+`sessionInfo` (flat because `useSessionsPoll`'s shallowEqual would otherwise
+churn every pane's reference each poll); `POST /api/sessions/:id/approve`
+answers it, 409 = it already lapsed to the pane's own prompt. Every exit path —
+click, lapse, pane death, shutdown — releases the held response, because a
+stranded one hangs a pane. Getting this working took the real CLI, and the
+published docs were wrong twice: `PermissionRequest` sends NO `tool_use_id`
+(Helm mints its own id), and the reply's `decision` is an OBJECT
+(`{behavior:'allow'}`), not the documented string — a top-level `decision` key
+voids the whole reply. The true schema came out of `claude --debug`'s
+validation error; all of it is now in CLAUDE_INTERNALS §5a with a drift key.
+Three traps found and recorded in GOTCHAS: `fs.mkdirSync(p,{recursive:true})`
+returns a `\\?\` path that ConPTY silently rejects, starting the pane in
+C:\Windows (this had been latent in e2e-real.mjs all along); Document PiP's
+`requestWindow` needs transient user activation that `Window.close()` spends,
+so the old window must never be closed first (the owner hit exactly this);
+and an account on `permissions.defaultMode: auto` rarely asks at all, so the
+buttons rarely appear — correct, not a bug. Verified: smoke 40 (5 new, driving
+the REAL hook-post as a child and asserting its stdout), real-claude e2e 14/14
+on 2.1.260 (approve let a real Write run, deny stopped it, HUD closed held
+nothing) — that suite's trust-dialog nudge was also fixed, it had been sending
+a bare Enter into a dialog defaulting to "No, exit" — and headed-CDP in a real browser (24/26),
+including clicking Approve and watching the hook print `{behavior:'allow'}`,
+plus the density measurements above. OPEN: in the automated browser the PiP
+window ignored BOTH the requested open size (asked 400x460, got the opener's
+1264x818) and `window.resizeTo`, so the collapse toggle changes the content but
+not the window. Unconfirmed whether that is the automation profile or real
+Chrome/Edge — the pop-out pane has shipped for weeks at a requested 560x420
+without complaint, which points at the harness. Needs a look in a normal
+browser before either chasing it or dropping the collapse toggle.
+
+The HUD as its own page (2026-09-11) — first step toward a native always-on-top
+notch, and the answer to the open item above: the picture-in-picture window
+CANNOT be a notch. Chrome/Edge enforce a minimum size and REJECT a smaller
+request outright rather than clamping, which is why `COLLAPSED_WINDOW_H` is
+padded to 200px for a pill that wants ~28. That is the platform saying no, not
+a bug to chase. So `AgentHud` now has a second home: `web/hud.html` +
+`HudApp.tsx`, a STANDALONE document built as a second Vite entry and served at
+`/hud` with the same `%%HELM_TOKEN%%` injection. It fetches its own data (and
+polls only what it renders — deliberately not `useWorkspaceStatus`, which would
+add dev-server and share-link polls the HUD never shows) and mirrors the app's
+theme out of localStorage. `AgentHud.tsx` itself is UNCHANGED and still shared
+with the picture-in-picture copy; only the `onJumpToPane`/`onClose` props
+differ, so there is one HUD, not two.
+
+The piece that needed designing is "jump to that pane", which the PiP HUD got
+for free by living in App's React tree. A separate document cannot call App's
+handler, so it goes through the server: `POST /api/focus` +
+`GET /api/focus/wait?since=` (long poll, ~25 s ceiling, `useFocusRequests` at
+the app's end). A long poll rather than the existing 3 s tick because a click
+that takes seconds to move the app reads as broken, and server-mediated rather
+than a `BroadcastChannel` because that only reaches documents in the SAME
+browser — the window this is being built for is a separate process. `since` is
+a cursor, so a request raised while nobody was parked still lands and an
+answered one never replays. Reachable from Ctrl+K ("Open the agent HUD in its
+own window"); the PiP HUD button is untouched. Verified: smoke 44 (4 new — page
++ token injection, validation + auth, parked poll answered on click, the
+between-polls gap) and 11/11 by CDP driving TWO browser targets against an
+isolated server — clicking a row in the HUD window really moved the app window
+to that pane's project. NOT yet done: the native shell itself (Rust/Tauri
+approval still open), so the window is still a browser window and still
+rectangular.
+
+Native notch window (2026-09-11) — the thing the browser could not do. Owner's
+ask was a notch that can be any shape, with animation gestures; a browser only
+ever hands you an opaque rectangle it owns, and picture-in-picture additionally
+refuses to shrink below ~200px. So `desktop/HelmNotch` — a frameless,
+always-on-top WPF window whose entire content is a WebView2 pointed
+at `/hud?notch=1`. Nothing about the UI moved to C#: the notch's shape, rounding,
+shadow and animation are CSS on the page we already had, and `AgentHud.tsx` is
+STILL untouched.
+
+Shell choice changed mid-flight, on evidence. Tauri was approved, but this
+machine has no Visual Studio at all (node-pty works off a prebuilt binary), and
+Rust on Windows links through MSVC — so Tauri meant rustup plus 3–7GB of Build
+Tools and an admin prompt. WPF + WebView2 reaches the same place for a ~200MB
+per-user .NET SDK and no elevation, and the earlier claim that it would cost us
+React/motion was simply WRONG: hosting WebView2 keeps the whole web stack.
+Owner picked it once the real numbers were on the table. Cost: Windows-only,
+which matches a project whose macOS/Linux support is already untested.
+
+Page ↔ window bridge is three messages (`drag`, `resize`, `close`) over
+`window.chrome.webview`. No click-through message, deliberately: a window that
+ignores the mouse stops RECEIVING mouse messages, so the page could never turn
+it off again — instead the window hugs its content via a `ResizeObserver`, so
+there is no dead window area to click through in the first place. Launch with
+`desktop/start-notch.cmd` (builds on first run, finds a per-user or machine-wide
+SDK, says so if Helm isn't listening). Verified ON SCREEN, which is the only way
+this can be verified: transparency confirmed against the live desktop (corners
+and drop shadow showing through), then 4/4 against a real isolated Helm — window
+opens, hugs its content (460x180 → 450x99), and GREW to 450x115 when a pane
+started asking for permission, proving the resize bridge; plus a clean-build run
+of the launcher. TWO owner-reported bugs followed, both from verifying the
+wrong things, both now in GOTCHAS. (1) It SHOOK sideways: the window took its
+WIDTH from the page, and resizing reflowed the content and flipped the page
+scrollbar, which changed the measured width straight back — an oscillation, made
+visible by the window re-centring after each change. The window now owns its
+width and only HEIGHT follows content, with a dead band and no page scrollbar.
+(2) Worse: it could not be CLICKED AT ALL — `AllowsTransparency` hosts the
+window as a LAYERED window, which renders the pretty version (alpha corners,
+soft shadow, all verified on screen) and then swallows every mouse message the
+WebView2 should get. Transparency is gone; the shape now comes from DWM's own
+rounded corners (`DWMWA_WINDOW_CORNER_PREFERENCE`), which costs no input. The
+lesson is the real deliverable: a screenshot proves rendering and NOTHING about
+input, and CDP-injected clicks bypass the OS message queue, so they would have
+passed against the broken build. Regression-checked now by a real
+`SetCursorPos`+`mouse_event` click (asserting the process exits) plus 8/8
+DOM-level checks through the notch's new `HELMNOTCH_DEBUG_PORT`, and by sampling
+the real window rect 40 times over 10 s for a single distinct left and width.
+(3) Owner: "it has a space above and not really touching the top" — it sat at
+`Top = 8`, and DWM's corner preference rounds all four corners or none, which is
+wrong for something meant to hang FROM an edge. Now `Top = 0` and the silhouette
+is a window REGION (`SetWindowRgn`): a round-rect unioned with a rectangle over
+the top strip, which squares the top two corners back off and leaves a deep
+14px panel corner on the bottom two (it went 26 → 55 → 14: the deep sweep
+the owner first picked then read as "too angled" against a reference panel, and
+an aggressive curve also eats into the last row's text — the rows' bottom
+padding is solved from the radius, so it followed it down from 27px to 2px).
+DWM is told `DWMWCP_DONOTROUND` so it doesn't
+fight. Region coordinates are PHYSICAL pixels, so it scales by `VisualTreeHelper
+.GetDpi`, and it is re-cut on every height change or the curve is left at the
+old size. CSS mirrors the radius, and the rows carry a computed 27px bottom
+padding — the curve insets the shape by `R - sqrt(R²-(R-d)²)` at distance d above
+the bottom, which would otherwise clip the last row's text. Verified by asking
+the region itself whether each corner pixel is inside (top two true, bottom two
+false) plus an on-screen capture.
+
+Notch: fixed in place, and it follows Helm (2026-09-12) — three owner asks.
+(1) NOT movable: the drag bridge is gone entirely (page handler, host
+`WM_NCLBUTTONDOWN` trick, grab cursors), so it stays where it is put — top
+centre, flush with the screen edge. (2) It gets OUT OF THE WAY: the host polls
+every 600 ms for a visible, non-minimised window whose title ENDS with
+"Helm ⎈" and hides itself while one is up, reappearing the moment Helm is
+minimised or closed. Matched by title because an `--app=` window is hosted by an
+already-running browser process, so its command line says nothing (GOTCHAS);
+matched on the SUFFIX because the count prefix varies ("(2 waiting) Helm ⎈")
+while an editor that merely mentions helm does not end that way. (3) AUTO-HIDE, modelled on Windows' own auto-hidden
+taskbar: when the notch is on screen at all it eases up out of sight, leaving a
+4px sliver, and slides back down when the cursor reaches the top edge within its
+width. One 100 ms timer drives both the hover check (`GetCursorPos`, cheap) and
+— every sixth tick — the Helm-window scan (which enumerates every top-level
+window, so it is the expensive half). The reveal test widens once revealed, with
+10px of slack, so a shaky hand on the way to Approve doesn't dismiss it, and it
+parks only after ~500ms of the cursor being elsewhere. Sliding is an ease-out on
+`Top` (35% of the remaining distance per 16ms frame, retargetable mid-flight, so
+reaching for it while it is still parking reverses rather than queues). The
+parked position is recomputed every tick rather than cached, because the notch's
+height tracks its content and a pane starting to ask makes it taller mid-park.
+Following outranks auto-hide: while Helm itself is up the notch is not wanted at
+all, so it goes away properly instead of parking at the edge. Two toggles:
+`notchFollowsHelm` and `notchAutoHide` in server settings, surfaced in
+Appearance → Notch. Server
+state, not localStorage — the notch runs in its OWN WebView2 profile and shares
+no storage with the browser, which is the whole reason it cannot be a UI pref.
+The page polls the setting (4 s) and relays it to the host, keeping the auth
+token out of C#. `start-helm.cmd` now also starts the notch if it has ever been
+built, guarded by a `tasklist` check so a second launch never stacks one — so
+"auto-launch when Helm is minimised" needs no launching at all: it is already
+running and simply un-hides. Verified 5/5 against the owner's REAL Helm window
+(hidden while it was on screen, back when following was turned off, header drag
+moved it 0px), 6/6 on auto-hide driving the REAL cursor (parked at top=-125 with
+a 4px sliver showing, top=0 within 2s of touching the screen edge, parked again
+on leave, stays down with the toggle off), plus a launcher run on a throwaway
+server (one notch, still one after a second launch). Smoke 45. NB the minimised-vs-closed distinction uses
+`IsIconic` on the same path and was not exercised against the real window, since
+that meant minimising the owner's editor mid-session.
+
+Notch rests as a status strip, not a hidden window (2026-09-12) — owner:
+"instead of hiding the whole notch we will display panes color based on their
+status". The previous auto-hide slid the window off-screen and left a 4px sliver
+of nothing, which told you nothing; now at rest it SHRINKS to a 200x24 strip of
+lights, one per claude pane, coloured by what that pane is doing, with a count
+badge when something is waiting. Reach it with the cursor and it grows into the
+full list. That is the point of a notch: a glance answers "does anything want
+me?" without costing screen.
+
+New `components/NotchStrip.tsx` (HudApp renders it instead of `AgentHud` when
+compact); `dotFor`/`rankOf` are now EXPORTED from AgentHud rather than copied,
+so a new status can't drift between the two faces. `AgentHud` itself is still
+otherwise untouched. The bridge gained its first host→page direction
+(`onHostMessage`, `PostWebMessageAsJson`): the HOST owns hover detection,
+because once the window is a 24px strip the page can no longer tell where the
+cursor is relative to the screen edge. Width is set from the MODE (200/460),
+never measured — measuring width is what once made the notch oscillate — and the
+fixed compact width also stops the strip resizing itself every time a pane
+appears. Height still comes from the page. Both are eased by one animator so the
+two faces read as one shape growing, pinned to the top edge and re-centred each
+frame, with the region re-cut as it goes. `notchAutoHide` became
+`notchAutoCompact` (it no longer hides anything), chips now "Compact until
+hovered" / "Always expanded".
+
+Two bugs found while verifying, both real: the mode was posted only on CHANGE,
+so a decision taken while the page was still loading reached nobody and the page
+would render the wrong face forever (now re-stated on every successful
+navigation); and the first test run measured a startup transient and read as a
+total inversion — chasing that is what produced `HELMNOTCH_LOG`, an opt-in
+per-tick decision dump (cursor, rect, revealed, targets) that settled it in one
+run. Verified 10/10 driving the REAL cursor (200x24 at rest, flush at top, still
+ON SCREEN; 460x196 hovered; back to the strip on leave; pinned open with the
+toggle off) plus a host trace showing both states stable. The morph was then
+reported JITTERY and rebuilt: the first cut eased by a fraction of the remaining
+distance per tick (a long tail of sub-pixel frames) and set Left/Width/Height
+separately (two or three window repositions per frame). Now time-based over a
+fixed 160 ms, whole pixels, one `SetWindowPos` per frame, region re-cut only on
+change — 6/6 measured by sampling `GetWindowRect` every 8 ms through both
+directions: monotonic, centred every frame, lands exactly, still afterwards, and
+the open grows in one motion rather than wide-then-tall. Details in GOTCHAS. Smoke 45. NB an
+exclusive-fullscreen app (a game) covers the notch — it sits above topmost
+windows; correct OS behaviour, not a bug.
+
+One way to the notch (2026-09-12) — closing the confusion that cost the owner
+real time: Ctrl+K offered "Open the agent HUD in its own window", which opened
+/hud in a BROWSER popup, and that is what got mistaken for the notch ("it just
+looks like a window" — the screenshot showed a title bar reading 127.0.0.1:7777).
+Two entries that read identically in a palette, one of them obsolete. The popup
+entry is gone; Ctrl+K → "Open the agent notch" now launches the real one through
+a new `GET/POST /api/notch`, and the entry hides itself where it cannot work
+(not Windows, or never built). Verified end-to-end against an isolated server:
+GET reports supported, POST starts exactly one, a second POST reports
+`started:false` without stacking a window. Smoke 46 (shape + auth + the refusal
+path, which is the half CI actually exercises since the exe isn't built there).
+
+Notch says WHICH project needs you (2026-09-12) — owner supplied a reference of
+a resting notch reading `✳ storefront | ! Needs you`. A row of dots can tell you
+something is amber; it cannot tell you which project, which is the only thing
+worth knowing at a glance from across the desk. So the resting strip now has two
+faces: quiet (one light per pane) and needy (the blocked project's name, a red
+`!`, and "Needs you" — or "N need you"). A pane actively ASKING outranks one
+merely waiting, since a held permission request is answerable right now where
+"waiting" may just be claude's own prompt sitting there.
+
+The naming face needs more room, so the compact window has TWO fixed widths
+(200 quiet / 300 needy) and the page sends `compactWidth` when the state flips.
+That is not the measurement loop that once made the notch shake: it is a
+constant chosen by STATE, not a measured layout, so it cannot feed back into
+itself. The host applies it in place when already resting, so an alert widens
+without waiting for a hover.
+
+Pulled `dotFor`/`rankOf`/`projectOf`/`claudePanes`/`isBlocked`/`needyPane` out of
+AgentHud into `lib/paneStatus.ts` — pure, no React, no api. That was forced by a
+test (importing them from the component dragged in api.ts, which reads `window`
+at import time) and is the better shape anyway. Writing those tests found a real
+bug: `projectOf`'s split regex had lost a backslash, so it split on `/` only and
+would have shown the whole Windows path instead of the project name — nothing
+else covered it and it reads fine until you try it. 38 vitest tests (12 new).
+Verified 5/5 on the live window: 200 quiet, 300 when a pane blocks, still a
+one-line strip, still centred, back to lights when unblocked.
+
+Clicking an agent in the notch actually takes you there (2026-09-12) — owner
+asked what the click should do; the honest answer was that it half-worked. The
+pane selection was fine (focus request → Helm selects the workspace, un-minimises
+the pane, scrolls, pulses), but bringing Helm FORWARD was `window.focus()` from
+the page, which browsers ignore for a minimised or background window. So you
+clicked "storefront needs you" and the right pane was selected inside a window
+that stayed hidden — precisely the case the notch exists for. The notch raises
+it now (`ShowWindow(SW_RESTORE)` + `SetForegroundWindow`, reusing the window it
+already finds every 600ms for following); Windows grants foreground rights to a
+process with recent input and the user has just clicked it. `window.focus()`
+stays as the fallback for the browser-window HUD, which has no host.
+`FindHelmWindow` had to stop skipping minimised windows — the previous check
+only cared whether one was ON SCREEN. Verified 5/5 with a REAL OS click (a
+CDP-injected one would not earn foreground rights): window restored, brought to
+the front, focus request raised. Two testing traps recorded in GOTCHAS, the
+second of which cost two runs: stale `--app=` Helm windows from earlier attempts
+(killing the launcher PID does not close them) meant the notch was correctly
+raising a leftover while the test watched its own minimised one.
+
+Notch loses its chrome (2026-09-12) — owner: drop the agent count, the
+token/cost readout, the close button and the collapse-to-pill toggle. All four
+were HUD furniture that made sense in a picture-in-picture window and none of it
+in a strip at the top of the screen, where the whole point is that everything
+shown is worth reading. `AgentHud` gained a `chrome` prop (default true, so the
+browser-window HUD is unchanged) and the notch passes false: no header at all,
+just the agent rows. 460x121 → 460x95. The collapse button is redundant anyway
+now that it compacts itself on hover. Closing moved to RIGHT-CLICK, since
+removing the × would otherwise leave no way out but Task Manager — the web
+view's own context menu is already disabled, so nothing else wanted the gesture.
+
+Notch says what each agent is DOING (2026-09-12) — two additions chosen for
+using data Helm already had. (1) Each row carries that pane's task: the
+auto-title Helm derives from its first real prompt (`summary`, the same thing
+Ctrl+K searches). "Beacon · storefront" says where an agent is; the task line
+says what it is doing, which is the question you actually have. Behind a
+`showTask` prop, OFF for the compact HUD — the owner deliberately tuned that to
+one dense line per agent — and ON for the notch, where it is the point.
+(2) The compact strip's alert face now says how long a pane has been stuck:
+`storefront 4m ! Needs you`. "Just asked" and "stuck twenty minutes" were the
+same amber dot before, and they are not the same problem. Ticks on the existing
+3 s poll (`elapsed` returns '' under a minute, so it appears when it means
+something); the needy width went 300 → 330 to fit it.
+
+Verified 6/6 against a real isolated Helm with SEEDED TRANSCRIPTS — fake-claude
+writes none, so the panes were given real JSONLs reported through the hook relay,
+inside an isolated account store (the server rejects transcript paths outside
+it). Deliberately NOT added: multi-provider quota bars (Helm only knows Claude),
+diff stats (not tracked), terminal output in the notch (a feature, not a tweak).
+Still open from the same discussion: a desktop alert when Helm's window is
+CLOSED — alerts come from the main window today, so the notch's own use case is
+the one case nothing tells you — and a brief auto-expand when a pane starts
+needing you.
+
+Two testing traps, both mine: a capture script set HOME but not USERPROFILE, so
+the server's account store stayed the REAL one and rejected the seeded
+transcripts — the notch then correctly showed no task lines and it read as a
+broken feature. And the notch must NOT inherit that isolated USERPROFILE:
+WebView2 needs the real one and will not start without it.
+
+Notch filtering: auto-quiet, then mute (2026-09-12) — owner asked for a settings
+filter over which workspaces and panes reach the notch. Real problem (11 panes
+× ~40px with the new task line ≈ 440px hanging off the screen) but a filter
+alone is config you maintain forever, so it got the cheaper half first.
+
+AUTO-QUIET (no config): blocked and working panes always list; ones idle beyond
+30 min, and dead ones, drop to a "+N quiet" line. TIME-based, not state-based,
+and that distinction is the whole design — in Helm a pane that has just FINISHED
+is `idle`, and that is exactly what you want to see; an hour later it is
+furniture. MUTE is the escape hatch: right-click a project → "Hide from the
+notch" (`notch:false` on the workspace, stored only when muted so absent still
+means yes and nothing needs migrating). Muted panes are NOT counted in "+N
+quiet" — you muted them on purpose, and a reminder that never goes away is worse
+than nothing. Filtering applies to the NOTCH only; `/hud` in a browser window
+stays the full view.
+
+Logic is pure in `lib/paneStatus.ts` (`isQuiet`, `foldDir`, `notchPanes`), which
+paid off twice while testing: the unit tests caught that a fixed ISO date in the
+test helper can land in the FUTURE depending on the runner's timezone (inverting
+every age rule), and that `foldDir` compared case but not slash direction, so a
+mute would silently miss a dir written with the other separator. 45 vitest (7
+new), smoke 47, and 7/7 against a real notch — muted project vanishes, others
+untouched, nothing counted as quiet, un-muting brings it back, and an unmuted
+workspace stores no field at all.
+
+Share links: stopping one now really stops it (2026-09-12) — found by counting
+processes, not by any failing test. `stopTunnel` removed the tunnel from its map
+and called `proc.kill()`, so Helm's bookkeeping was right and `/api/tunnels`
+correctly showed none — while the process kept running. Cause: a `.cmd` must be
+spawned through a shell, so `proc` is cmd.exe and the tunnel is its CHILD;
+killing the parent orphaned it. Measured at exactly two leaked stand-ins per
+smoke run, forever, on any machine that ran the suite (24 had accumulated).
+NOT just a test artifact — `needsShell` fires for any `.cmd` and `cloudflared`
+on PATH is a `.cmd` shim under several package managers, so a REAL tunnel could
+outlive being closed, leaving a live public URL nobody is holding. Now kills the
+TREE (`taskkill /T /F`), synchronously because shutdown exits ~300ms later.
+Regression test has the stand-in write its OWN pid (the one Helm holds is the
+shim's) and asserts it is gone after the stop; proven to have teeth by reverting
+the fix and watching it fail. Smoke 48, and a full run now leaks zero.
+
 ## Short-term backlog (rough priority order, owner-approved direction)
 (empty — next items to be chosen with the owner)
 

@@ -33,6 +33,8 @@ notifications, all script-verified). Current backlog: see docs/ROADMAP.md.
 ## Tech Stack
 - **Backend:** Node 22 ESM · express · ws · node-pty (`server/index.mjs` is the
   whole server). **Frontend:** React 18 + TS + Vite · @xterm/xterm (+fit/webgl).
+- **Native notch (optional):** C#/WPF + WebView2 in `desktop/` — a window only.
+  It hosts `/hud?notch=1`; never move UI into C#.
 - **No DB** — JSON files + tokens + account profiles in `%LOCALAPPDATA%\Helm\`
   (`~/.helm` on macOS/Linux).
 - **Panes ARE the product:** real `claude` CLI subscriptions via PTY — never a
@@ -60,6 +62,10 @@ helm/
 │   │                       #   · tunnel.mjs (public share links — leaves loopback)
 │   │                       #   · update.mjs (newer release? behind main?)
 │   └── hook-post.mjs       # runs inside panes; relays Claude Code hook events
+├── desktop/                # OPTIONAL native notch window (C#/WPF, Windows-only)
+│   ├── start-notch.cmd     #   double-click: builds on first run, then launches
+│   └── HelmNotch/          #   frameless, DWM-rounded WPF window hosting a WebView2
+│                           #   on /hud?notch=1 — ALL the UI stays in web/
 └── web/                    # React frontend → built to web/dist (server serves it)
     └── src/                # App.tsx (composition) · hooks/ (data polling, theme,
                             #   grid weights, pop-out, dictation) · lib/storage.ts
@@ -82,6 +88,9 @@ cd server && npm run e2e   # real-claude end-to-end (spawn→hooks→usage→rev
                            #   a logged-in claude, spends a few tokens, NOT in CI
 cd web && npm test         # vitest unit tests (accounts.ts usage math)
 cd web && npm run build    # after frontend changes (or `npm run watch` while developing)
+desktop\start-notch.cmd    # the native notch window (needs Helm already running).
+                           #   Builds itself on first run; needs a .NET SDK, NOT
+                           #   Visual Studio. Windows-only and optional.
 # npm install once in server/ and web/. NO vite dev server — the Node server
 # must serve web/dist to inject the auth token.
 ```

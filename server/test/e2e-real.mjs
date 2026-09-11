@@ -31,8 +31,12 @@ import { WebSocket } from 'ws';
 const serverDir = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'helm-e2e-'));
 const helmDir = path.join(tmp, 'Helm');
-const projDir =
-  fs.mkdirSync(path.join(tmp, 'e2e-project'), { recursive: true }) ?? path.join(tmp, 'e2e-project');
+// NB: never use mkdirSync's RETURN value as the path. On Windows it hands back
+// an extended-length `\\?\C:\...` form, and ConPTY can't take that as a cwd —
+// it silently starts the pane in C:\Windows instead of failing, so claude runs
+// but every relative file operation lands somewhere read-only. (GOTCHAS.)
+const projDir = path.join(tmp, 'e2e-project');
+fs.mkdirSync(projDir, { recursive: true });
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const results = [];
@@ -148,6 +152,17 @@ await boot();
   );
 }
 
+// The machine's own settings may run permissions.defaultMode 'auto', where
+// claude decides for itself and never asks — which would make the approval
+// phase below vacuous. Project settings win, so pin this project to the normal
+// prompting mode. It MUST be written before the pane spawns: claude reads
+// permission mode at startup, not from a file that appears mid-session.
+fs.mkdirSync(path.join(projDir, '.claude'), { recursive: true });
+fs.writeFileSync(
+  path.join(projDir, '.claude', 'settings.json'),
+  JSON.stringify({ permissions: { defaultMode: 'default' } }, null, 2),
+);
+
 await api('/workspaces', { method: 'POST', body: JSON.stringify({ name: 'e2e', dir: projDir }) });
 const created = await (
   await api('/sessions', {
@@ -161,6 +176,11 @@ check('pane spawned (status running)', created.status === 'running');
 // WS attach: watch output + type into the pane like the browser does.
 const ws = new WebSocket(`ws://127.0.0.1:${PORT}/ws?session=${id}&token=${TOKEN}`);
 const type = (data) => ws.send(JSON.stringify({ type: 'input', data }));
+let paneOut = '';
+ws.on('message', (m) => {
+  const msg = JSON.parse(m.toString());
+  if (msg.type === 'data' || msg.type === 'replay') paneOut += msg.data;
+});
 await new Promise((res, rej) => {
   ws.once('open', res);
   ws.once('error', rej);
@@ -168,20 +188,28 @@ await new Promise((res, rej) => {
 
 // ------------------------------------------- phase 2: trust dialog + first hook
 // A fresh temp dir always shows the folder-trust dialog on the default profile;
-// SessionStart only fires once past it. ConPTY collapses on-screen spaces so
-// matching the dialog text is unreliable — just send Enter (= the default "Yes,
-// trust") a few times early; harmless once claude is up. `canResume` going true
-// (via the SessionStart hook's session_id + transcript_path) is the ready signal.
-console.log('waiting for claude to boot (nudging Enter to accept trust)…');
+// SessionStart only fires once past it.
+//
+// The dialog's DEFAULT selection is "No, exit" — a bare Enter quits claude, so
+// arrow DOWN to "Yes, I trust this folder" first. (This test used to just send
+// Enter; that silently killed the pane on claude 2.1.260. GOTCHAS.)
+// ConPTY renders on-screen spaces as cursor-forward escapes, so the dialog can
+// only be matched on a SINGLE word — "trust" — never a phrase.
+console.log('waiting for claude to boot (accepting the trust dialog)…');
 let s = null;
 {
   const deadline = Date.now() + 90000;
-  let nudges = 0;
+  let answered = false;
   while (Date.now() < deadline) {
     s = await sessionInfo(id);
     if (s?.activity) break; // SessionStart landed → claude is up
-    if (nudges++ < 6) type('\r'); // accept trust (idempotent once past it)
-    await sleep(3000);
+    if (!answered && /trust/i.test(paneOut)) {
+      type('[B'); // down: "No, exit" → "Yes, I trust this folder"
+      await sleep(300);
+      type('\r');
+      answered = true;
+    }
+    await sleep(1500);
   }
 }
 check(
@@ -248,7 +276,84 @@ check(
   );
 }
 
-// --------------------------------- phase 5: server restart → revive (--resume)
+// ------------------------- phase 5: approve / deny a real tool call from Helm
+// The floating HUD answers a pane's permission request through claude's
+// PermissionRequest hook. The reply schema is undocumented (the published docs
+// are wrong about it — CLAUDE_INTERNALS), so it can ONLY be verified against
+// the real binary: ask for a file write, answer from Helm, and check the disk.
+{
+  // Only a live HUD heartbeat arms approvals; keep one going for this phase.
+  const beat = setInterval(() => void api('/hud/ping', { method: 'POST' }).catch(() => {}), 3000);
+  await api('/hud/ping', { method: 'POST' });
+
+  const answerOne = async (file, decision) => {
+    type(`Use the Write tool to create a file named ${file} containing OK`);
+    await sleep(500);
+    type('\r');
+    const held = await waitFor(id, (x) => Boolean(x.pendingId), 90000, `${decision} request`);
+    if (!held?.pendingId) return { held: null, wrote: false };
+    const res = await api(`/sessions/${id}/approve`, {
+      method: 'POST',
+      body: JSON.stringify({ requestId: held.pendingId, decision }),
+    });
+    if (!res.ok) return { held, wrote: false, status: res.status };
+    // Give claude a moment to act on the decision (or not).
+    const target = path.join(projDir, file);
+    const deadline = Date.now() + 20000;
+    while (Date.now() < deadline && !fs.existsSync(target)) await sleep(500);
+    return { held, wrote: fs.existsSync(target) };
+  };
+
+  const allowed = await answerOne('helm-allow.txt', 'allow');
+  if (!allowed.held) {
+    // Nothing was held: either claude never asked (the pane is in a permission
+    // mode that self-approves) or the hook didn't reach us. Both are worth
+    // seeing rather than guessing at from a bare FAIL.
+    // Keep only printable ASCII: ConPTY output is mostly escape sequences, and
+    // this only has to be readable in a failure message.
+    const plain = [...paneOut].filter((c) => c >= ' ' && c <= '~').join('');
+    console.error('  (pane tail) ' + JSON.stringify(plain.slice(-700)));
+    const log = await (await api('/logs?after=0')).json();
+    console.error(
+      '  (hooks seen) ' +
+        log.entries
+          .filter((e) => e.tag === 'hook' || e.tag === 'approval')
+          .map((e) => e.msg.split(') ').pop())
+          .join(' | '),
+    );
+  }
+  check(
+    'PermissionRequest hook held a real tool call for the HUD',
+    allowed.held?.pendingTool === 'Write' && Boolean(allowed.held?.pendingDetail),
+    `tool=${allowed.held?.pendingTool} detail=${allowed.held?.pendingDetail}`,
+  );
+  check('Approve from Helm let the real tool call run', allowed.wrote === true);
+
+  const denied = await answerOne('helm-deny.txt', 'deny');
+  check(
+    'Deny from Helm stopped the real tool call',
+    Boolean(denied.held) && denied.wrote === false,
+    `held=${Boolean(denied.held)} wrote=${denied.wrote}`,
+  );
+
+  // Disarmed = the behaviour every pane had before this feature: claude asks in
+  // the pane, and Helm never holds the hook open.
+  clearInterval(beat);
+  await sleep(9000); // let the 8 s arm window lapse
+  type('Use the Write tool to create a file named helm-closed.txt containing OK');
+  await sleep(500);
+  type('\r');
+  const quiet = await waitFor(id, (x) => Boolean(x.pendingId), 20000, 'a request while disarmed');
+  check(
+    'with the HUD closed, nothing is held (panes prompt for themselves)',
+    !quiet?.pendingId,
+    `pendingId=${quiet?.pendingId}`,
+  );
+  type(''); // Esc — leave the pane's own dialog closed before the restart
+  await sleep(1000);
+}
+
+// --------------------------------- phase 6: server restart → revive (--resume)
 console.log('restarting server to test crash-recovery + revive…');
 ws.close();
 await stopServer();
