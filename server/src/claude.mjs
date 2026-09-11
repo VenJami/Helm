@@ -342,6 +342,33 @@ export function accountEmail(configDir) {
   }
 }
 
+// ------------------------------------------------ permission-request shapes
+// The `PermissionRequest` hook hands us `tool_name` + `tool_input` for a call
+// claude is about to make, and the HUD has one line to say what it is. The
+// input shapes are claude's, not ours — a renamed field just makes a row read
+// "Bash" instead of the command, which is why they live in this file with the
+// rest of the claude internals rather than at the call site.
+const TOOL_DETAIL_KEYS = ['command', 'file_path', 'path', 'pattern', 'url', 'prompt'];
+const DETAIL_MAX = 120;
+
+export function describeToolUse(toolName, toolInput) {
+  const name = typeof toolName === 'string' && toolName ? toolName : 'tool';
+  const input = toolInput && typeof toolInput === 'object' ? toolInput : {};
+  let detail = '';
+  for (const k of TOOL_DETAIL_KEYS) {
+    if (typeof input[k] === 'string' && input[k].trim()) {
+      detail = input[k].trim();
+      break;
+    }
+  }
+  // Nothing recognizable (an MCP tool with its own schema, a new built-in):
+  // the tool name alone is still a true and useful thing to show.
+  if (!detail) return name;
+  const flat = detail.replace(/\s+/g, ' ');
+  const clipped = flat.length > DETAIL_MAX ? `${flat.slice(0, DETAIL_MAX - 1)}…` : flat;
+  return `${name}: ${clipped}`;
+}
+
 // -------------------------------------------- headless `claude -p` answers
 // Helm makes two headless calls: "how do I start this project" (workspace ▶
 // with nothing configured) and "clean up this dictation" (the mic button).

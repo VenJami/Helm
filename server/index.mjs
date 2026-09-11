@@ -19,6 +19,7 @@ import {
   accountEmail,
   checkClaudeVersion,
   cleanPolished,
+  describeToolUse,
   diagnostics,
   firstPromptSummary,
   noteDrift,
@@ -132,6 +133,13 @@ const ALLOWED_ORIGINS = new Set([`http://127.0.0.1:${PORT}`, `http://localhost:$
 function writeHookSettings() {
   const command = `"${process.execPath}" "${path.join(__dirname, 'hook-post.mjs')}"`;
   const relay = [{ hooks: [{ type: 'command', command, timeout: 10 }] }];
+  // PermissionRequest is the one event whose REPLY matters: it lets the HUD
+  // answer "can I run this?" without you travelling to the pane. It needs its
+  // own, longer timeout than the fire-and-forget relay above — the server may
+  // hold the request open while you decide (see POST /api/hook). The budget is
+  // deliberately layered: server holds ≤12 s < hook-post aborts at 15 s < this
+  // 20 s, so the innermost timer always wins and claude never sees a timeout.
+  const approval = [{ hooks: [{ type: 'command', command, timeout: 20 }] }];
   fs.mkdirSync(HELM_DIR, { recursive: true });
   fs.writeFileSync(
     HOOK_SETTINGS_FILE,
@@ -142,6 +150,7 @@ function writeHookSettings() {
           UserPromptSubmit: relay,
           Stop: relay,
           Notification: relay,
+          PermissionRequest: approval,
         },
       },
       null,
@@ -154,7 +163,14 @@ writeHookSettings();
 // ---------------------------------------------------------- server settings
 // Small user-facing toggles, persisted in %LOCALAPPDATA%\Helm\settings.json.
 // autoRevive: respawn every 'dead' session automatically at server start.
-const DEFAULT_SETTINGS = { autoRevive: false };
+// notchFollowsHelm: the native notch window (desktop/HelmNotch) hides itself
+//   whenever Helm's own window is on screen, and shows when it is minimised or
+//   closed. Lives here rather than in localStorage because the notch runs in
+//   its own WebView2 profile and shares no storage with the browser.
+// notchAutoCompact: at rest the notch shrinks to a strip of status lights (one
+//   per pane, coloured by what it is doing) and expands to the full list when
+//   the cursor reaches it - the way an auto-hidden taskbar slides back.
+const DEFAULT_SETTINGS = { autoRevive: false, notchFollowsHelm: true, notchAutoCompact: true };
 let settings = { ...DEFAULT_SETTINGS };
 {
   const saved = readJsonWithBackup(SETTINGS_FILE, 'settings');
@@ -183,6 +199,10 @@ function saveSettings() {
  * @property {'working'|'waiting'|'idle'|null} activity
  * @property {string|null} activitySince
  * @property {string|null} activityNote
+ * @property {string|null} pendingId      tool_use_id of a permission request held open for the HUD
+ * @property {string|null} pendingTool    its tool_name ('Bash', 'Edit', an MCP tool…)
+ * @property {string|null} pendingDetail  one human line: "Bash: npm run db:migrate"
+ * @property {string|null} pendingSince   ISO — when the request arrived
  * @property {string|null} claudeSessionId  claude's own session id (from hooks) — for --resume
  * @property {string|null} transcriptPath
  * @property {string} createdAt
@@ -192,6 +212,82 @@ function saveSettings() {
 
 /** @type {Map<string, Session>} id → session */
 const sessions = new Map();
+
+// ------------------------------------------------------ pending approvals
+// A `PermissionRequest` hook whose HTTP response we are deliberately holding
+// open while the floating HUD offers Approve/Deny. Each entry owns an express
+// `res` and a timer, so EVERY exit path must go through resolveApproval() —
+// a held response that outlives its pane hangs the pane until claude's own
+// hook timeout fires. Only ever populated while the HUD is armed.
+/** @type {Map<string, {sessionId: string, res: import('express').Response, timer: NodeJS.Timeout}>} */
+const pendingApprovals = new Map();
+
+// The HUD heartbeats while it is open; nothing else arms approvals. With no
+// live heartbeat every PermissionRequest is answered 'ask' immediately and
+// claude behaves exactly as it did before this feature existed.
+const HUD_ARM_MS = 8000; // a heartbeat is good for this long (HUD pings every 3 s)
+// How long a request waits for a click before falling back to the pane's own
+// prompt. Overridable so tests don't sit through the real 12 s.
+const APPROVAL_HOLD_MS = Number(process.env.HELM_APPROVAL_HOLD_MS ?? 12_000);
+let hudArmedUntil = 0;
+const hudArmed = () => Date.now() < hudArmedUntil;
+
+// ---- cross-window focus requests ------------------------------------------
+// The HUD can run as its own page (/hud) in a window that is not a child of
+// the app's, so it cannot call the main window's jump handler the way the
+// picture-in-picture HUD does (same React tree). "Jump to this pane" therefore
+// travels through the server: the HUD POSTs one, and the main window holds a
+// long poll open so it arrives on click rather than on the next 3 s tick.
+// Deliberately server-mediated rather than a BroadcastChannel: that only
+// reaches documents in the SAME browser, and the window this is being built
+// for is a separate process.
+const FOCUS_WAIT_MS = 25_000; // long-poll ceiling; the client reconnects after
+/** @type {Set<import('express').Response>} */
+const focusWaiters = new Set();
+/** @type {{sessionId: string, at: number} | null} */
+let lastFocus = null;
+
+// Hand a waiting long poll its answer and forget it. Safe to call twice.
+function settleFocus(res, payload) {
+  if (!focusWaiters.delete(res)) return;
+  try {
+    res.json(payload);
+  } catch {
+    /* client vanished mid-write */
+  }
+}
+
+// Answer one held hook request and forget it. `decision` 'ask' means "Helm has
+// no opinion" — claude then shows its own prompt in the pane, which is the
+// fallback for every failure and timeout in this path.
+function resolveApproval(requestId, decision, reason) {
+  const entry = pendingApprovals.get(requestId);
+  if (!entry) return false;
+  clearTimeout(entry.timer);
+  pendingApprovals.delete(requestId);
+  const session = sessions.get(entry.sessionId);
+  if (session && session.pendingId === requestId) clearPending(session);
+  try {
+    entry.res.json({ decision, reason: reason ?? null });
+  } catch {
+    /* socket already gone — the hook will fall back to 'ask' on its own */
+  }
+  return true;
+}
+
+function clearPending(session) {
+  session.pendingId = null;
+  session.pendingTool = null;
+  session.pendingDetail = null;
+  session.pendingSince = null;
+}
+
+// A pane is going away (killed, exited, respawned): release anything it holds.
+function releaseApprovals(sessionId, why) {
+  for (const [requestId, entry] of pendingApprovals) {
+    if (entry.sessionId === sessionId) resolveApproval(requestId, 'ask', why);
+  }
+}
 
 // Random pane identity — nautical/star names to match the Helm theme, and
 // accent colors picked to read well on the dark UI.
@@ -373,6 +469,9 @@ function attachPty(session, pty) {
     session.activity = null;
     session.activitySince = null;
     session.activityNote = null;
+    // The process is gone, so nothing is left to permit — but the hook's HTTP
+    // request may still be held open, and its pane died waiting for us.
+    releaseApprovals(session.id, 'pane exited');
     dbg('exit', `${session.name} (${session.id.slice(0, 8)}) exited code=${exitCode}`);
     persistSessions();
     // Small delay lets any final ConPTY output land in onData before we
@@ -430,6 +529,10 @@ function createSession({ workspace, profile, cols, rows }) {
     activity: null, // 'working' | 'waiting' | 'idle' (from hooks)
     activitySince: null, // when activity last changed — powers "working 7m"
     activityNote: null, // latest Notification message while waiting (why it's blocked)
+    pendingId: null, // permission request held open for the HUD (tool_use_id)
+    pendingTool: null,
+    pendingDetail: null,
+    pendingSince: null,
     claudeSessionId: null, // claude's internal session id (from hooks)
     transcriptPath: null, // conversation JSONL (from hooks) — usage source
     createdAt: new Date().toISOString(),
@@ -474,6 +577,10 @@ function createDevSession({ workspace, command, name, cols, rows, ephemeral = fa
     activity: null,
     activitySince: null,
     activityNote: null,
+    pendingId: null, // dev panes run no tools and have no hooks
+    pendingTool: null,
+    pendingDetail: null,
+    pendingSince: null,
     claudeSessionId: null, // dev panes have no conversation
     transcriptPath: null,
     createdAt: new Date().toISOString(),
@@ -567,6 +674,10 @@ function loadPersistedSessions() {
       activity: null,
       activitySince: null,
       activityNote: null,
+      pendingId: null, // a held request never survives the process that held it
+      pendingTool: null,
+      pendingDetail: null,
+      pendingSince: null,
       claudeSessionId: s.claudeSessionId ?? null,
       transcriptPath: s.transcriptPath ?? null,
       createdAt: s.createdAt ?? new Date().toISOString(),
@@ -675,6 +786,14 @@ function sessionInfo(s) {
     activity: s.activity,
     activitySince: s.activitySince,
     activityNote: s.activityNote ?? null,
+    // A permission request held open for the HUD. Kept as four FLAT fields
+    // rather than one object on purpose: useSessionsPoll's shallowEqual
+    // compares own keys with ===, so a nested object would hand every pane a
+    // fresh reference on every 3 s poll and undo the React.memo work.
+    pendingId: s.pendingId ?? null,
+    pendingTool: s.pendingTool ?? null,
+    pendingDetail: s.pendingDetail ?? null,
+    pendingSince: s.pendingSince ?? null,
     // auto-title from the conversation's opening prompt (search/palette label);
     // a dev pane has no conversation, so it goes by the command it runs
     summary: s.kind === 'dev' ? s.command : firstPromptSummary(s.transcriptPath),
@@ -692,11 +811,14 @@ function sessionInfo(s) {
 const app = express();
 app.use(express.json());
 
-// Serve the built app with the token injected. Everything under /api requires it.
-app.get('/', (_req, res) => {
+// Serve a built page with the token injected. Everything under /api requires it.
+// Two pages share this: the app itself, and /hud — the floating agent HUD as a
+// STANDALONE document, so it can live in a window that is not a child of the
+// app's (a second browser window today, a native always-on-top shell later).
+const servePage = (file) => (_req, res) => {
   let html;
   try {
-    html = fs.readFileSync(path.join(DIST_DIR, 'index.html'), 'utf8');
+    html = fs.readFileSync(path.join(DIST_DIR, file), 'utf8');
   } catch {
     return res
       .status(503)
@@ -704,7 +826,9 @@ app.get('/', (_req, res) => {
       .send('Frontend not built yet — run: cd web && npm install && npm run build');
   }
   res.type('html').send(html.replaceAll('%%HELM_TOKEN%%', TOKEN));
-});
+};
+app.get('/', servePage('index.html'));
+app.get('/hud', servePage('hud.html'));
 app.use(express.static(DIST_DIR, { index: false }));
 
 // Liveness/status — unauthenticated on purpose so `curl 127.0.0.1:7777/health`
@@ -773,6 +897,69 @@ app.post('/api/hook', (req, res) => {
     `${session.name} (${sessionId.slice(0, 8)}) ${event.hook_event_name}` +
       (event.hook_event_name === 'Notification' && event.message ? `: ${event.message}` : ''),
   );
+
+  // ---- PermissionRequest: the one hook whose REPLY matters ----------------
+  // claude is asking whether a tool call may run. Answering 'ask' hands the
+  // decision straight back to the pane's own prompt, which is what happens on
+  // every path below except an explicit click — so the worst case here is
+  // exactly the behaviour Helm had before this feature.
+  if (event.hook_event_name === 'PermissionRequest') {
+    if (typeof event.tool_name !== 'string' || !event.tool_name) {
+      // Shape drift: with no tool_name there is nothing to show, so a HUD row
+      // would be a blank "allow?" — worse than no button at all. Say so out
+      // loud; the pane still prompts for itself.
+      noteDrift(
+        'permissionrequest-shape',
+        'a PermissionRequest hook arrived without a tool_name — claude changed the payload, ' +
+          'so the HUD can no longer approve tool calls (panes still prompt normally)',
+      );
+      return res.json({ decision: 'ask' });
+    }
+    // Helm's OWN id for this request, not claude's. The docs describe a
+    // `tool_use_id` on this event; claude 2.1.260 does not send one, and we
+    // don't need it — the held HTTP response *is* the correlation, so an id we
+    // mint is both sufficient and immune to that field moving again.
+    const requestId = crypto.randomUUID();
+    // Nobody is watching the HUD: answer instantly. This is the common path
+    // and the reason the feature costs non-users nothing at all.
+    if (!hudArmed() || session.status !== 'running') return res.json({ decision: 'ask' });
+
+    releaseApprovals(session.id, 'superseded'); // one open question per pane
+    session.pendingId = requestId;
+    session.pendingTool = event.tool_name;
+    session.pendingDetail = describeToolUse(event.tool_name, event.tool_input);
+    session.pendingSince = new Date().toISOString();
+    // Light the badge and the "N waiting" pill on the precise event rather
+    // than waiting for the fuzzier Notification that follows it.
+    if (session.activity !== 'waiting') {
+      session.activity = 'waiting';
+      session.activitySince = session.pendingSince;
+    }
+    session.activityNote = session.pendingDetail;
+
+    const timer = setTimeout(
+      () => resolveApproval(requestId, 'ask', 'no answer in the HUD'),
+      APPROVAL_HOLD_MS,
+    );
+    // Node keeps the process alive for a pending timer; this one must never
+    // hold up a shutdown that is already tearing the panes down.
+    timer.unref?.();
+    pendingApprovals.set(requestId, { sessionId: session.id, res, timer });
+    // If the hook gives up first (it aborts at 15 s), stop tracking a response
+    // nobody will ever read.
+    res.on('close', () => {
+      const entry = pendingApprovals.get(requestId);
+      if (entry && entry.res === res && !res.writableEnded) {
+        clearTimeout(entry.timer);
+        pendingApprovals.delete(requestId);
+        if (session.pendingId === requestId) clearPending(session);
+      }
+    });
+    dbg('approval', `${session.name} (${sessionId.slice(0, 8)}) asks: ${session.pendingDetail}`);
+    schedulePersist();
+    return; // response deliberately held open
+  }
+
   const activity = {
     SessionStart: 'idle',
     UserPromptSubmit: 'working',
@@ -792,6 +979,10 @@ app.post('/api/hook', (req, res) => {
     session.activityNote = event.message;
   } else if (activity && activity !== 'waiting') {
     session.activityNote = null;
+    // The pane moved on, so whatever it was asking about is settled. Belt and
+    // braces: while a request is genuinely held, claude can't reach these
+    // events — it's blocked on our reply.
+    releaseApprovals(session.id, 'pane moved on');
   }
   schedulePersist();
   res.json({ ok: true });
@@ -800,6 +991,137 @@ app.post('/api/hook', (req, res) => {
 app.use('/api', (req, res, next) => {
   if (safeEqual(req.get('authorization'), `Bearer ${TOKEN}`)) return next();
   res.status(401).json({ error: 'bad or missing token' });
+});
+
+// ---- the floating HUD -----------------------------------------------------
+// Its heartbeat, and ONLY its heartbeat, arms Approve/Deny. With no recent
+// ping every PermissionRequest is answered the moment it arrives, so a Helm
+// without the HUD open adds no latency to any pane. Authenticated like every
+// other /api route — arming a decision channel is not a public capability.
+app.post('/api/hud/ping', (_req, res) => {
+  hudArmedUntil = Date.now() + HUD_ARM_MS;
+  res.json({ ok: true, armedMs: HUD_ARM_MS, holdMs: APPROVAL_HOLD_MS });
+});
+
+// ---- the native notch window ----------------------------------------------
+// Helm can launch its own floating notch (desktop/HelmNotch) so there is ONE
+// way to reach it. Windows-only and optional: it is a separate build, and a
+// checkout that has never built it simply reports unsupported and the UI hides
+// the entry rather than offering something that cannot work.
+const NOTCH_EXE = path.join(
+  __dirname,
+  '..',
+  'desktop',
+  'HelmNotch',
+  'bin',
+  'Release',
+  'net8.0-windows',
+  'HelmNotch.exe',
+);
+const notchSupported = () => IS_WIN && fs.existsSync(NOTCH_EXE);
+
+// Is one already up? Asked at click time rather than polled: the answer is only
+// needed to avoid stacking a second window, and tasklist is a process spawn.
+const notchRunning = () =>
+  new Promise((resolve) => {
+    if (!IS_WIN) return resolve(false);
+    execFile(
+      'tasklist',
+      ['/FI', 'IMAGENAME eq HelmNotch.exe', '/NH'],
+      { timeout: 4000, windowsHide: true },
+      (err, stdout) => resolve(!err && /HelmNotch\.exe/i.test(stdout)),
+    );
+  });
+
+app.get('/api/notch', async (_req, res) => {
+  res.json({ supported: notchSupported(), running: await notchRunning() });
+});
+
+app.post('/api/notch', async (req, res) => {
+  if (!notchSupported()) {
+    return res.status(400).json({
+      error: IS_WIN
+        ? 'the notch has not been built yet — run desktop\\start-notch.cmd once'
+        : 'the notch is Windows-only',
+    });
+  }
+  if (await notchRunning()) return res.json({ supported: true, running: true, started: false });
+  const url = `http://127.0.0.1:${PORT}/hud?notch=1`;
+  try {
+    // Detached and unref'd: the notch outlives this request, and Helm shutting
+    // down should not take a window the user opened deliberately with it.
+    const child = spawnProcess(NOTCH_EXE, [url], {
+      detached: true,
+      stdio: 'ignore',
+      windowsHide: false,
+    });
+    child.unref();
+  } catch (err) {
+    dbg('error', `notch launch failed: ${err.message}`);
+    return res.status(500).json({ error: `could not start the notch: ${err.message}` });
+  }
+  dbg('notch', 'launched the floating notch window');
+  res.json({ supported: true, running: true, started: true });
+});
+
+// "Bring pane X to the front" from another window. Stored as well as
+// broadcast, so a request that lands between a waiter's reconnect isn't lost:
+// the client passes the `at` it last handled and gets anything newer at once.
+app.post('/api/focus', (req, res) => {
+  const { sessionId } = req.body || {};
+  if (typeof sessionId !== 'string' || !sessionId) {
+    return res.status(400).json({ error: 'sessionId is required' });
+  }
+  if (!sessions.has(sessionId)) return res.status(404).json({ error: 'no such session' });
+  lastFocus = { sessionId, at: Date.now() };
+  for (const waiter of [...focusWaiters]) settleFocus(waiter, lastFocus);
+  res.json({ ok: true, ...lastFocus });
+});
+
+// The main window parks here. Returns immediately if a request newer than
+// `since` is already pending, otherwise holds until one arrives or the ceiling
+// expires (an empty answer, which just restarts the loop).
+app.get('/api/focus/wait', (req, res) => {
+  const since = Number(req.query.since) || 0;
+  if (lastFocus && lastFocus.at > since) return res.json(lastFocus);
+  focusWaiters.add(res);
+  const timer = setTimeout(
+    () => settleFocus(res, { sessionId: null, at: Date.now() }),
+    FOCUS_WAIT_MS,
+  );
+  // Whether we answer or the client hangs up first, stop holding the response
+  // and drop the timer — a leaked waiter keeps the socket and the timer alive.
+  res.on('close', () => {
+    clearTimeout(timer);
+    focusWaiters.delete(res);
+  });
+});
+
+// Answer a held permission request. 409 (not an error the user should see as a
+// failure) means the request is no longer open — it lapsed into the pane's own
+// prompt, or the pane died while you were reading it.
+app.post('/api/sessions/:id/approve', (req, res) => {
+  const session = sessions.get(req.params.id);
+  if (!session) return res.status(404).json({ error: 'no such session' });
+  const { requestId, decision, reason } = req.body || {};
+  if (decision !== 'allow' && decision !== 'deny') {
+    return res.status(400).json({ error: "decision must be 'allow' or 'deny'" });
+  }
+  if (typeof requestId !== 'string' || !requestId) {
+    return res.status(400).json({ error: 'requestId is required' });
+  }
+  const entry = pendingApprovals.get(requestId);
+  if (!entry || entry.sessionId !== session.id) {
+    return res.status(409).json({ error: 'that request is no longer waiting' });
+  }
+  const why = typeof reason === 'string' && reason.trim() ? reason.trim().slice(0, 200) : undefined;
+  resolveApproval(
+    requestId,
+    decision,
+    why ?? (decision === 'deny' ? 'denied from Helm' : undefined),
+  );
+  dbg('approval', `${session.name} (${session.id.slice(0, 8)}) ${decision} from the HUD`);
+  res.json(sessionInfo(session));
 });
 
 app.get('/api/sessions', (_req, res) => {
@@ -841,6 +1163,7 @@ app.delete('/api/sessions/:id', (req, res) => {
   const session = sessions.get(req.params.id);
   if (!session) return res.status(404).json({ error: 'no such session' });
   if (session.status === 'running' && session.pty) stopPty(session);
+  releaseApprovals(session.id, 'pane deleted'); // a never-started pane holds none, but a dead one can
   for (const ws of session.sockets) ws.close(1000, 'session killed');
   sessions.delete(session.id);
   // its uploaded attachments go with it
@@ -1189,6 +1512,10 @@ app.post('/api/sessions/:id/stop', (req, res) => {
 // but tearing the pty down takes the whole tree with it — verified with a real
 // npm dev server: the port is free within a second, no strays left behind.
 function stopPty(session) {
+  // Release first: onExit's `session.pty !== pty` guard stays silent when a
+  // pane is being respawned (account switch), so it can't be the only place
+  // that frees a held permission request.
+  releaseApprovals(session.id, 'pane stopped');
   try {
     session.pty?.kill();
   } catch {
@@ -1432,15 +1759,31 @@ app.post('/api/broadcast', (req, res) => {
 app.get('/api/settings', (_req, res) => res.json(settings));
 
 app.patch('/api/settings', (req, res) => {
-  const { autoRevive } = req.body || {};
+  const { autoRevive, notchFollowsHelm, notchAutoCompact } = req.body || {};
   if (autoRevive !== undefined) {
     if (typeof autoRevive !== 'boolean') {
       return res.status(400).json({ error: 'autoRevive must be true or false' });
     }
     settings.autoRevive = autoRevive;
   }
+  if (notchFollowsHelm !== undefined) {
+    if (typeof notchFollowsHelm !== 'boolean') {
+      return res.status(400).json({ error: 'notchFollowsHelm must be true or false' });
+    }
+    settings.notchFollowsHelm = notchFollowsHelm;
+  }
+  if (notchAutoCompact !== undefined) {
+    if (typeof notchAutoCompact !== 'boolean') {
+      return res.status(400).json({ error: 'notchAutoCompact must be true or false' });
+    }
+    settings.notchAutoCompact = notchAutoCompact;
+  }
   saveSettings();
-  dbg('settings', `autoRevive=${settings.autoRevive}`);
+  dbg(
+    'settings',
+    `autoRevive=${settings.autoRevive} notchFollowsHelm=${settings.notchFollowsHelm} ` +
+      `notchAutoCompact=${settings.notchAutoCompact}`,
+  );
   res.json(settings);
 });
 
@@ -1949,6 +2292,16 @@ app.patch('/api/workspaces/:id', (req, res) => {
     if (startCommands.length) ws.startCommands = startCommands;
     else delete ws.startCommands;
   }
+  // Show this project in the floating notch? Stored only when muted, so the
+  // absent-means-yes default needs no migration for existing workspaces.
+  const { notch } = req.body || {};
+  if (notch !== undefined) {
+    if (typeof notch !== 'boolean') {
+      return res.status(400).json({ error: 'notch must be true or false' });
+    }
+    if (notch) delete ws.notch;
+    else ws.notch = false;
+  }
   saveWorkspaces();
   res.json(ws);
 });
@@ -2260,6 +2613,13 @@ function gracefulShutdown(signal) {
   // always fails closed (server/src/tunnel.mjs).
   const shared = stopAllTunnels();
   if (shared) dbg('tunnel', `closed ${shared} public share link(s)`);
+  // Let go of any permission request we're holding before the panes die, so a
+  // pane that outlives us by a moment falls back to its own prompt cleanly.
+  for (const requestId of [...pendingApprovals.keys()])
+    resolveApproval(requestId, 'ask', 'Helm is shutting down');
+  // Let go of any parked focus long poll too, so a HUD window closes cleanly
+  // instead of waiting out the ceiling on a socket that is about to die.
+  for (const waiter of [...focusWaiters]) settleFocus(waiter, { sessionId: null, at: Date.now() });
   try {
     persistSessions();
   } catch (err) {
