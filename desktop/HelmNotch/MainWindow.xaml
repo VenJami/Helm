@@ -1,0 +1,21 @@
+<Window x:Class="HelmNotch.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:wv2="clr-namespace:Microsoft.Web.WebView2.Wpf;assembly=Microsoft.Web.WebView2.Wpf"
+        Title="Helm notch"
+        Width="460" Height="180"
+        WindowStyle="None"
+        Topmost="True"
+        ShowInTaskbar="False"
+        ResizeMode="NoResize"
+        UseLayoutRounding="True"
+        SnapsToDevicePixels="True"
+        Background="#141416">
+  <!-- NOT AllowsTransparency. That hosts the window as a LAYERED window, which
+       renders beautifully and then swallows every mouse event the WebView2
+       should have received - the window was uncloseable. The shape comes from
+       DWM's own rounded corners instead (see MainWindow.xaml.cs). -->
+  <Grid>
+    <wv2:WebView2 x:Name="Web" />
+  </Grid>
+</Window>

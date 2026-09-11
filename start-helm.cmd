@@ -69,6 +69,14 @@ if not defined BROWSER if exist "%LOCALAPPDATA%\Google\Chrome\Application\chrome
 if not defined BROWSER if exist "%ProgramFiles%\BraveSoftware\Brave-Browser\Application\brave.exe" set "BROWSER=%ProgramFiles%\BraveSoftware\Brave-Browser\Application\brave.exe"
 if defined BROWSER start "" "%BROWSER%" --app=%HELM_URL% "--window-size=1500,950"
 if not defined BROWSER start "" "%HELM_URL%"
+
+rem Bring the floating notch up too, if it has ever been built. It hides itself
+rem while the Helm window is on screen (Appearance -^> Notch), so it costs
+rem nothing until you minimise or close Helm - at which point it is already
+rem there. Never a second copy: it is one window per machine.
+set "NOTCH=%~dp0desktop\HelmNotch\bin\Release\net8.0-windows\HelmNotch.exe"
+tasklist /FI "IMAGENAME eq HelmNotch.exe" 2>nul | find /I "HelmNotch.exe" >nul
+if errorlevel 1 if exist "%NOTCH%" start "" "%NOTCH%" "%HELM_URL%/hud?notch=1"
 goto :eof
 
 :failed
