@@ -15,6 +15,17 @@ export function age(iso: string | null | undefined): string {
 }
 
 /**
+ * " 7m" / " 1h05m" since `iso`; '' under a minute. Note the LEADING space —
+ * it reads as a suffix on a status word ("working 7m"). Minute granularity is
+ * all a status badge needs, so it refreshes with the 3 s session poll.
+ */
+export function elapsed(iso: string): string {
+  const m = Math.floor((Date.now() - Date.parse(iso)) / 60000);
+  if (!Number.isFinite(m) || m < 1) return '';
+  return m < 60 ? ` ${m}m` : ` ${Math.floor(m / 60)}h${String(m % 60).padStart(2, '0')}m`;
+}
+
+/**
  * Whole days since `iso`. Infinity for a missing or unparseable date, so a
  * pane with no usable timestamp sorts as "oldest" and is offered for cleanup
  * rather than quietly kept forever; negative clock skew reads as 0.

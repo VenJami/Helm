@@ -19,6 +19,9 @@ const KEYS = {
   theme: 'helm.theme',
   accent: 'helm.accent',
   pipSize: 'helm.pipSize',
+  hudSize: 'helm.hudSize',
+  hudExpanded: 'helm.hudExpanded',
+  hudCollapsed: 'helm.hudCollapsed',
 } as const;
 
 // Sidebar width bounds (px): narrow enough to be a rail, wide enough for long
@@ -32,6 +35,9 @@ export const SIDEBAR_DEFAULT = 248;
 // window itself can't be reopened without a click, so which pane was popped is
 // deliberately not persisted.
 export const PIP_DEFAULT_SIZE = { w: 560, h: 420 };
+// The agent HUD shares that one floating window but wants a different shape:
+// a narrow strip of rows you park beside an editor, not a terminal.
+export const HUD_DEFAULT_SIZE = { w: 400, h: 460 };
 const PIP_MIN = 240;
 const PIP_MAX = 4000;
 
@@ -79,6 +85,21 @@ function setJSON(key: string, val: unknown): void {
   setRaw(key, JSON.stringify(val));
 }
 
+// Both things Helm can put in the floating window remember their own size,
+// with the same validation: a corrupt or out-of-range value falls back to the
+// default rather than asking the browser for a 0x0 window.
+function windowSize(key: string, fallback: { w: number; h: number }) {
+  return {
+    get: (): { w: number; h: number } => {
+      const v = getJSON<{ w: number; h: number }>(key, fallback);
+      const ok = (n: unknown) => typeof n === 'number' && n >= PIP_MIN && n <= PIP_MAX;
+      return ok(v?.w) && ok(v?.h) ? { w: Math.round(v.w), h: Math.round(v.h) } : fallback;
+    },
+    set: (size: { w: number; h: number }): void =>
+      setJSON(key, { w: Math.round(size.w), h: Math.round(size.h) }),
+  };
+}
+
 export const storage = {
   wsOrder: {
     get: (): string[] => getJSON<string[]>(KEYS.wsOrder, []),
@@ -121,14 +142,19 @@ export const storage = {
     },
     set: (px: number): void => setRaw(KEYS.sidebarWidth, String(Math.round(px))),
   },
-  pipSize: {
-    get: (): { w: number; h: number } => {
-      const v = getJSON<{ w: number; h: number }>(KEYS.pipSize, PIP_DEFAULT_SIZE);
-      const ok = (n: unknown) => typeof n === 'number' && n >= PIP_MIN && n <= PIP_MAX;
-      return ok(v?.w) && ok(v?.h) ? { w: Math.round(v.w), h: Math.round(v.h) } : PIP_DEFAULT_SIZE;
-    },
-    set: (size: { w: number; h: number }): void =>
-      setJSON(KEYS.pipSize, { w: Math.round(size.w), h: Math.round(size.h) }),
+  pipSize: windowSize(KEYS.pipSize, PIP_DEFAULT_SIZE),
+  hudSize: windowSize(KEYS.hudSize, HUD_DEFAULT_SIZE),
+  // The size to restore when the HUD is expanded back out of its pill. Kept
+  // apart from hudSize because usePipWindow rewrites THAT one from the live
+  // window on teardown — which, if you closed the HUD while collapsed, is the
+  // pill's size. Expanding must not restore a 52px-tall window.
+  hudExpanded: windowSize(KEYS.hudExpanded, HUD_DEFAULT_SIZE),
+  // Whether the HUD is showing as a pill. Unlike which pane was popped out,
+  // this one IS worth remembering: it is a preference about how much of the
+  // screen the thing may take, not a window that needs a click to exist.
+  hudCollapsed: {
+    get: (): boolean => getRaw(KEYS.hudCollapsed) === '1',
+    set: (v: boolean): void => setRaw(KEYS.hudCollapsed, v ? '1' : '0'),
   },
   // unknown/corrupt stored values fall back to the defaults (dark / amber)
   theme: {

@@ -39,6 +39,17 @@ export const IconHelm = (p: IconProps) => (
   </Icon>
 );
 
+// The agent HUD: a floating strip with a row of status lights, echoing the
+// collapsed pill the feature is modelled on.
+export const IconHud = (p: IconProps) => (
+  <Icon {...p}>
+    <rect x="2" y="7" width="20" height="10" rx="4" />
+    <circle cx="8" cy="12" r="1.1" fill="currentColor" stroke="none" />
+    <circle cx="12" cy="12" r="1.1" fill="currentColor" stroke="none" />
+    <circle cx="16" cy="12" r="1.1" fill="currentColor" stroke="none" />
+  </Icon>
+);
+
 export const IconGitBranch = (p: IconProps) => (
   <Icon {...p}>
     <line x1="6" y1="3" x2="6" y2="15" />

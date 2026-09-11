@@ -7,7 +7,7 @@ import { SearchAddon } from '@xterm/addon-search';
 import '@xterm/xterm/css/xterm.css';
 import { api, wsUrl } from '../api';
 import { accountLabel } from '../accounts';
-import { age } from '../lib/time';
+import { age, elapsed } from '../lib/time';
 import { Modal } from './Modal';
 import { toast } from './Toaster';
 import {
@@ -79,14 +79,6 @@ const fmt = (n: number) =>
   n >= 1e6 ? (n / 1e6).toFixed(1) + 'M' : n >= 1e3 ? (n / 1e3).toFixed(1) + 'k' : String(n);
 
 const shortModel = (m: string) => m.replace(/^claude-/, '');
-
-// " 7m" / " 1h05m" since the given ISO time; '' under a minute. Refreshes with
-// the 3 s session poll — minute granularity is all the badge needs.
-const elapsed = (iso: string) => {
-  const m = Math.floor((Date.now() - Date.parse(iso)) / 60000);
-  if (m < 1) return '';
-  return m < 60 ? ` ${m}m` : ` ${Math.floor(m / 60)}h${String(m % 60).padStart(2, '0')}m`;
-};
 
 // Keep in sync with PANE_COLORS in server/index.mjs
 const PANE_COLORS = [
