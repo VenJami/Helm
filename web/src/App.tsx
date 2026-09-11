@@ -7,6 +7,7 @@ import { useWorkspaceStatus } from './hooks/useWorkspaceStatus';
 import { useTheme } from './hooks/useTheme';
 import { useGridWeights } from './hooks/useGridWeights';
 import { pipSupported, usePipWindow } from './hooks/usePipWindow';
+import { useFocusRequests } from './hooks/useFocusRequests';
 import type { LogEntry, SessionInfo, Workspace } from './types';
 import { Sidebar } from './components/Sidebar';
 import { TerminalPane } from './components/TerminalPane';
@@ -17,6 +18,7 @@ import { DriftBanner } from './components/DriftBanner';
 import { UpdateBanner } from './components/UpdateBanner';
 import { CommandPalette, type PaletteAction } from './components/CommandPalette';
 import { GridResizers } from './components/GridResizers';
+import { AgentHud } from './components/AgentHud';
 import { NewProfileModal } from './components/modals/NewProfileModal';
 import { ProfilesModal } from './components/modals/ProfilesModal';
 import { UsageModal } from './components/modals/UsageModal';
@@ -30,6 +32,7 @@ import { CleanupModal } from './components/modals/CleanupModal';
 import {
   IconBug,
   IconGlobe,
+  IconHud,
   IconMinus,
   IconPalette,
   IconPanelLeftOpen,
@@ -117,6 +120,10 @@ export function App() {
   // browser only opens such a window from a user gesture, so a remembered id
   // would restore a pane that's nowhere on screen.
   const [poppedId, setPoppedId] = useState<string | null>(null);
+  // The same floating window can instead hold the agent HUD — the browser
+  // allows exactly one per page, so the two are mutually exclusive by
+  // construction. Also not persisted, for the same gesture reason.
+  const [hudOpen, setHudOpen] = useState(false);
   const { pipWindow, open: openPip, close: closePip } = usePipWindow();
   const canPop = useMemo(() => pipSupported(), []);
   useEffect(() => {
@@ -174,8 +181,15 @@ export function App() {
       return next;
     });
   const [autoRevive, setAutoRevive] = useState(false); // mirrors server settings
+  // Whether the native notch window hides itself while this window is up. Server
+  // state, because the notch runs in its own WebView2 profile and cannot see
+  // this browser's localStorage.
+  const [notchFollowsHelm, setNotchFollowsHelm] = useState(true);
+  const [notchAutoCompact, setNotchAutoCompact] = useState(true);
 
   // Server console window (start-helm.cmd terminal) show/hide toggle.
+  // Whether this machine can open the native notch (Windows + built).
+  const [notchSupported, setNotchSupported] = useState(false);
   const [consoleState, setConsoleState] = useState<{ supported: boolean; visible: boolean }>({
     supported: false,
     visible: true,
@@ -297,10 +311,46 @@ export function App() {
       .then(setWorkspaces)
       .catch(() => {});
     api
+      .getNotch()
+      .then((n) => setNotchSupported(n.supported))
+      .catch(() => {});
+    api
       .getSettings()
-      .then((s) => setAutoRevive(s.autoRevive))
+      .then((s) => {
+        setAutoRevive(s.autoRevive);
+        setNotchFollowsHelm(s.notchFollowsHelm);
+        setNotchAutoCompact(s.notchAutoCompact);
+      })
       .catch(() => {});
   }, []);
+
+  // Both notch toggles behave the same way: optimistic, reverted on failure.
+  // The notch itself picks them up from the server on its own poll.
+  const patchNotch = async (
+    patch: { notchFollowsHelm: boolean } | { notchAutoCompact: boolean },
+    revert: () => void,
+  ) => {
+    try {
+      const s = await api.updateSettings(patch);
+      setNotchFollowsHelm(s.notchFollowsHelm);
+      setNotchAutoCompact(s.notchAutoCompact);
+    } catch (err) {
+      revert();
+      toast.error((err as Error).message);
+    }
+  };
+
+  const setNotchFollows = (on: boolean) => {
+    const before = notchFollowsHelm;
+    setNotchFollowsHelm(on);
+    return patchNotch({ notchFollowsHelm: on }, () => setNotchFollowsHelm(before));
+  };
+
+  const setNotchCompact = (on: boolean) => {
+    const before = notchAutoCompact;
+    setNotchAutoCompact(on);
+    return patchNotch({ notchAutoCompact: on }, () => setNotchAutoCompact(before));
+  };
 
   const toggleAutoRevive = async () => {
     try {
@@ -744,27 +794,83 @@ export function App() {
   // React.memo on every pane each time the popped pane changes.
   const poppedRef = useRef<string | null>(null);
   poppedRef.current = poppedId;
+  // The browser only opens a floating window off a fresh click, and that
+  // permission expires in seconds. Its raw message ("Document PiP requires
+  // user activation") tells you nothing about what to do next, so say it.
+  const floatingError = (what: string, err: unknown) => {
+    const msg = err instanceof Error ? err.message : String(err);
+    return /user activation/i.test(msg)
+      ? `Could not ${what} — the browser only allows a floating window straight off a click. Try clicking it again.`
+      : `Could not ${what}: ${msg}`;
+  };
+  // Replacing the floating window's contents means closing the old window,
+  // whose 'pagehide' teardown nulls pipWindow and trips the "it was closed"
+  // effect below. That teardown normally lands before requestWindow resolves,
+  // but the order isn't ours to guarantee — so suppress the effect for the
+  // duration of an open rather than relying on it.
+  const openingRef = useRef(false);
+  const openFloating = useCallback(
+    (kind: 'pane' | 'hud') => {
+      openingRef.current = true;
+      return openPip(kind).finally(() => {
+        openingRef.current = false;
+      });
+    },
+    [openPip],
+  );
+
   const togglePop = useCallback(
     (id: string) => {
       if (poppedRef.current === id) {
         closePip(); // 'pagehide' clears poppedId and the pane returns to the grid
         return;
       }
-      void openPip()
+      void openFloating('pane')
         .then((win) => {
           if (!win) return;
           restorePane(id); // can't be in the tray and floating at once
           setMaximizedId((m) => (m === id ? null : m));
+          setHudOpen(false); // one floating window: the pane displaces the HUD
           setPoppedId(id);
         })
-        .catch((err) => toast.error(`Could not pop out the pane: ${(err as Error).message}`));
+        .catch((err) => {
+          setPoppedId(null); // never leave the grid missing a pane that isn't floating
+          setHudOpen(false);
+          toast.error(floatingError('pop out the pane', err));
+        });
     },
-    [closePip, openPip, restorePane],
+    [closePip, openFloating, restorePane],
   );
 
-  // The user closed the floating window with its own X — the pane comes home.
+  // Open/close the agent HUD in that same window. While it's open it heartbeats
+  // the server, which is what lets its Approve/Deny buttons answer a pane's
+  // permission request; closing it puts every pane back to prompting for itself.
+  const toggleHud = useCallback(() => {
+    if (hudOpen) {
+      closePip();
+      return;
+    }
+    void openFloating('hud')
+      .then((win) => {
+        if (!win) return;
+        setPoppedId(null); // the HUD displaces a popped pane
+        setHudOpen(true);
+      })
+      .catch((err) => {
+        setHudOpen(false); // a failed open must not leave the button stuck "on"
+        setPoppedId(null);
+        toast.error(floatingError('open the HUD', err));
+      });
+  }, [hudOpen, closePip, openFloating]);
+
+  // The user closed the floating window with its own X — the pane comes home,
+  // or the HUD is simply gone (and approvals disarm on the server as soon as
+  // its heartbeat lapses).
   useEffect(() => {
-    if (!pipWindow) setPoppedId(null);
+    if (!pipWindow && !openingRef.current) {
+      setPoppedId(null);
+      setHudOpen(false);
+    }
   }, [pipWindow]);
 
   // The popped pane was killed or deleted: don't leave an empty window behind.
@@ -802,6 +908,26 @@ export function App() {
     restorePane(s.id);
     focusPane(s.id);
   };
+
+  // The same jump, asked for from another window — a HUD running as its own
+  // page (/hud) can't call jumpToPane directly, so it comes through the server.
+  useFocusRequests(
+    useCallback(
+      (id: string) => {
+        const s = sessions.find((x) => x.id === id);
+        if (!s) return;
+        // Best-effort: browsers ignore this for a minimised or background
+        // window, which is why the NATIVE notch raises us itself (raiseHelm).
+        // Still worth trying for the browser-window HUD, which has no host.
+        window.focus();
+        jumpToPane(s);
+      },
+      // jumpToPane is rebuilt every render (a plain const) and the hook holds
+      // this in a ref, so listing it would churn without changing behaviour.
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+      [sessions],
+    ),
+  );
 
   // Click "N waiting" → hop to the next pane blocked on you, across workspaces,
   // rotating through them on repeated clicks.
@@ -916,6 +1042,31 @@ export function App() {
           },
         });
     }
+    if (canPop)
+      list.push({
+        key: 'hud',
+        label: hudOpen ? 'Close the agent HUD' : 'Float the agent HUD',
+        icon: 'popout',
+        keywords: 'notch overview approve deny permission always on top monitor agents',
+        run: toggleHud,
+      });
+    if (notchSupported)
+      list.push({
+        key: 'notch',
+        label: 'Open the agent notch',
+        icon: 'popout',
+        keywords: 'notch floating strip always on top status lights agents monitor',
+        // The REAL notch (desktop/HelmNotch), not a browser window. This entry
+        // replaced one that opened /hud in a popup: two ways to "float the HUD"
+        // that read identically in the palette, and the browser one is what got
+        // mistaken for the notch.
+        run: () => {
+          void api
+            .openNotch()
+            .then((n) => toast.success(n.started ? 'Notch opened' : 'The notch is already open'))
+            .catch((err: Error) => toast.error(err.message));
+        },
+      });
     list.push({
       key: 'appearance',
       label: 'Appearance…',
@@ -1076,6 +1227,17 @@ export function App() {
           onSuggestStart={suggestStart}
           onShare={askToShare}
           onUnshare={unshare}
+          onToggleNotch={(id, show) => {
+            // Optimistic: the notch reads workspaces on its own 6 s poll, so
+            // the sidebar label should not wait for a round trip to flip.
+            setWorkspaces((ws) =>
+              ws.map((w) => (w.id === id ? { ...w, notch: show ? undefined : false } : w)),
+            );
+            void api.updateWorkspace(id, { notch: show }).catch((err: Error) => {
+              toast.error(err.message);
+              void api.listWorkspaces().then(setWorkspaces);
+            });
+          }}
           onShowShares={() => setDialog({ kind: 'shares' })}
           dragId={dragWsId}
           dragOverId={dragOverWsId}
@@ -1171,6 +1333,21 @@ export function App() {
                   >
                     <span className="dot dot-waiting" /> {waiting}{' '}
                     <span className="tbtn-label">waiting</span>
+                  </button>
+                )}
+                {canPop && (
+                  <button
+                    className={`tbtn tbtn-icon${hudOpen ? ' on' : ''}`}
+                    onClick={toggleHud}
+                    title={
+                      hudOpen
+                        ? 'Close the floating agent HUD'
+                        : 'Float every agent in a small always-on-top window — and approve ' +
+                          'what they ask for without leaving your editor'
+                    }
+                    aria-label="Floating agent HUD"
+                  >
+                    <IconHud size={15} />
                   </button>
                 )}
                 {liveTunnels.length > 0 && (
@@ -1419,6 +1596,10 @@ export function App() {
           accent={accent}
           onTheme={setTheme}
           onAccent={setAccent}
+          notchFollowsHelm={notchFollowsHelm}
+          onNotchFollowsHelm={(on) => void setNotchFollows(on)}
+          notchAutoCompact={notchAutoCompact}
+          onNotchAutoCompact={(on) => void setNotchCompact(on)}
           onClose={closeDialog}
         />
       )}
@@ -1498,6 +1679,25 @@ export function App() {
         />
       )}
       <Toaster />
+      {/* The agent HUD in that same floating window: every claude pane across
+          every project, and the Approve/Deny buttons for a pane blocked on a
+          tool call. Its heartbeat is what arms those server-side. */}
+      {pipWindow &&
+        hudOpen &&
+        createPortal(
+          <AgentHud
+            sessions={sessions}
+            workspaces={workspaces}
+            git={gitInfo}
+            profiles={profiles}
+            defaultEmail={defaultEmail}
+            defaultMapped={defaultMapped}
+            onJumpToPane={jumpToPane}
+            onChanged={refresh}
+            onClose={closePip}
+          />,
+          pipWindow.document.body,
+        )}
       {/* The floating always-on-top pane. Portalled into the picture-in-picture
           window's document, which re-mounts the pane there: its terminal is
           rebuilt and the socket reattaches with a ring-buffer replay, so no

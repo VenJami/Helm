@@ -11,6 +11,14 @@ export interface SessionInfo {
   activity: 'working' | 'waiting' | 'idle' | null; // from Claude Code hooks
   activitySince: string | null; // ISO — when activity last changed ("working 7m")
   activityNote: string | null; // latest Notification message while waiting (why it's blocked)
+  // A tool call claude is holding open while the floating HUD offers
+  // Approve/Deny. Only ever set while the HUD is open (it heartbeats to arm
+  // the channel); null everywhere else, including for dev panes. Flat fields,
+  // not a nested object — useSessionsPoll's shallowEqual compares with ===.
+  pendingId: string | null; // Helm's own id for the held request — what /approve answers
+  pendingTool: string | null; // 'Bash', 'Edit', an MCP tool name…
+  pendingDetail: string | null; // one human line: "Bash: npm run db:migrate"
+  pendingSince: string | null; // ISO — when it arrived
   summary: string | null; // auto-title from the conversation's first prompt (search/palette)
   canResume: boolean; // claude session id captured → revive resumes it
   hasTranscript: boolean;
@@ -62,6 +70,10 @@ export interface Workspace {
   port?: number; // project's dev-server port; absent = no server check
   startCommands?: string[]; // what ▶ runs — one dev pane per command (a project
   // can need a backend AND a frontend watcher)
+  // Show this project's panes in the floating notch? Absent = yes. Muting is
+  // the escape hatch for a project you never want glancing at; the notch drops
+  // long-idle panes on its own without any of this.
+  notch?: boolean;
 }
 
 // Per-workspace dev-server liveness for the sidebar. Only workspaces with a
@@ -139,6 +151,13 @@ export type WsClientMsg =
 
 export interface HelmSettings {
   autoRevive: boolean; // respawn dead panes automatically at server start
+  // The native notch hides itself while Helm's own window is on screen. Server
+  // state, not localStorage: the notch runs in its own WebView2 profile and
+  // shares no storage with the browser.
+  notchFollowsHelm: boolean;
+  // ...and when it IS on screen, rests as a strip of status lights, expanding
+  // to the full list when the cursor reaches it.
+  notchAutoCompact: boolean;
 }
 
 // claude-CLI drift diagnostics — Helm reads undocumented claude formats, so
@@ -192,6 +211,15 @@ export interface CommitsBehind {
 // State of the server's own console window (start-helm.cmd terminal).
 // supported:false = non-Windows or launched detached with no console → hide the
 // toggle button entirely.
+// The native notch window (desktop/HelmNotch). `supported` is false off Windows
+// and in a checkout that has never built it, so the UI can hide the entry
+// rather than offer something that cannot work.
+export interface NotchState {
+  supported: boolean;
+  running: boolean;
+  started?: boolean;
+}
+
 export interface ConsoleState {
   supported: boolean;
   visible: boolean;
@@ -207,4 +235,13 @@ export interface ProfilesInfo {
   // or null when default is its own distinct account.
   default: { email: string | null; mapped: string | null };
   profiles: Profile[];
+}
+
+// A cross-window "jump to this pane" request. The HUD raises one when it runs
+// as its own page (/hud) and cannot reach the main window's handler directly;
+// `at` doubles as the cursor the main window's long poll resumes from, so a
+// request landing between reconnects still gets delivered.
+export interface FocusRequest {
+  sessionId: string | null;
+  at: number;
 }
