@@ -443,6 +443,18 @@ Markdown and CSS are not in prettier's globs (`*.{ts,tsx,mjs}` only), so a
 mixed `.md`/`.css` breaks nothing — but keep them uniform anyway so diffs stay
 readable.
 
+## The smoke suite needs `web/dist`, and CI does not build it for free
+Two tests ask the server for `/` and `/hud` and assert the auth token was
+injected into the HTML. `servePage` reads those files off disk from
+`web/dist`, which is GITIGNORED — so on a runner that only installed the
+server, both answer **503** and the failure looks like a broken route rather
+than a missing build. The smoke job installs and builds `web/` first for
+exactly this reason; don't drop those steps to make CI faster.
+
+Locally the same trap is invisible, because your `web/dist` is already there
+from the last build. To reproduce a CI-shaped run: `mv web/dist web/dist.bak`,
+`npm test`, then move it back.
+
 ## Three ways a CDP check LIES about a filter or a shortcut
 All three hit while building pane categories + favourites, and each one reads
 as a broken feature when only the test is broken.
