@@ -15,6 +15,7 @@ const KEYS = {
   minimized: 'helm.minimized',
   fontSize: 'helm.fontSize',
   sidebarHidden: 'helm.sidebarHidden',
+  favoritesOnly: 'helm.favoritesOnly',
   sidebarWidth: 'helm.sidebarWidth',
   theme: 'helm.theme',
   accent: 'helm.accent',
@@ -133,6 +134,13 @@ export const storage = {
   sidebarHidden: {
     get: (): boolean => getRaw(KEYS.sidebarHidden) === '1',
     set: (hidden: boolean): void => setRaw(KEYS.sidebarHidden, hidden ? '1' : '0'),
+  },
+  // Show only starred panes in the grid. Defaults OFF and is never defaulted
+  // on by anything else: a filter that hides running panes has to be a choice
+  // the user can remember making.
+  favoritesOnly: {
+    get: (): boolean => getRaw(KEYS.favoritesOnly) === '1',
+    set: (on: boolean): void => setRaw(KEYS.favoritesOnly, on ? '1' : '0'),
   },
   // px, drag-set from the sidebar's right edge; out-of-range/corrupt → default
   sidebarWidth: {

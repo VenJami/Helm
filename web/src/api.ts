@@ -114,7 +114,7 @@ export const api = {
   // name a folder that exists or the server 400s.
   updateSession: (
     id: string,
-    patch: { name?: string; color?: string; categoryId?: string | null },
+    patch: { name?: string; color?: string; categoryId?: string | null; favorite?: boolean },
   ) => req<SessionInfo>(`/sessions/${id}`, { method: 'PATCH', body: JSON.stringify(patch) }),
 
   // ---- pane folders (categories)

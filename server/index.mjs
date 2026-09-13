@@ -197,6 +197,7 @@ function saveSettings() {
  * @property {string} name
  * @property {string} color
  * @property {string|null} categoryId   folder this pane belongs to, if any
+ * @property {boolean} favorite         starred — survives the "favorites only" filter
  * @property {string} workspace
  * @property {string|null} profile
  * @property {'claude'|'dev'} kind      'claude' = a claude CLI pane; 'dev' = the workspace's dev server
@@ -535,6 +536,7 @@ function createSession({ workspace, profile, cols, rows }) {
     id: crypto.randomUUID(),
     ...randomPaneIdentity(), // name + color (both customizable via PATCH)
     categoryId: null, // assigned later via PATCH
+    favorite: false,
     workspace,
     profile: profile || null,
     kind: 'claude',
@@ -584,6 +586,7 @@ function createDevSession({ workspace, command, name, cols, rows, ephemeral = fa
     name: (name || 'dev').slice(0, 32),
     color: '#4dd0e1',
     categoryId: null, // dev panes aren't filed into folders
+    favorite: false,
     workspace,
     profile: null,
     kind: 'dev',
@@ -689,6 +692,7 @@ function loadPersistedSessions() {
       // A folder deleted while this server was down leaves a ghost id behind;
       // drop it here rather than shipping a reference nothing can resolve.
       categoryId: categories.some((c) => c.id === s.categoryId) ? s.categoryId : null,
+      favorite: s.favorite === true,
       workspace: s.workspace,
       profile: s.profile ?? null,
       kind: s.kind === 'dev' ? 'dev' : 'claude',
@@ -768,6 +772,7 @@ function persistSessions() {
       name: s.name,
       color: s.color,
       categoryId: s.categoryId ?? null,
+      favorite: s.favorite === true,
       workspace: s.workspace,
       profile: s.profile,
       kind: s.kind,
@@ -807,6 +812,7 @@ function sessionInfo(s) {
     name: s.name,
     color: s.color,
     categoryId: s.categoryId ?? null,
+    favorite: s.favorite === true,
     workspace: s.workspace,
     profile: s.profile,
     kind: s.kind ?? 'claude',
@@ -1211,7 +1217,7 @@ app.delete('/api/sessions/:id', (req, res) => {
 app.patch('/api/sessions/:id', (req, res) => {
   const session = sessions.get(req.params.id);
   if (!session) return res.status(404).json({ error: 'no such session' });
-  const { name, color, categoryId } = req.body || {};
+  const { name, color, categoryId, favorite } = req.body || {};
   if (name !== undefined) {
     if (typeof name !== 'string' || !name.trim() || name.trim().length > 32) {
       return res.status(400).json({ error: 'name must be 1–32 characters' });
@@ -1231,6 +1237,12 @@ app.patch('/api/sessions/:id', (req, res) => {
       return res.status(400).json({ error: 'no such category' });
     }
     session.categoryId = categoryId;
+  }
+  if (favorite !== undefined) {
+    if (typeof favorite !== 'boolean') {
+      return res.status(400).json({ error: 'favorite must be a boolean' });
+    }
+    session.favorite = favorite;
   }
   persistSessions();
   res.json(sessionInfo(session));

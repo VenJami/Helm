@@ -40,6 +40,7 @@ import {
   IconPanelLeftOpen,
   IconPlus,
   IconPopOut,
+  IconStar,
 } from './components/Icons';
 import {
   AnimateIcon,
@@ -111,6 +112,15 @@ export function App() {
       .then(setCategories)
       .catch(() => {});
   }, []);
+  // "Favorites only" — hides unstarred panes in the grid. A filter that hides
+  // RUNNING panes is the invisible-pane bug class this repo has hit before, so
+  // it never turns itself on, always reports what it is hiding, and any jump to
+  // a pane it would hide switches it off (see jumpToPane).
+  const [favoritesOnly, setFavoritesOnly] = useState(() => storage.favoritesOnly.get());
+  const toggleFavoritesOnly = (on: boolean) => {
+    setFavoritesOnly(on);
+    storage.favoritesOnly.set(on);
+  };
   const [selectedId, setSelectedId] = useState<string | null>(storage.workspaceId.get());
   const [profileChoice, setProfileChoice] = useState('');
   const [dialog, setDialog] = useState<Dialog>(null);
@@ -393,7 +403,9 @@ export function App() {
     if (selectedWsId) setPaneOrder(storage.paneOrder.get(selectedWsId));
   }, [selectedWsId]);
 
-  const panes = useMemo(() => {
+  // Every pane in this workspace, before the favorites filter — the count the
+  // filter reports against, so a hidden pane is always accounted for.
+  const allPanes = useMemo(() => {
     const idx = new Map(paneOrder.map((id, i) => [id, i]));
     return sessions
       .filter((s) => selected && s.workspace === selected.dir)
@@ -403,6 +415,11 @@ export function App() {
           a.createdAt.localeCompare(b.createdAt),
       );
   }, [sessions, selected, paneOrder]);
+  const panes = useMemo(
+    () => (favoritesOnly ? allPanes.filter((p) => p.favorite) : allPanes),
+    [allPanes, favoritesOnly],
+  );
+  const hiddenByFilter = allPanes.length - panes.length;
 
   // Panes minimized to the tray are excluded from the grid's column count.
   const minimizedPanes = useMemo(
@@ -918,6 +935,10 @@ export function App() {
   const jumpToPane = (s: SessionInfo) => {
     const ws = workspaces.find((w) => w.dir === s.workspace);
     if (ws && ws.id !== selected?.id) select(ws.id);
+    // Jumping to a pane the favorites filter would hide has to turn the filter
+    // off, or the jump "succeeds" onto an empty grid — the failure mode the
+    // whole guard exists for (Ctrl+K and the "N waiting" pill both land here).
+    if (!s.favorite) toggleFavoritesOnly(false);
     setMaximizedId((m) => (m && m !== s.id ? null : m));
     restorePane(s.id);
     focusPane(s.id);
@@ -953,6 +974,9 @@ export function App() {
     waitingRotor.current += 1;
     const ws = workspaces.find((w) => w.dir === target.workspace);
     if (ws && ws.id !== selected?.id) select(ws.id);
+    // Same guard as jumpToPane: a pane BLOCKED on you is the last thing the
+    // favorites filter should be allowed to hide.
+    if (!target.favorite) toggleFavoritesOnly(false);
     setMaximizedId(null);
     restorePane(target.id);
     focusPane(target.id);
@@ -1010,6 +1034,14 @@ export function App() {
       keywords: 'tokens cost spend money limit',
       run: openUsage,
     });
+    if (allPanes.some((p) => p.favorite) || favoritesOnly)
+      list.push({
+        key: 'favorites',
+        label: favoritesOnly ? 'Show every pane (not just favorites)' : 'Show only favorite panes',
+        icon: 'maximize',
+        keywords: 'favorite favourites star starred pinned filter only',
+        run: () => toggleFavoritesOnly(!favoritesOnly),
+      });
     if (categories.length)
       list.push({
         key: 'categories',
@@ -1417,6 +1449,21 @@ export function App() {
                     <IconChart /> <span className="tbtn-label">Usage</span>
                   </button>
                 </AnimateIcon>
+                <button
+                  className={`tbtn ${favoritesOnly ? 'on' : ''}`}
+                  onClick={() => toggleFavoritesOnly(!favoritesOnly)}
+                  title={
+                    favoritesOnly
+                      ? `Showing favorites only${hiddenByFilter ? ` — ${hiddenByFilter} hidden here` : ''}. Click to show every pane.`
+                      : 'Show only starred panes'
+                  }
+                >
+                  <IconStar size={14} filled={favoritesOnly} />{' '}
+                  <span className="tbtn-label">
+                    Favorites
+                    {favoritesOnly && hiddenByFilter > 0 ? ` (${hiddenByFilter} hidden)` : ''}
+                  </span>
+                </button>
                 <AnimateIcon asChild>
                   <button
                     className={`tbtn ${autoRevive ? 'on' : ''}`}
@@ -1604,10 +1651,27 @@ export function App() {
             ) : (
               <div className="main-empty">
                 <div className="main-empty-inner">
-                  <span>No panes in this workspace.</span>
-                  <button className="btn" onClick={newPane}>
-                    <IconPlus size={13} /> New pane
-                  </button>
+                  {/* An empty grid caused BY the filter must say so and offer
+                      the way out — otherwise the panes read as lost. */}
+                  {hiddenByFilter > 0 ? (
+                    <>
+                      <span>
+                        Showing favorites only — {hiddenByFilter} pane
+                        {hiddenByFilter === 1 ? '' : 's'} in this project{' '}
+                        {hiddenByFilter === 1 ? 'is' : 'are'} hidden.
+                      </span>
+                      <button className="btn" onClick={() => toggleFavoritesOnly(false)}>
+                        Show all panes
+                      </button>
+                    </>
+                  ) : (
+                    <>
+                      <span>No panes in this workspace.</span>
+                      <button className="btn" onClick={newPane}>
+                        <IconPlus size={13} /> New pane
+                      </button>
+                    </>
+                  )}
                 </div>
               </div>
             )}

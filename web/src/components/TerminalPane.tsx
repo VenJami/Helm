@@ -17,6 +17,7 @@ import {
   IconMinus,
   IconPopIn,
   IconPopOut,
+  IconStar,
   IconUserSwitch,
   IconX,
 } from './Icons';
@@ -526,6 +527,15 @@ function TerminalPaneImpl({
     }
   };
 
+  const toggleFavorite = async () => {
+    try {
+      await api.updateSession(session.id, { favorite: !session.favorite });
+      onChanged();
+    } catch {
+      /* ignore — the star is a preference, not worth a toast */
+    }
+  };
+
   // Click the folder this pane is already in to file it back out.
   const setCategory = async (categoryId: string | null) => {
     setColorOpen(false);
@@ -683,6 +693,13 @@ function TerminalPaneImpl({
             {category.name}
           </span>
         )}
+        <button
+          className={`pane-star ${session.favorite ? 'on' : ''}`}
+          title={session.favorite ? 'Remove from favorites' : 'Add to favorites'}
+          onClick={toggleFavorite}
+        >
+          <IconStar size={13} filled={session.favorite} />
+        </button>
         {session.summary && (
           <span className="pane-summary" title={session.summary}>
             {session.summary}

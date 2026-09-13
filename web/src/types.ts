@@ -13,6 +13,7 @@ export interface SessionInfo {
   name: string;
   color: string; // #rrggbb accent — used when the pane is in no category
   categoryId: string | null; // folder this pane belongs to, if any
+  favorite: boolean; // starred — the one thing the "favorites only" filter keeps
   workspace: string;
   profile: string | null;
   kind: 'claude' | 'dev'; // 'dev' = the workspace's dev-server pane, not a claude session

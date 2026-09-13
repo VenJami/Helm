@@ -1134,6 +1134,21 @@ html, body {
 }
 .cat-edit-row .modal-input { flex: 1; min-width: 0; }
 
+/* Star a pane. Dim until starred, so an unstarred header stays quiet. */
+.pane-star {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  background: transparent;
+  border: none;
+  padding: 0 1px;
+  cursor: pointer;
+  color: var(--text-dim);
+  opacity: 0.55;
+}
+.pane-star:hover { opacity: 1; color: var(--text); }
+.pane-star.on { opacity: 1; color: var(--accent); }
+
 /* The folder chip beside a pane's name, and its twin in the Ctrl+K list. */
 .pane-category {
   flex-shrink: 0;
