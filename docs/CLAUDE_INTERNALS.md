@@ -88,9 +88,53 @@ the polish call gets slow again but never wrong.
 
 - Events relayed via `claude --settings <hook-settings.json>` (never edits a
   profile's own settings): `SessionStart`, `UserPromptSubmit`, `Stop`,
-  `Notification`. Relay script: `server/hook-post.mjs`.
+  `Notification`, `PermissionRequest`. Relay script: `server/hook-post.mjs`.
 - Hook payload fields read: `session_id`, `transcript_path`, `hook_event_name`,
   `message` (Notification text → the pane's `activityNote`).
+
+### 5a. `PermissionRequest` — the only hook whose REPLY we send back
+
+This is what lets the floating agent HUD approve or deny a tool call without
+you going to the pane. Everything here was read off the REAL CLI (2.1.260),
+because **the published docs are wrong about the reply**.
+
+Payload fields Helm reads: `tool_name`, `tool_input`. Notably **there is no
+`tool_use_id`** — the docs describe one, the CLI does not send it — so Helm
+mints its own request id and correlates by holding the hook's HTTP response
+open instead.
+
+The reply schema, verbatim from claude's own `--debug` validation error:
+
+```jsonc
+{ "hookSpecificOutput": {
+    "hookEventName": "PermissionRequest",
+    // allow:
+    "decision": { "behavior": "allow" }
+    // deny:  { "behavior": "deny", "message": "...", "interrupt": false }
+} }
+```
+
+Three traps, each of which silently does nothing:
+
+- `decision` is an **object keyed by `behavior`**, not the string `"allow"`
+  the docs show. A string fails validation.
+- A **top-level `decision`** key is the legacy `approve|block` field. Including
+  it fails schema validation and voids the *whole* reply, even if
+  `hookSpecificOutput` is perfect.
+- `PreToolUse` uses a different shape again (`permissionDecision: "allow"`), so
+  the two are not interchangeable.
+
+Printing nothing means "no opinion": claude shows its own prompt in the pane.
+That is the fallback for every timeout, error and unarmed request, and it is
+why the feature cannot break a pane. When debugging this, run a pane's claude
+with `--debug` — it writes hook parsing and validation errors to
+`~/.claude/debug/<uuid>.txt`, which is the only place the real schema appears.
+
+**A pane may simply never ask.** `PermissionRequest` fires only when a decision
+is actually needed, so an account whose settings set
+`permissions.defaultMode` to `auto` (or a session in `acceptEdits`/
+`bypassPermissions`) will approve most things itself and the HUD's buttons will
+rarely appear. That is correct behaviour, not a Helm bug.
 
 ## 6. CLI flags
 
@@ -184,6 +228,7 @@ inline signals), exposed at `GET /api/diagnostics`:
 | Suggest: no result | `suggest-noresult` | that envelope had no string `result` field |
 | Polish: not JSON | `polish-nonjson` | the dictation-polish call printed something unparseable |
 | Polish: no result | `polish-noresult` | that envelope had no string `result` field |
+| PermissionRequest shape | `permissionrequest-shape` | the hook fired with no `tool_name` — the HUD can no longer say what a pane is asking, so Approve/Deny is disabled (panes still prompt normally) |
 
 Warnings are deduped by key, counted, and shown until dismissed; a *new* key
 re-opens the banner.

@@ -56,6 +56,16 @@ jobs:
       - name: Install server deps
         working-directory: server
         run: npm ci   # exact, reproducible — matches the pinned node-pty (GOTCHAS)
+      # The suite asks the server for / and /hud and asserts the token was
+      # injected, so it needs a real web/dist — that directory is gitignored,
+      # and without this step those tests fail on a missing file rather than on
+      # anything they are meant to catch.
+      - name: Install frontend deps
+        working-directory: web
+        run: npm ci
+      - name: Build frontend (the suite serves these pages)
+        working-directory: web
+        run: npm run build
       - name: Audit server deps
         working-directory: server
         run: npm audit --audit-level=high

@@ -2,12 +2,14 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { api, ApiError } from './api';
 import { storage } from './lib/storage';
+import { groupByCategory, paneAccent } from './lib/categories';
 import { useSessionsPoll } from './hooks/useSessionsPoll';
 import { useWorkspaceStatus } from './hooks/useWorkspaceStatus';
 import { useTheme } from './hooks/useTheme';
 import { useGridWeights } from './hooks/useGridWeights';
 import { pipSupported, usePipWindow } from './hooks/usePipWindow';
-import type { LogEntry, SessionInfo, Workspace } from './types';
+import { useFocusRequests } from './hooks/useFocusRequests';
+import type { Category, LogEntry, SessionInfo, Workspace } from './types';
 import { Sidebar } from './components/Sidebar';
 import { TerminalPane } from './components/TerminalPane';
 import { ProfileSelect } from './components/ProfileSelect';
@@ -17,6 +19,7 @@ import { DriftBanner } from './components/DriftBanner';
 import { UpdateBanner } from './components/UpdateBanner';
 import { CommandPalette, type PaletteAction } from './components/CommandPalette';
 import { GridResizers } from './components/GridResizers';
+import { AgentHud } from './components/AgentHud';
 import { NewProfileModal } from './components/modals/NewProfileModal';
 import { ProfilesModal } from './components/modals/ProfilesModal';
 import { UsageModal } from './components/modals/UsageModal';
@@ -26,15 +29,18 @@ import { AppearanceModal } from './components/modals/AppearanceModal';
 import { ShareModal } from './components/modals/ShareModal';
 import { InstallCloudflaredModal } from './components/modals/InstallCloudflaredModal';
 import { SharesModal } from './components/modals/SharesModal';
+import { CategoriesModal } from './components/modals/CategoriesModal';
 import { CleanupModal } from './components/modals/CleanupModal';
 import {
   IconBug,
   IconGlobe,
+  IconHud,
   IconMinus,
   IconPalette,
   IconPanelLeftOpen,
   IconPlus,
   IconPopOut,
+  IconStar,
 } from './components/Icons';
 import {
   AnimateIcon,
@@ -65,6 +71,7 @@ type Dialog =
   // The live public links: full URLs, copy/open/extend/stop. A share URL needs
   // somewhere permanent to live — a toast and a tooltip weren't it.
   | { kind: 'shares' }
+  | { kind: 'categories' }
   | { kind: 'cleanup' }
   | null;
 
@@ -95,6 +102,25 @@ export function App() {
     setWsOrder(ids);
     storage.wsOrder.set(ids);
   };
+  // Pane folders. NOT polled — they only change when you change them, and the
+  // array reference has to stay stable between session polls or every pane's
+  // React.memo would miss.
+  const [categories, setCategories] = useState<Category[]>([]);
+  const refreshCategories = useCallback(() => {
+    api
+      .listCategories()
+      .then(setCategories)
+      .catch(() => {});
+  }, []);
+  // "Favorites only" — hides unstarred panes in the grid. A filter that hides
+  // RUNNING panes is the invisible-pane bug class this repo has hit before, so
+  // it never turns itself on, always reports what it is hiding, and any jump to
+  // a pane it would hide switches it off (see jumpToPane).
+  const [favoritesOnly, setFavoritesOnly] = useState(() => storage.favoritesOnly.get());
+  const toggleFavoritesOnly = (on: boolean) => {
+    setFavoritesOnly(on);
+    storage.favoritesOnly.set(on);
+  };
   const [selectedId, setSelectedId] = useState<string | null>(storage.workspaceId.get());
   const [profileChoice, setProfileChoice] = useState('');
   const [dialog, setDialog] = useState<Dialog>(null);
@@ -117,6 +143,10 @@ export function App() {
   // browser only opens such a window from a user gesture, so a remembered id
   // would restore a pane that's nowhere on screen.
   const [poppedId, setPoppedId] = useState<string | null>(null);
+  // The same floating window can instead hold the agent HUD — the browser
+  // allows exactly one per page, so the two are mutually exclusive by
+  // construction. Also not persisted, for the same gesture reason.
+  const [hudOpen, setHudOpen] = useState(false);
   const { pipWindow, open: openPip, close: closePip } = usePipWindow();
   const canPop = useMemo(() => pipSupported(), []);
   useEffect(() => {
@@ -174,8 +204,15 @@ export function App() {
       return next;
     });
   const [autoRevive, setAutoRevive] = useState(false); // mirrors server settings
+  // Whether the native notch window hides itself while this window is up. Server
+  // state, because the notch runs in its own WebView2 profile and cannot see
+  // this browser's localStorage.
+  const [notchFollowsHelm, setNotchFollowsHelm] = useState(true);
+  const [notchAutoCompact, setNotchAutoCompact] = useState(true);
 
   // Server console window (start-helm.cmd terminal) show/hide toggle.
+  // Whether this machine can open the native notch (Windows + built).
+  const [notchSupported, setNotchSupported] = useState(false);
   const [consoleState, setConsoleState] = useState<{ supported: boolean; visible: boolean }>({
     supported: false,
     visible: true,
@@ -296,11 +333,48 @@ export function App() {
       .listWorkspaces()
       .then(setWorkspaces)
       .catch(() => {});
+    refreshCategories();
+    api
+      .getNotch()
+      .then((n) => setNotchSupported(n.supported))
+      .catch(() => {});
     api
       .getSettings()
-      .then((s) => setAutoRevive(s.autoRevive))
+      .then((s) => {
+        setAutoRevive(s.autoRevive);
+        setNotchFollowsHelm(s.notchFollowsHelm);
+        setNotchAutoCompact(s.notchAutoCompact);
+      })
       .catch(() => {});
-  }, []);
+  }, [refreshCategories]);
+
+  // Both notch toggles behave the same way: optimistic, reverted on failure.
+  // The notch itself picks them up from the server on its own poll.
+  const patchNotch = async (
+    patch: { notchFollowsHelm: boolean } | { notchAutoCompact: boolean },
+    revert: () => void,
+  ) => {
+    try {
+      const s = await api.updateSettings(patch);
+      setNotchFollowsHelm(s.notchFollowsHelm);
+      setNotchAutoCompact(s.notchAutoCompact);
+    } catch (err) {
+      revert();
+      toast.error((err as Error).message);
+    }
+  };
+
+  const setNotchFollows = (on: boolean) => {
+    const before = notchFollowsHelm;
+    setNotchFollowsHelm(on);
+    return patchNotch({ notchFollowsHelm: on }, () => setNotchFollowsHelm(before));
+  };
+
+  const setNotchCompact = (on: boolean) => {
+    const before = notchAutoCompact;
+    setNotchAutoCompact(on);
+    return patchNotch({ notchAutoCompact: on }, () => setNotchAutoCompact(before));
+  };
 
   const toggleAutoRevive = async () => {
     try {
@@ -329,7 +403,9 @@ export function App() {
     if (selectedWsId) setPaneOrder(storage.paneOrder.get(selectedWsId));
   }, [selectedWsId]);
 
-  const panes = useMemo(() => {
+  // Every pane in this workspace, before the favorites filter — the count the
+  // filter reports against, so a hidden pane is always accounted for.
+  const allPanes = useMemo(() => {
     const idx = new Map(paneOrder.map((id, i) => [id, i]));
     return sessions
       .filter((s) => selected && s.workspace === selected.dir)
@@ -339,6 +415,11 @@ export function App() {
           a.createdAt.localeCompare(b.createdAt),
       );
   }, [sessions, selected, paneOrder]);
+  const panes = useMemo(
+    () => (favoritesOnly ? allPanes.filter((p) => p.favorite) : allPanes),
+    [allPanes, favoritesOnly],
+  );
+  const hiddenByFilter = allPanes.length - panes.length;
 
   // Panes minimized to the tray are excluded from the grid's column count.
   const minimizedPanes = useMemo(
@@ -744,27 +825,83 @@ export function App() {
   // React.memo on every pane each time the popped pane changes.
   const poppedRef = useRef<string | null>(null);
   poppedRef.current = poppedId;
+  // The browser only opens a floating window off a fresh click, and that
+  // permission expires in seconds. Its raw message ("Document PiP requires
+  // user activation") tells you nothing about what to do next, so say it.
+  const floatingError = (what: string, err: unknown) => {
+    const msg = err instanceof Error ? err.message : String(err);
+    return /user activation/i.test(msg)
+      ? `Could not ${what} — the browser only allows a floating window straight off a click. Try clicking it again.`
+      : `Could not ${what}: ${msg}`;
+  };
+  // Replacing the floating window's contents means closing the old window,
+  // whose 'pagehide' teardown nulls pipWindow and trips the "it was closed"
+  // effect below. That teardown normally lands before requestWindow resolves,
+  // but the order isn't ours to guarantee — so suppress the effect for the
+  // duration of an open rather than relying on it.
+  const openingRef = useRef(false);
+  const openFloating = useCallback(
+    (kind: 'pane' | 'hud') => {
+      openingRef.current = true;
+      return openPip(kind).finally(() => {
+        openingRef.current = false;
+      });
+    },
+    [openPip],
+  );
+
   const togglePop = useCallback(
     (id: string) => {
       if (poppedRef.current === id) {
         closePip(); // 'pagehide' clears poppedId and the pane returns to the grid
         return;
       }
-      void openPip()
+      void openFloating('pane')
         .then((win) => {
           if (!win) return;
           restorePane(id); // can't be in the tray and floating at once
           setMaximizedId((m) => (m === id ? null : m));
+          setHudOpen(false); // one floating window: the pane displaces the HUD
           setPoppedId(id);
         })
-        .catch((err) => toast.error(`Could not pop out the pane: ${(err as Error).message}`));
+        .catch((err) => {
+          setPoppedId(null); // never leave the grid missing a pane that isn't floating
+          setHudOpen(false);
+          toast.error(floatingError('pop out the pane', err));
+        });
     },
-    [closePip, openPip, restorePane],
+    [closePip, openFloating, restorePane],
   );
 
-  // The user closed the floating window with its own X — the pane comes home.
+  // Open/close the agent HUD in that same window. While it's open it heartbeats
+  // the server, which is what lets its Approve/Deny buttons answer a pane's
+  // permission request; closing it puts every pane back to prompting for itself.
+  const toggleHud = useCallback(() => {
+    if (hudOpen) {
+      closePip();
+      return;
+    }
+    void openFloating('hud')
+      .then((win) => {
+        if (!win) return;
+        setPoppedId(null); // the HUD displaces a popped pane
+        setHudOpen(true);
+      })
+      .catch((err) => {
+        setHudOpen(false); // a failed open must not leave the button stuck "on"
+        setPoppedId(null);
+        toast.error(floatingError('open the HUD', err));
+      });
+  }, [hudOpen, closePip, openFloating]);
+
+  // The user closed the floating window with its own X — the pane comes home,
+  // or the HUD is simply gone (and approvals disarm on the server as soon as
+  // its heartbeat lapses).
   useEffect(() => {
-    if (!pipWindow) setPoppedId(null);
+    if (!pipWindow && !openingRef.current) {
+      setPoppedId(null);
+      setHudOpen(false);
+    }
   }, [pipWindow]);
 
   // The popped pane was killed or deleted: don't leave an empty window behind.
@@ -798,10 +935,34 @@ export function App() {
   const jumpToPane = (s: SessionInfo) => {
     const ws = workspaces.find((w) => w.dir === s.workspace);
     if (ws && ws.id !== selected?.id) select(ws.id);
+    // Jumping to a pane the favorites filter would hide has to turn the filter
+    // off, or the jump "succeeds" onto an empty grid — the failure mode the
+    // whole guard exists for (Ctrl+K and the "N waiting" pill both land here).
+    if (!s.favorite) toggleFavoritesOnly(false);
     setMaximizedId((m) => (m && m !== s.id ? null : m));
     restorePane(s.id);
     focusPane(s.id);
   };
+
+  // The same jump, asked for from another window — a HUD running as its own
+  // page (/hud) can't call jumpToPane directly, so it comes through the server.
+  useFocusRequests(
+    useCallback(
+      (id: string) => {
+        const s = sessions.find((x) => x.id === id);
+        if (!s) return;
+        // Best-effort: browsers ignore this for a minimised or background
+        // window, which is why the NATIVE notch raises us itself (raiseHelm).
+        // Still worth trying for the browser-window HUD, which has no host.
+        window.focus();
+        jumpToPane(s);
+      },
+      // jumpToPane is rebuilt every render (a plain const) and the hook holds
+      // this in a ref, so listing it would churn without changing behaviour.
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+      [sessions],
+    ),
+  );
 
   // Click "N waiting" → hop to the next pane blocked on you, across workspaces,
   // rotating through them on repeated clicks.
@@ -813,6 +974,9 @@ export function App() {
     waitingRotor.current += 1;
     const ws = workspaces.find((w) => w.dir === target.workspace);
     if (ws && ws.id !== selected?.id) select(ws.id);
+    // Same guard as jumpToPane: a pane BLOCKED on you is the last thing the
+    // favorites filter should be allowed to hide.
+    if (!target.favorite) toggleFavoritesOnly(false);
     setMaximizedId(null);
     restorePane(target.id);
     focusPane(target.id);
@@ -870,6 +1034,22 @@ export function App() {
       keywords: 'tokens cost spend money limit',
       run: openUsage,
     });
+    if (allPanes.some((p) => p.favorite) || favoritesOnly)
+      list.push({
+        key: 'favorites',
+        label: favoritesOnly ? 'Show every pane (not just favorites)' : 'Show only favorite panes',
+        icon: 'maximize',
+        keywords: 'favorite favourites star starred pinned filter only',
+        run: () => toggleFavoritesOnly(!favoritesOnly),
+      });
+    if (categories.length)
+      list.push({
+        key: 'categories',
+        label: 'Manage pane categories…',
+        icon: 'chart',
+        keywords: 'category categories group groups folder folders tag color rename',
+        run: () => setDialog({ kind: 'categories' }),
+      });
     if (sessions.some((s) => s.status !== 'running'))
       list.push({
         key: 'cleanup',
@@ -916,6 +1096,31 @@ export function App() {
           },
         });
     }
+    if (canPop)
+      list.push({
+        key: 'hud',
+        label: hudOpen ? 'Close the agent HUD' : 'Float the agent HUD',
+        icon: 'popout',
+        keywords: 'notch overview approve deny permission always on top monitor agents',
+        run: toggleHud,
+      });
+    if (notchSupported)
+      list.push({
+        key: 'notch',
+        label: 'Open the agent notch',
+        icon: 'popout',
+        keywords: 'notch floating strip always on top status lights agents monitor',
+        // The REAL notch (desktop/HelmNotch), not a browser window. This entry
+        // replaced one that opened /hud in a popup: two ways to "float the HUD"
+        // that read identically in the palette, and the browser one is what got
+        // mistaken for the notch.
+        run: () => {
+          void api
+            .openNotch()
+            .then((n) => toast.success(n.started ? 'Notch opened' : 'The notch is already open'))
+            .catch((err: Error) => toast.error(err.message));
+        },
+      });
     list.push({
       key: 'appearance',
       label: 'Appearance…',
@@ -1037,6 +1242,25 @@ export function App() {
     select(ws.id);
   };
 
+  // API + state sync; validation and inline errors live in CategoriesModal.
+  const saveCategory = async (id: string, patch: { name?: string; color?: string }) => {
+    const saved = await api.updateCategory(id, patch);
+    setCategories((prev) => prev.map((c) => (c.id === id ? saved : c)));
+  };
+
+  // The server empties every pane filed here as part of the delete, so the
+  // session list has to be refetched too or those panes keep rendering in a
+  // category that no longer exists until the next poll.
+  const deleteCategory = async (id: string) => {
+    try {
+      const { emptied } = await api.removeCategory(id);
+      setCategories((prev) => prev.filter((c) => c.id !== id));
+      if (emptied) refresh();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'could not delete the category');
+    }
+  };
+
   return (
     <div className="app">
       {/* Custom cursor lives in the sidebar only — everywhere else the
@@ -1076,6 +1300,17 @@ export function App() {
           onSuggestStart={suggestStart}
           onShare={askToShare}
           onUnshare={unshare}
+          onToggleNotch={(id, show) => {
+            // Optimistic: the notch reads workspaces on its own 6 s poll, so
+            // the sidebar label should not wait for a round trip to flip.
+            setWorkspaces((ws) =>
+              ws.map((w) => (w.id === id ? { ...w, notch: show ? undefined : false } : w)),
+            );
+            void api.updateWorkspace(id, { notch: show }).catch((err: Error) => {
+              toast.error(err.message);
+              void api.listWorkspaces().then(setWorkspaces);
+            });
+          }}
           onShowShares={() => setDialog({ kind: 'shares' })}
           dragId={dragWsId}
           dragOverId={dragOverWsId}
@@ -1173,6 +1408,21 @@ export function App() {
                     <span className="tbtn-label">waiting</span>
                   </button>
                 )}
+                {canPop && (
+                  <button
+                    className={`tbtn tbtn-icon${hudOpen ? ' on' : ''}`}
+                    onClick={toggleHud}
+                    title={
+                      hudOpen
+                        ? 'Close the floating agent HUD'
+                        : 'Float every agent in a small always-on-top window — and approve ' +
+                          'what they ask for without leaving your editor'
+                    }
+                    aria-label="Floating agent HUD"
+                  >
+                    <IconHud size={15} />
+                  </button>
+                )}
                 {liveTunnels.length > 0 && (
                   // Deliberately loud and always visible, from any workspace:
                   // the danger with an unauthenticated link isn't creating it,
@@ -1199,6 +1449,21 @@ export function App() {
                     <IconChart /> <span className="tbtn-label">Usage</span>
                   </button>
                 </AnimateIcon>
+                <button
+                  className={`tbtn ${favoritesOnly ? 'on' : ''}`}
+                  onClick={() => toggleFavoritesOnly(!favoritesOnly)}
+                  title={
+                    favoritesOnly
+                      ? `Showing favorites only${hiddenByFilter ? ` — ${hiddenByFilter} hidden here` : ''}. Click to show every pane.`
+                      : 'Show only starred panes'
+                  }
+                >
+                  <IconStar size={14} filled={favoritesOnly} />{' '}
+                  <span className="tbtn-label">
+                    Favorites
+                    {favoritesOnly && hiddenByFilter > 0 ? ` (${hiddenByFilter} hidden)` : ''}
+                  </span>
+                </button>
                 <AnimateIcon asChild>
                   <button
                     className={`tbtn ${autoRevive ? 'on' : ''}`}
@@ -1255,32 +1520,54 @@ export function App() {
                 {poppedSession && panes.some((p) => p.id === poppedSession.id) && (
                   <button
                     className="tray-chip tray-chip-popped"
-                    style={{ borderColor: poppedSession.color }}
+                    style={{ borderColor: paneAccent(poppedSession, categories) }}
                     title={`"${poppedSession.name}" is in the floating window — click to bring it back`}
                     onClick={() => togglePop(poppedSession.id)}
                   >
                     <IconPopOut size={12} />
-                    <span style={{ color: poppedSession.color }}>{poppedSession.name}</span>
+                    <span style={{ color: paneAccent(poppedSession, categories) }}>
+                      {poppedSession.name}
+                    </span>
                     <span className="tray-chip-note">floating</span>
                   </button>
                 )}
-                {minimizedPanes.map((s) => (
-                  <button
-                    key={s.id}
-                    className="tray-chip"
-                    style={{ borderColor: s.color }}
-                    title={`Restore "${s.name}"`}
-                    onClick={() => restorePane(s.id)}
+                {/* Minimized panes sit WITH the rest of their category, in one
+                    container tinted that category's color — the grid's grouping
+                    shouldn't evaporate the moment a pane is minimized. Panes in
+                    no category share the last, unlabelled group. */}
+                {groupByCategory(minimizedPanes, categories).map((g) => (
+                  <div
+                    key={g.category?.id ?? '(none)'}
+                    className={`tray-group ${g.category ? 'tray-group-named' : ''}`}
+                    style={g.category ? { borderColor: g.category.color } : undefined}
                   >
-                    <span
-                      className={`dot ${
-                        { working: 'dot-working', waiting: 'dot-waiting', idle: 'dot-live' }[
-                          s.activity ?? 'idle'
-                        ]
-                      }`}
-                    />
-                    <span style={{ color: s.color }}>{s.name}</span>
-                  </button>
+                    {g.category && (
+                      <span className="tray-group-label" style={{ color: g.category.color }}>
+                        {g.category.name}
+                      </span>
+                    )}
+                    {g.panes.map((s) => {
+                      const accent = paneAccent(s, categories);
+                      return (
+                        <button
+                          key={s.id}
+                          className="tray-chip"
+                          style={{ borderColor: accent }}
+                          title={`Restore "${s.name}"`}
+                          onClick={() => restorePane(s.id)}
+                        >
+                          <span
+                            className={`dot ${
+                              { working: 'dot-working', waiting: 'dot-waiting', idle: 'dot-live' }[
+                                s.activity ?? 'idle'
+                              ]
+                            }`}
+                          />
+                          <span style={{ color: accent }}>{s.name}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
                 ))}
               </div>
             )}
@@ -1354,6 +1641,9 @@ export function App() {
                       defaultEmail={defaultEmail}
                       mappedDefault={defaultMapped}
                       fontSize={fontSize}
+                      categories={categories}
+                      onCategoriesChanged={refreshCategories}
+                      onManageCategories={() => setDialog({ kind: 'categories' })}
                     />
                   </div>
                 ))}
@@ -1361,10 +1651,27 @@ export function App() {
             ) : (
               <div className="main-empty">
                 <div className="main-empty-inner">
-                  <span>No panes in this workspace.</span>
-                  <button className="btn" onClick={newPane}>
-                    <IconPlus size={13} /> New pane
-                  </button>
+                  {/* An empty grid caused BY the filter must say so and offer
+                      the way out — otherwise the panes read as lost. */}
+                  {hiddenByFilter > 0 ? (
+                    <>
+                      <span>
+                        Showing favorites only — {hiddenByFilter} pane
+                        {hiddenByFilter === 1 ? '' : 's'} in this project{' '}
+                        {hiddenByFilter === 1 ? 'is' : 'are'} hidden.
+                      </span>
+                      <button className="btn" onClick={() => toggleFavoritesOnly(false)}>
+                        Show all panes
+                      </button>
+                    </>
+                  ) : (
+                    <>
+                      <span>No panes in this workspace.</span>
+                      <button className="btn" onClick={newPane}>
+                        <IconPlus size={13} /> New pane
+                      </button>
+                    </>
+                  )}
                 </div>
               </div>
             )}
@@ -1419,6 +1726,10 @@ export function App() {
           accent={accent}
           onTheme={setTheme}
           onAccent={setAccent}
+          notchFollowsHelm={notchFollowsHelm}
+          onNotchFollowsHelm={(on) => void setNotchFollows(on)}
+          notchAutoCompact={notchAutoCompact}
+          onNotchAutoCompact={(on) => void setNotchCompact(on)}
           onClose={closeDialog}
         />
       )}
@@ -1470,6 +1781,16 @@ export function App() {
         <UsageModal profiles={profiles} defaultMapped={defaultMapped} onClose={closeDialog} />
       )}
 
+      {dialog?.kind === 'categories' && (
+        <CategoriesModal
+          categories={categories}
+          sessions={sessions}
+          onClose={closeDialog}
+          onSave={saveCategory}
+          onDelete={(id) => void deleteCategory(id)}
+        />
+      )}
+
       {dialog?.kind === 'cleanup' && (
         <CleanupModal
           sessions={sessions}
@@ -1495,9 +1816,30 @@ export function App() {
           onJumpToPane={jumpToPane}
           onSelectWorkspace={select}
           actions={paletteActions}
+          categories={categories}
         />
       )}
       <Toaster />
+      {/* The agent HUD in that same floating window: every claude pane across
+          every project, and the Approve/Deny buttons for a pane blocked on a
+          tool call. Its heartbeat is what arms those server-side. */}
+      {pipWindow &&
+        hudOpen &&
+        createPortal(
+          <AgentHud
+            sessions={sessions}
+            workspaces={workspaces}
+            git={gitInfo}
+            profiles={profiles}
+            defaultEmail={defaultEmail}
+            defaultMapped={defaultMapped}
+            onJumpToPane={jumpToPane}
+            onChanged={refresh}
+            onClose={closePip}
+            categories={categories}
+          />,
+          pipWindow.document.body,
+        )}
       {/* The floating always-on-top pane. Portalled into the picture-in-picture
           window's document, which re-mounts the pane there: its terminal is
           rebuilt and the socket reattaches with a ring-buffer replay, so no
@@ -1523,6 +1865,9 @@ export function App() {
             defaultEmail={defaultEmail}
             mappedDefault={defaultMapped}
             fontSize={fontSize}
+            categories={categories}
+            onCategoriesChanged={refreshCategories}
+            onManageCategories={() => setDialog({ kind: 'categories' })}
           />,
           pipWindow.document.body,
         )}

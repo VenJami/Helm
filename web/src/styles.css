@@ -650,6 +650,31 @@ html, body {
   padding: 8px 8px 0;
 }
 
+/* One container per category, so minimized panes stay grouped the way they are
+   in the grid. The tinted border + label is the whole point: it says WHICH
+   group these belong to without needing to read each chip. */
+.tray-group {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.tray-group-named {
+  padding: 4px 8px 4px 6px;
+  border: 1px solid;
+  border-radius: 12px;
+  /* the category color is set inline on the border; keep the fill a neutral
+     theme token so the chips inside stay readable in light mode too */
+  background: var(--panel);
+}
+.tray-group-label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  white-space: nowrap;
+  opacity: 0.85;
+}
+
 .tray-chip {
   display: flex;
   align-items: center;
@@ -688,6 +713,228 @@ html, body {
   border-radius: 0;
 }
 
+/* ------------------------------------------------- floating agent HUD */
+/* Shares that same window (the browser allows exactly one), so it fills it the
+   same way. Deliberately DENSE: this sits on top of everything you do all day,
+   so every row is one line unless it actually needs you, and the whole thing
+   collapses to a pill. Type is 11px — smaller than the app — on purpose. */
+.hud {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 11px;
+  line-height: 1.3;
+  overflow: hidden;
+}
+
+/* header ---------------------------------------------------------------- */
+.hud-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 8px;
+  height: 26px;
+  flex: 0 0 auto;
+  border-bottom: 1px solid var(--border);
+}
+.hud-title {
+  font-weight: 600;
+  white-space: nowrap;
+}
+.hud-head-right {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.hud-spend {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.hud-ibtn {
+  background: none;
+  border: 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1;
+  padding: 2px 3px;
+  cursor: pointer;
+  border-radius: 4px;
+}
+.hud-ibtn:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+
+/* rows ------------------------------------------------------------------ */
+.hud-rows {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+.hud-empty {
+  padding: 14px 10px;
+  color: var(--muted);
+}
+.hud-row {
+  padding: 5px 8px;
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+}
+.hud-row:hover {
+  background: var(--hover);
+}
+/* The one row that has earned your attention gets the accent — nothing else
+   in here does, or the colour stops meaning anything. */
+.hud-row-asking {
+  background: var(--accent-dim);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+.hud-line {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+}
+.hud-name {
+  font-weight: 600;
+  white-space: nowrap;
+  flex: 0 0 auto;
+}
+/* Chips give way in a fixed order as the window narrows: the branch first
+   (longest and least critical), then the account, and the project last. */
+.hud-chip {
+  padding: 0 4px;
+  border-radius: 3px;
+  background: var(--raised);
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 12ch;
+}
+.hud-chip-branch {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.hud-chip-acct {
+  flex: 0 1 auto;
+  min-width: 0;
+}
+.hud-chip-project {
+  flex: 0 0 auto;
+  color: var(--text);
+}
+.hud-chip-alert {
+  background: var(--accent);
+  color: var(--on-inverse);
+  font-weight: 600;
+  max-width: none;
+}
+.hud-since {
+  margin-left: auto;
+  padding-left: 4px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  flex: 0 0 auto;
+}
+/* what a blocked pane is asking for — monospace, because it's a command */
+.hud-ask {
+  margin: 4px 0 0 13px;
+  font-family: var(--mono, ui-monospace, 'Cascadia Mono', Consolas, monospace);
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+.hud-note {
+  margin: 2px 0 0 13px;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+.hud-result {
+  margin: 2px 0 0 13px;
+  color: var(--accent);
+}
+.hud-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 5px;
+  margin-top: 5px;
+}
+.hud-btn {
+  padding: 2px 10px;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  background: var(--raised);
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+}
+.hud-btn:hover:not(:disabled) {
+  border-color: var(--border-hover);
+}
+.hud-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.hud-approve {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--on-inverse);
+  font-weight: 600;
+}
+
+/* collapsed: the pill --------------------------------------------------- */
+/* A status light per agent plus whoever needs you. The window itself cannot
+   go below the browser PiP floor (~200px), so the rows for anything actually
+   waiting render underneath rather than leaving the space empty. */
+.hud-pill {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding-right: 6px;
+  height: 30px;
+  flex: 0 0 auto;
+  border-bottom: 1px solid var(--border);
+}
+.hud-pill-body {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  padding: 0 10px;
+  background: none;
+  border: 0;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+  text-align: left;
+}
+.hud-pill-body:hover {
+  background: var(--hover);
+}
+.hud-lights {
+  display: flex;
+  gap: 4px;
+  flex: 0 0 auto;
+}
+.hud-pill-name {
+  font-weight: 600;
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.hud-pill-quiet {
+  color: var(--muted);
+  font-weight: 400;
+}
 /* ------------------------------------------------------------------ pane */
 
 .pane {
@@ -726,19 +973,41 @@ html, body {
   flex-shrink: 0;
 }
 
+/* The pane's category + color picker. A flex COLUMN, not a grid: it holds
+   sections now, and a grid would blockify each child into its own auto-row
+   (the bug that once spread the empty-workspace message across the canvas). */
 .color-panel {
   position: absolute;
   top: 6px;
   left: 6px;
   z-index: 12;
-  display: grid;
-  grid-template-columns: repeat(5, 22px);
+  display: flex;
+  flex-direction: column;
   gap: 6px;
+  width: 212px;
   background: var(--raised);
   border: 1px solid var(--border-strong);
   border-radius: 8px;
   padding: 8px;
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.6);
+}
+
+.color-panel-label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-dim);
+}
+.color-panel-hint {
+  text-transform: none;
+  letter-spacing: 0;
+  opacity: 0.8;
+}
+
+.color-swatches {
+  display: grid;
+  grid-template-columns: repeat(5, 22px);
+  gap: 6px;
 }
 
 .color-swatch {
@@ -751,6 +1020,157 @@ html, body {
 }
 .color-swatch.active { border-color: var(--text); }
 .color-swatch:hover { transform: scale(1.12); }
+
+/* The browser's own color wheel, sized to sit in the swatch grid. The inner
+   swatch padding is vendor-drawn, so it's stripped to match the buttons. */
+.color-wheel {
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  border: 1px dashed var(--border-strong);
+  background: transparent;
+  cursor: pointer;
+  padding: 0;
+}
+.color-wheel::-webkit-color-swatch-wrapper { padding: 2px; }
+.color-wheel::-webkit-color-swatch { border: none; border-radius: 4px; }
+
+/* ---- category (pane folder) bits */
+.cat-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 168px;
+  overflow-y: auto;
+}
+.cat-row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+  padding: 4px 6px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text);
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+.cat-row:hover { background: var(--hover); }
+.cat-row.active { border-color: var(--border-strong); background: var(--hover); }
+.cat-row-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cat-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.cat-empty {
+  font-size: 11px;
+  color: var(--text-dim);
+  padding: 2px 6px;
+}
+.cat-actions {
+  display: flex;
+  gap: 6px;
+}
+.cat-actions button {
+  flex: 1;
+  white-space: nowrap;
+  padding: 4px 6px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 11px;
+  cursor: pointer;
+}
+.cat-actions button:hover { color: var(--text); border-color: var(--border-hover); }
+.cat-new {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+.cat-new-name {
+  flex: 1;
+  min-width: 0;
+  padding: 4px 6px;
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 12px;
+}
+.cat-new-color {
+  width: 24px;
+  height: 24px;
+  flex-shrink: 0;
+  border-radius: 6px;
+  border: 1px solid var(--border-strong);
+  background: transparent;
+  cursor: pointer;
+  padding: 0;
+}
+.cat-new-color::-webkit-color-swatch-wrapper { padding: 2px; }
+.cat-new-color::-webkit-color-swatch { border: none; border-radius: 4px; }
+.cat-new-save {
+  padding: 4px 8px;
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text);
+  font-size: 11px;
+  cursor: pointer;
+}
+.cat-edit-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.cat-edit-row .modal-input { flex: 1; min-width: 0; }
+
+/* Star a pane. Dim until starred, so an unstarred header stays quiet. */
+.pane-star {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  background: transparent;
+  border: none;
+  padding: 0 1px;
+  cursor: pointer;
+  color: var(--text-dim);
+  opacity: 0.55;
+}
+.pane-star:hover { opacity: 1; color: var(--text); }
+.pane-star.on { opacity: 1; color: var(--accent); }
+
+/* The folder chip beside a pane's name, and its twin in the Ctrl+K list. */
+.pane-category {
+  flex-shrink: 0;
+  max-width: 110px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 10px;
+  padding: 1px 6px;
+  border: 1px solid;
+  border-radius: 999px;
+  opacity: 0.9;
+  cursor: pointer;
+}
+.cmdk-cat {
+  flex-shrink: 0;
+  font-size: 10px;
+  padding: 1px 6px;
+  border: 1px solid currentColor;
+  border-radius: 999px;
+  opacity: 0.75;
+}
 
 .pane-header {
   display: flex;
@@ -2169,4 +2589,158 @@ a.share-url:hover { border-color: var(--border-hover); }
 .crash-hint code {
   font-size: 11.5px;
   color: var(--text);
+}
+
+/* The HUD as its own page (/hud) instead of a portal into the app's
+   picture-in-picture window: here it owns the whole document, so it fills the
+   viewport rather than flexing inside the app's layout. 100vh (not 100%) so it
+   doesn't depend on #root having a height. */
+.hud-page {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  overflow: hidden;
+}
+
+/* Notch mode (/hud?notch=1) — the page as it appears inside Helm's native
+   window (desktop/HelmNotch).
+
+   The window is OPAQUE and rounds its own corners through DWM. It is not a
+   transparent WPF window: that flag makes Windows host it as a layered window,
+   which renders the prettier version (soft shadow, alpha corners) and then
+   swallows every mouse event — it shipped once and could not be clicked or
+   closed. So the card fills the frame edge to edge, and the radius here just
+   matches the one the OS cuts. */
+html.notch,
+html.notch body {
+  background: var(--bg);
+  /* No page-level scrollbar. One that came and went as the window resized was
+     half of the oscillation that made the notch shake sideways — it changed the
+     measured width, which changed the window, which brought it back. */
+  overflow: hidden;
+}
+.hud-page.notch {
+  height: auto;
+  background: var(--bg);
+}
+.hud-page.notch .hud {
+  flex: 0 0 auto; /* size to content, not to a window that no longer exists */
+  /* Bottom corners only, matching the window REGION the host cuts: the notch
+     hangs from the top edge of the screen, so its top is square and flush.
+     Keep this in step with BottomRadiusDip in MainWindow.xaml.cs. */
+  border-radius: 0 0 14px 14px;
+  background: var(--bg);
+  overflow: hidden;
+}
+/* Keep the last row's text clear of the curve. With radius R the shape's edge
+   is inset by R - sqrt(R^2 - (R-d)^2) at distance d above the bottom, and rows
+   start 8px in, so this is the d where the curve stops eating into them. */
+.hud-page.notch .hud-rows {
+  padding-bottom: 2px;
+}
+/* Cap the list instead of letting the window grow to the height of the screen
+   with enough agents. A fixed pixel cap, NOT a vh one: the window's height is
+   driven by this content, so sizing the content off the viewport would be
+   circular. Past the cap the rows scroll inside the card. */
+.hud-page.notch .hud-rows {
+  max-height: 520px;
+  overflow-y: auto;
+}
+
+/* The notch at rest: a strip of status lights, one per claude pane. Sized by a
+   FIXED window width (the host owns it), so it never resizes itself as panes
+   come and go — a notch that changed shape on its own would pull the eye. */
+.notch-strip {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  height: 24px;
+  padding: 0 12px;
+  white-space: nowrap;
+}
+.notch-strip-lights {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+.notch-strip-more,
+.notch-strip-quiet {
+  font-size: 10px;
+  color: var(--faint);
+}
+.notch-strip-alert {
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1;
+  padding: 2px 5px;
+  border-radius: 999px;
+  background: var(--waiting);
+  color: var(--on-inverse);
+}
+/* No bottom padding in the strip — that allowance exists to keep the expanded
+   list's last row clear of the curve, and here it would just pad dead space. */
+.hud-page.notch.compact .hud-rows {
+  padding-bottom: 0;
+}
+
+/* The strip when something is actually blocked: the lights give way to the
+   project's name, because "one of these is amber" is not the thing you want to
+   read from across the desk. */
+.notch-strip-needy {
+  gap: 7px;
+}
+.notch-needy-project {
+  font-weight: 600;
+  font-size: 12px;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 130px;
+}
+/* How long it has been blocked. Muted: the project name is the headline. */
+.notch-needy-since {
+  font-size: 11px;
+  color: var(--muted);
+  flex-shrink: 0;
+}
+.notch-needy-sep {
+  width: 1px;
+  height: 12px;
+  background: var(--border);
+  flex-shrink: 0;
+}
+.notch-needy-bang {
+  font-weight: 700;
+  font-size: 12px;
+  line-height: 1;
+  color: var(--waiting);
+  flex-shrink: 0;
+}
+.notch-needy-text {
+  font-weight: 600;
+  font-size: 12px;
+  color: var(--text);
+  white-space: nowrap;
+}
+
+/* What an agent is working on — its auto-title. Muted and one line: it is
+   context for the name above it, not the headline. */
+.hud-task {
+  margin: 1px 0 2px 16px;
+  font-size: 11px;
+  line-height: 1.25;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* What the notch left out: long-idle panes and muted projects. Said plainly
+   rather than silently dropped — a list that omits things without saying so is
+   worse than a longer one. */
+.hud-quiet {
+  padding: 4px 10px 2px;
+  font-size: 10px;
+  color: var(--faint);
 }

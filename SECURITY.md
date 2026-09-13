@@ -126,6 +126,22 @@ and installs nothing. Being straight about the trade:
 If you would rather no audio ever left the machine, don't use the button — every
 other part of Helm works exactly as before without it.
 
+## Approving tool calls from the floating HUD
+
+The agent HUD can answer a pane's permission prompt ("may I run this?") without
+you switching to it. Two things are worth being explicit about:
+
+- **It grants no new power.** Any page holding the auth token can already write
+  arbitrary keystrokes into any pane (`/api/sessions/:id/type`, `/api/broadcast`)
+  and could answer the prompt that way. The token file remains the whole
+  boundary; this route is another thing behind it, not a hole in it.
+- **It is armed only while the HUD window is open**, via a heartbeat that
+  expires after 8 seconds. With no HUD, Helm answers claude "no opinion" the
+  instant it asks and the pane prompts for itself — the behaviour you had
+  before the feature existed. Closing the window disarms it; so does closing
+  Helm. Nothing auto-approves, ever: a request nobody answers within 12 seconds
+  falls back to the pane's own prompt.
+
 ## What is explicitly out of scope
 
 - **Multi-user / remote access.** Helm assumes one trusted user on the local

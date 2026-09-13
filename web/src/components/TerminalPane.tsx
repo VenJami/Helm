@@ -7,7 +7,7 @@ import { SearchAddon } from '@xterm/addon-search';
 import '@xterm/xterm/css/xterm.css';
 import { api, wsUrl } from '../api';
 import { accountLabel } from '../accounts';
-import { age } from '../lib/time';
+import { age, elapsed } from '../lib/time';
 import { Modal } from './Modal';
 import { toast } from './Toaster';
 import {
@@ -17,6 +17,7 @@ import {
   IconMinus,
   IconPopIn,
   IconPopOut,
+  IconStar,
   IconUserSwitch,
   IconX,
 } from './Icons';
@@ -30,7 +31,8 @@ import {
   IconPaperclip,
   IconSearch,
 } from './AnimatedIcons';
-import type { Profile, SessionInfo, UsageInfo, WsClientMsg, WsServerMsg } from '../types';
+import { categoryOf, paneAccent } from '../lib/categories';
+import type { Category, Profile, SessionInfo, UsageInfo, WsClientMsg, WsServerMsg } from '../types';
 
 type Conn = 'connecting' | 'live' | 'disconnected' | 'exited' | 'dead';
 
@@ -73,6 +75,12 @@ interface Props {
   defaultEmail: string | null;
   mappedDefault?: string | null; // named profile the default collapses onto
   fontSize: number; // global terminal font size (px), user-adjustable
+  // Pane folders. The array reference must be stable between polls or the
+  // React.memo below stops earning its keep — App only replaces it on a real
+  // change (see the categories state there).
+  categories: Category[];
+  onCategoriesChanged: () => void; // a folder was created here — refetch the list
+  onManageCategories: () => void; // open the rename/recolor/delete dialog
 }
 
 const fmt = (n: number) =>
@@ -80,16 +88,12 @@ const fmt = (n: number) =>
 
 const shortModel = (m: string) => m.replace(/^claude-/, '');
 
-// " 7m" / " 1h05m" since the given ISO time; '' under a minute. Refreshes with
-// the 3 s session poll — minute granularity is all the badge needs.
-const elapsed = (iso: string) => {
-  const m = Math.floor((Date.now() - Date.parse(iso)) / 60000);
-  if (m < 1) return '';
-  return m < 60 ? ` ${m}m` : ` ${Math.floor(m / 60)}h${String(m % 60).padStart(2, '0')}m`;
-};
-
-// Keep in sync with PANE_COLORS in server/index.mjs
-const PANE_COLORS = [
+// The one-click set. The first ten mirror PANE_COLORS in server/index.mjs (the
+// pool a new pane's random color comes from); red and navy are picker-only on
+// purpose — red is load-bearing in Helm (the PUBLIC share flag, the notch's
+// "needs you"), so a pane must never come up red by chance. Beyond these, the
+// wheel accepts any #rrggbb.
+const PICKER_COLORS = [
   '#4fc3f7',
   '#81c784',
   '#ffb74d',
@@ -100,6 +104,8 @@ const PANE_COLORS = [
   '#ff8a65',
   '#90a4ae',
   '#aed581',
+  '#ff3b30', // bright red
+  '#2b4c9b', // navy
 ];
 
 // Pasted screenshots surface as `files` in most Chromium builds but only as
@@ -139,6 +145,9 @@ function TerminalPaneImpl({
   defaultEmail,
   mappedDefault,
   fontSize,
+  categories,
+  onCategoriesChanged,
+  onManageCategories,
 }: Props) {
   // Read at terminal-creation time only; live changes go through the effect below.
   const fontSizeRef = useRef(fontSize);
@@ -154,6 +163,8 @@ function TerminalPaneImpl({
   const [usageOpen, setUsageOpen] = useState(false);
   const [editName, setEditName] = useState<string | null>(null); // null = not editing
   const [colorOpen, setColorOpen] = useState(false);
+  // Inline "new folder" draft inside the picker; null = not creating one.
+  const [newCat, setNewCat] = useState<{ name: string; color: string } | null>(null);
   const [confirmKill, setConfirmKill] = useState(false);
   const [switchOpen, setSwitchOpen] = useState(false);
   // account picked while the pane is mid-task, awaiting confirmation
@@ -516,6 +527,46 @@ function TerminalPaneImpl({
     }
   };
 
+  const toggleFavorite = async () => {
+    try {
+      await api.updateSession(session.id, { favorite: !session.favorite });
+      onChanged();
+    } catch {
+      /* ignore — the star is a preference, not worth a toast */
+    }
+  };
+
+  // Click the folder this pane is already in to file it back out.
+  const setCategory = async (categoryId: string | null) => {
+    setColorOpen(false);
+    try {
+      await api.updateSession(session.id, {
+        categoryId: categoryId === session.categoryId ? null : categoryId,
+      });
+      onChanged();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'could not move the pane');
+    }
+  };
+
+  // Create a folder and file this pane into it in one go — that is the only
+  // reason you would be creating one from a pane header.
+  const createCategory = async () => {
+    if (!newCat) return;
+    const name = newCat.name.trim();
+    if (!name) return;
+    try {
+      const created = await api.createCategory(name, newCat.color);
+      await api.updateSession(session.id, { categoryId: created.id });
+      setNewCat(null);
+      setColorOpen(false);
+      onCategoriesChanged();
+      onChanged();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'could not create the category');
+    }
+  };
+
   const closeSearch = () => {
     setSearchOpen(false);
     setSearchText('');
@@ -554,6 +605,9 @@ function TerminalPaneImpl({
 
   const activity = conn === 'live' ? session.activity : null;
   const paneAge = age(session.createdAt);
+  // The folder owns the color when the pane is in one — see lib/categories.ts.
+  const category = categoryOf(session, categories);
+  const accent = paneAccent(session, categories);
   const dotClass =
     conn === 'live'
       ? { working: 'dot-working', waiting: 'dot-waiting', idle: 'dot-live' }[activity ?? 'idle']
@@ -582,7 +636,7 @@ function TerminalPaneImpl({
   }[conn];
 
   return (
-    <div className="pane" style={{ borderTopColor: session.color }}>
+    <div className="pane" style={{ borderTopColor: accent }}>
       <div className="pane-header">
         {!isMaximized && !isPopped && (
           <span
@@ -602,8 +656,8 @@ function TerminalPaneImpl({
         <span className={`dot ${dotClass}`} />
         <button
           className="pane-swatch"
-          style={{ background: session.color }}
-          title="Change pane color"
+          style={{ background: accent }}
+          title={category ? `In "${category.name}" — click to change` : 'Color and category'}
           onClick={() => setColorOpen((o) => !o)}
         />
         {editName !== null ? (
@@ -622,13 +676,30 @@ function TerminalPaneImpl({
         ) : (
           <span
             className="pane-name"
-            style={{ color: session.color }}
+            style={{ color: accent }}
             title="Click to rename"
             onClick={() => setEditName(session.name)}
           >
             {session.name}
           </span>
         )}
+        {category && (
+          <span
+            className="pane-category"
+            style={{ color: category.color, borderColor: category.color }}
+            title={`In "${category.name}" — click to change`}
+            onClick={() => setColorOpen((o) => !o)}
+          >
+            {category.name}
+          </span>
+        )}
+        <button
+          className={`pane-star ${session.favorite ? 'on' : ''}`}
+          title={session.favorite ? 'Remove from favorites' : 'Add to favorites'}
+          onClick={toggleFavorite}
+        >
+          <IconStar size={13} filled={session.favorite} />
+        </button>
         {session.summary && (
           <span className="pane-summary" title={session.summary}>
             {session.summary}
@@ -846,14 +917,101 @@ function TerminalPaneImpl({
         )}
         {colorOpen && (
           <div className="color-panel">
-            {PANE_COLORS.map((c) => (
-              <button
-                key={c}
-                className={`color-swatch ${c === session.color ? 'active' : ''}`}
-                style={{ background: c }}
-                onClick={() => saveColor(c)}
+            <div className="color-panel-label">Category</div>
+            <div className="cat-list">
+              {categories.map((c) => (
+                <button
+                  key={c.id}
+                  className={`cat-row ${c.id === session.categoryId ? 'active' : ''}`}
+                  title={c.id === session.categoryId ? 'Remove from this category' : undefined}
+                  onClick={() => setCategory(c.id)}
+                >
+                  <span className="cat-dot" style={{ background: c.color }} />
+                  <span className="cat-row-name">{c.name}</span>
+                </button>
+              ))}
+              {categories.length === 0 && !newCat && (
+                <div className="cat-empty">No categories yet</div>
+              )}
+            </div>
+            {newCat ? (
+              <div className="cat-new">
+                <input
+                  className="cat-new-name"
+                  placeholder="Category name"
+                  value={newCat.name}
+                  autoFocus
+                  maxLength={24}
+                  onChange={(e) => setNewCat({ ...newCat, name: e.target.value })}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') createCategory();
+                    if (e.key === 'Escape') setNewCat(null);
+                  }}
+                />
+                {/* The browser's own color wheel — any #rrggbb, not just the
+                    swatches. It opens as an OS dialog rather than rendering an
+                    off-theme widget inline. */}
+                <input
+                  className="cat-new-color"
+                  type="color"
+                  value={newCat.color}
+                  title="Pick any color"
+                  onChange={(e) => setNewCat({ ...newCat, color: e.target.value })}
+                />
+                <button className="cat-new-save" onClick={createCategory}>
+                  Add
+                </button>
+              </div>
+            ) : (
+              <div className="cat-actions">
+                <button
+                  onClick={() =>
+                    setNewCat({
+                      name: '',
+                      // Seed with a color nothing is using yet, so two folders
+                      // don't come out the same by default.
+                      color:
+                        PICKER_COLORS.find((c) => !categories.some((x) => x.color === c)) ??
+                        PICKER_COLORS[0],
+                    })
+                  }
+                >
+                  + New category
+                </button>
+                {categories.length > 0 && (
+                  <button
+                    onClick={() => {
+                      setColorOpen(false);
+                      onManageCategories();
+                    }}
+                  >
+                    Manage…
+                  </button>
+                )}
+              </div>
+            )}
+
+            <div className="color-panel-label">
+              Pane color
+              {category && <span className="color-panel-hint"> — set by its category</span>}
+            </div>
+            <div className="color-swatches">
+              {PICKER_COLORS.map((c) => (
+                <button
+                  key={c}
+                  className={`color-swatch ${c === session.color ? 'active' : ''}`}
+                  style={{ background: c }}
+                  onClick={() => saveColor(c)}
+                />
+              ))}
+              <input
+                className="color-wheel"
+                type="color"
+                value={session.color}
+                title="Pick any color"
+                onChange={(e) => saveColor(e.target.value)}
               />
-            ))}
+            </div>
           </div>
         )}
         {usageOpen && (

@@ -107,7 +107,9 @@ async function tryBoot(port) {
     LOCALAPPDATA: tmp,
     HELM_CLAUDE_CMD: wrapper,
     HELM_CLOUDFLARED_CMD: cfWrapper,
+    HELM_FAKE_CF_PIDDIR: tmp, // the stand-in drops its real pid here
     HELM_USAGE_TTL_MS: '0', // usage tests append + immediately re-poll
+    HELM_APPROVAL_HOLD_MS: '1500', // approval tests wait out the fallback
     HELM_UPDATE_URL: ghUrl, // fake "latest release" endpoint (see ghStub)
     HELM_COMPARE_URL: ghCompareUrl, // fake branch-compare endpoint (same stub)
   };
@@ -532,6 +534,394 @@ test('hook relay (hook-post.mjs) + usage engine: dedupe, cost, incremental, part
   await authed(`/sessions/${id}`, { method: 'DELETE' });
 });
 
+// ------------------------------------------------------- approvals (HUD)
+// Same real relay, but capturing STDOUT: for PermissionRequest the script's
+// stdout IS the contract with claude, so asserting the JSON it prints is the
+// only test that proves Approve/Deny actually works.
+const relayOut = (sessionId, event) =>
+  new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, [path.join(serverDir, 'hook-post.mjs')], {
+      env: {
+        ...process.env,
+        HELM_SESSION_ID: sessionId,
+        HELM_HOOK_TOKEN: HOOK_TOKEN,
+        HELM_PORT: String(PORT),
+      },
+      stdio: ['pipe', 'pipe', 'ignore'],
+    });
+    let out = '';
+    child.stdout.on('data', (d) => {
+      out += d;
+    });
+    child.on('exit', (code) => resolve({ code, out }));
+    child.on('error', reject);
+    child.stdin.end(JSON.stringify(event));
+  });
+
+// The REAL claude 2.1.260 payload: tool_name + tool_input, and NO tool_use_id
+// (the docs describe one; the CLI does not send it — verified against the real
+// binary, see docs/CLAUDE_INTERNALS.md). Helm mints its own request id, so the
+// tests address a held request exactly as the HUD does: by reading `pendingId`
+// off the session.
+const permissionEvent = () => ({
+  hook_event_name: 'PermissionRequest',
+  tool_name: 'Bash',
+  tool_input: { command: 'npm run db:migrate', description: 'Apply migrations' },
+});
+
+const newPane = async (name) => {
+  const wsDir = mkdir(path.join(tmp, name));
+  const res = await authed('/sessions', {
+    method: 'POST',
+    body: JSON.stringify({ workspace: wsDir }),
+  });
+  return (await res.json()).id;
+};
+
+// Wait for the session poll to show a held request (the HUD's own latency).
+async function waitForPending(id) {
+  const deadline = Date.now() + 5000;
+  while (Date.now() < deadline) {
+    const list = await (await authed('/sessions')).json();
+    const s = list.find((x) => x.id === id);
+    if (s && s.pendingId) return s;
+    await sleep(50);
+  }
+  return null;
+}
+
+test('approvals stay disarmed until the HUD is open', async () => {
+  const id = await newPane('approveproj');
+
+  // No HUD heartbeat: the hook must come back at once with NO stdout, which is
+  // what makes claude fall through to its own prompt exactly as before.
+  const started = Date.now();
+  const { code, out } = await relayOut(id, permissionEvent());
+  assert.equal(code, 0);
+  assert.equal(out, '', 'a disarmed Helm must print no decision');
+  assert.ok(Date.now() - started < 2000, 'a disarmed answer must not hold the pane');
+  const s = (await (await authed('/sessions')).json()).find((x) => x.id === id);
+  assert.equal(s.pendingId, null, 'nothing is pending when nobody is watching');
+
+  await authed(`/sessions/${id}`, { method: 'DELETE' });
+});
+
+test('approvals: the HUD heartbeat arms Approve and Deny', async () => {
+  const id = await newPane('approveproj2');
+
+  for (const decision of ['allow', 'deny']) {
+    await authed('/hud/ping', { method: 'POST' });
+    const pending = relayOut(id, permissionEvent()); // held open — do NOT await yet
+
+    const s = await waitForPending(id);
+    assert.ok(s, `the ${decision} request should surface on the session`);
+    assert.equal(s.pendingTool, 'Bash');
+    assert.equal(s.pendingDetail, 'Bash: npm run db:migrate', 'the row must say what it asks');
+    assert.equal(s.activity, 'waiting', 'a held request lights the badge');
+
+    const res = await authed(`/sessions/${id}/approve`, {
+      method: 'POST',
+      body: JSON.stringify({ requestId: s.pendingId, decision }),
+    });
+    assert.equal(res.status, 200);
+    assert.equal((await res.json()).pendingId, null, 'answering clears the row');
+
+    // This assertion IS the contract with claude: `decision` is an OBJECT
+    // keyed by `behavior`, and there must be no top-level `decision` (the
+    // legacy approve|block field — including it fails claude's schema
+    // validation and voids the whole reply). Verified against the real CLI;
+    // see docs/CLAUDE_INTERNALS.md.
+    const { code, out } = await pending;
+    assert.equal(code, 0);
+    const printed = JSON.parse(out);
+    assert.equal(printed.decision, undefined, 'a top-level decision voids the reply');
+    assert.equal(printed.hookSpecificOutput.hookEventName, 'PermissionRequest');
+    assert.deepEqual(
+      printed.hookSpecificOutput.decision,
+      decision === 'allow'
+        ? { behavior: 'allow' }
+        : { behavior: 'deny', message: 'denied from Helm' },
+    );
+  }
+
+  await authed(`/sessions/${id}`, { method: 'DELETE' });
+});
+
+test('approvals: an unanswered request falls back to the pane prompt', async () => {
+  const id = await newPane('approveproj3');
+  await authed('/hud/ping', { method: 'POST' });
+  // Grab the id the HUD would have shown, then let the hold lapse without
+  // clicking (HELM_APPROVAL_HOLD_MS is 1.5 s under test).
+  const pending = relayOut(id, permissionEvent());
+  const held = await waitForPending(id);
+  assert.ok(held?.pendingId, 'request should be held first');
+  const { code, out } = await pending;
+  assert.equal(code, 0);
+  assert.equal(out, '', 'an unanswered request must print nothing, not a guess');
+  const s = (await (await authed('/sessions')).json()).find((x) => x.id === id);
+  assert.equal(s.pendingId, null, 'a lapsed request stops being shown as answerable');
+
+  // And answering one that already lapsed is a 409, not a silent no-op — the
+  // UI needs to be able to say "it is asking in the pane now".
+  const late = await authed(`/sessions/${id}/approve`, {
+    method: 'POST',
+    body: JSON.stringify({ requestId: held.pendingId, decision: 'allow' }),
+  });
+  assert.equal(late.status, 409);
+
+  await authed(`/sessions/${id}`, { method: 'DELETE' });
+});
+
+test('approvals: killing a pane releases the request it was holding', async () => {
+  const id = await newPane('approveproj4');
+  await authed('/hud/ping', { method: 'POST' });
+  const pending = relayOut(id, permissionEvent());
+  assert.ok(await waitForPending(id), 'request should be held');
+
+  const started = Date.now();
+  await authed(`/sessions/${id}`, { method: 'DELETE' });
+  const { out } = await pending;
+  assert.equal(out, '', 'a dead pane decides nothing');
+  // The point of releasing on death: the response comes back immediately
+  // instead of sitting out the full hold with nothing on the other end.
+  assert.ok(Date.now() - started < 1200, 'the held response must be freed at once');
+});
+
+test('approvals: the route validates, and a shapeless payload raises drift', async () => {
+  const id = await newPane('approveproj5');
+
+  assert.equal(
+    (
+      await authed('/sessions/nope/approve', {
+        method: 'POST',
+        body: JSON.stringify({ requestId: 't', decision: 'allow' }),
+      })
+    ).status,
+    404,
+  );
+  assert.equal(
+    (
+      await authed(`/sessions/${id}/approve`, {
+        method: 'POST',
+        body: JSON.stringify({ requestId: 't', decision: 'maybe' }),
+      })
+    ).status,
+    400,
+  );
+  assert.equal(
+    (
+      await authed(`/sessions/${id}/approve`, {
+        method: 'POST',
+        body: JSON.stringify({ decision: 'allow' }),
+      })
+    ).status,
+    400,
+  );
+
+  // claude dropping tool_name would silently disable Approve/Deny (a row with
+  // nothing to show) — that has to surface in the drift banner, not just stop.
+  await authed('/hud/ping', { method: 'POST' });
+  const { out } = await relayOut(id, { hook_event_name: 'PermissionRequest' });
+  assert.equal(out, '');
+  const diag = await (await authed('/diagnostics')).json();
+  assert.ok(
+    diag.warnings.some((w) => w.key === 'permissionrequest-shape'),
+    'a shapeless PermissionRequest must raise a drift warning',
+  );
+
+  await authed(`/sessions/${id}`, { method: 'DELETE' });
+});
+
+test('workspace: notch mute round-trips and is validated', async () => {
+  const dir = mkdir(path.join(tmp, 'muteproj'));
+  const ws = await (
+    await authed('/workspaces', { method: 'POST', body: JSON.stringify({ name: 'mute', dir }) })
+  ).json();
+  assert.equal(ws.notch, undefined, 'showing in the notch is the default and stores nothing');
+
+  const muted = await authed(`/workspaces/${ws.id}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ notch: false }),
+  });
+  assert.equal(muted.status, 200);
+  assert.equal((await muted.json()).notch, false);
+
+  // Un-muting DELETES the field rather than storing true: absent means yes, so
+  // existing workspaces need no migration.
+  const back = await authed(`/workspaces/${ws.id}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ notch: true }),
+  });
+  assert.equal((await back.json()).notch, undefined);
+
+  const bad = await authed(`/workspaces/${ws.id}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ notch: 'no' }),
+  });
+  assert.equal(bad.status, 400);
+
+  await authed(`/workspaces/${ws.id}`, { method: 'DELETE' });
+});
+
+test('notch: reports whether this machine can open one, and refuses when it cannot', async () => {
+  // Windows-only and built separately, so /api/notch is the UI's way to decide
+  // whether to offer the entry at all rather than dangle one that cannot work.
+  const state = await (await authed('/notch')).json();
+  assert.equal(typeof state.supported, 'boolean');
+  assert.equal(typeof state.running, 'boolean');
+
+  if (!state.supported) {
+    // The interesting half for CI: refuse with a reason, never 500.
+    const res = await authed('/notch', { method: 'POST' });
+    assert.equal(res.status, 400);
+    assert.match((await res.json()).error, /notch/i);
+  }
+
+  const anon = await fetch(U('/api/notch'));
+  assert.equal(anon.status, 401, 'launching a window is not a public capability');
+});
+
+test('settings: the notch toggles round-trip and are validated', async () => {
+  // Server state rather than localStorage on purpose: the native notch runs in
+  // its own WebView2 profile and shares no storage with the browser, so this
+  // route is the only way the toggle can reach it.
+  const initial = await (await authed('/settings')).json();
+  assert.equal(initial.notchFollowsHelm, true, 'the notch gets out of the way by default');
+
+  const off = await authed('/settings', {
+    method: 'PATCH',
+    body: JSON.stringify({ notchFollowsHelm: false }),
+  });
+  assert.equal(off.status, 200);
+  assert.equal((await off.json()).notchFollowsHelm, false);
+  assert.equal((await (await authed('/settings')).json()).notchFollowsHelm, false, 'and it sticks');
+
+  // Untouched by a patch that does not mention it.
+  await authed('/settings', { method: 'PATCH', body: JSON.stringify({ autoRevive: false }) });
+  assert.equal((await (await authed('/settings')).json()).notchFollowsHelm, false);
+
+  const bad = await authed('/settings', {
+    method: 'PATCH',
+    body: JSON.stringify({ notchFollowsHelm: 'yes' }),
+  });
+  assert.equal(bad.status, 400, 'a non-boolean is refused, not coerced');
+
+  // The second toggle: rest as a strip of lights until the cursor reaches it.
+  assert.equal(initial.notchAutoCompact, true, 'resting compact is the default');
+  const hideOff = await authed('/settings', {
+    method: 'PATCH',
+    body: JSON.stringify({ notchAutoCompact: false }),
+  });
+  assert.equal((await hideOff.json()).notchAutoCompact, false);
+  const both = await (await authed('/settings')).json();
+  assert.equal(both.notchAutoCompact, false);
+  assert.equal(both.notchFollowsHelm, false, 'the two toggles are independent');
+  assert.equal(
+    (
+      await authed('/settings', {
+        method: 'PATCH',
+        body: JSON.stringify({ notchAutoCompact: 1 }),
+      })
+    ).status,
+    400,
+  );
+
+  await authed('/settings', {
+    method: 'PATCH',
+    body: JSON.stringify({ notchFollowsHelm: true, notchAutoCompact: true }),
+  });
+});
+
+// ---- cross-window focus requests ------------------------------------------
+// The HUD can run as its own page (/hud) in a window that is not a child of
+// the app's, so "jump to that pane" has to travel through the server. A long
+// poll rather than the 3 s session tick, because a click that takes seconds to
+// move the app reads as broken.
+
+test('focus: the HUD page is served with the token injected', async () => {
+  const res = await fetch(U('/hud'));
+  assert.equal(res.status, 200);
+  const html = await res.text();
+  assert.match(html, /<div id="root">/, 'the HUD page must render a root to mount into');
+  assert.ok(!html.includes('%%HELM_TOKEN%%'), 'the placeholder must be substituted, not served');
+  assert.ok(html.includes(TOKEN), 'the page carries the real token, like index.html');
+});
+
+test('focus: the route validates, and stays behind the token', async () => {
+  const anon = await fetch(U('/api/focus'), {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ sessionId: 'whatever' }),
+  });
+  assert.equal(anon.status, 401, 'moving the user’s window is not a public capability');
+
+  assert.equal((await authed('/focus', { method: 'POST', body: '{}' })).status, 400);
+  const missing = await authed('/focus', {
+    method: 'POST',
+    body: JSON.stringify({ sessionId: 'no-such-session' }),
+  });
+  assert.equal(missing.status, 404);
+});
+
+test('focus: a parked long poll is answered the moment a request lands', async () => {
+  const id = await newPane('focusproj');
+  // Park first, with a cursor in the future-proof sense: `since` = now, so any
+  // stale request from an earlier test can't satisfy this wait.
+  const since = Date.now();
+  const parked = authed(`/focus/wait?since=${since}`).then((r) => r.json());
+  await sleep(150); // let the server actually register the waiter
+
+  const started = Date.now();
+  const posted = await (
+    await authed('/focus', {
+      method: 'POST',
+      body: JSON.stringify({ sessionId: id }),
+    })
+  ).json();
+  assert.equal(posted.ok, true);
+
+  const got = await parked;
+  assert.equal(got.sessionId, id, 'the waiting window is told which pane to show');
+  assert.ok(
+    Date.now() - started < 2000,
+    'the whole point is that it arrives on click, not on the next poll',
+  );
+
+  await authed(`/sessions/${id}`, { method: 'DELETE' });
+});
+
+test('focus: a request that lands between polls is not lost', async () => {
+  const id = await newPane('focusproj2');
+  // Nobody is waiting yet — this is the reconnect gap the `since` cursor
+  // exists to cover.
+  const before = Date.now() - 1;
+  const posted = await (
+    await authed('/focus', {
+      method: 'POST',
+      body: JSON.stringify({ sessionId: id }),
+    })
+  ).json();
+
+  const caught = await (await authed(`/focus/wait?since=${before}`)).json();
+  assert.equal(caught.sessionId, id, 'a request raised before the poll still gets delivered');
+  assert.equal(caught.at, posted.at);
+
+  // ...and asking again from AFTER it does not replay it.
+  const since = posted.at;
+  let replayed = null;
+  // Left parked on purpose: it must NOT resolve. The catch keeps the suite's
+  // teardown (which kills the server under it) from raising an unhandled
+  // rejection out of a promise nothing awaits.
+  const race = authed(`/focus/wait?since=${since}`)
+    .then((r) => r.json())
+    .then((r) => (replayed = r))
+    .catch(() => {});
+  await Promise.race([race, sleep(600)]);
+  assert.equal(replayed, null, 'an already-handled request must not repeat forever');
+
+  await authed(`/sessions/${id}`, { method: 'DELETE' });
+});
+
 test('trust seams are validated: profile names + hook transcript paths', async () => {
   // A profile name becomes a directory under accounts\ — traversal must 400.
   const dir = mkdir(path.join(tmp, 'valproj'));
@@ -804,6 +1194,45 @@ test('share links: start → live URL → extend → stop', async () => {
   // Stop takes it down and removes it from the list.
   assert.equal((await authed(`/workspaces/${ws.id}/tunnel`, { method: 'DELETE' })).status, 200);
   assert.deepEqual((await (await authed('/tunnels')).json()).tunnels, []);
+});
+
+test('share links: stopping one really kills the process, not just the shell', async () => {
+  // Regression. `proc.kill()` killed only the shell a .cmd is run through, so
+  // the actual tunnel survived every "stop" — Helm forgot about it while it kept
+  // running. The suite leaked two of these per run for weeks before anyone
+  // counted them. Asserts on the stand-in's OWN pid, which it writes out,
+  // because the pid Helm holds is the shim's.
+  const dir = mkdir(path.join(tmp, 'tunnel-kill'));
+  const port = 5199;
+  const pidFile = path.join(tmp, `cf-${port}.pid`);
+  fs.rmSync(pidFile, { force: true });
+  const ws = await (
+    await authed('/workspaces', {
+      method: 'POST',
+      body: JSON.stringify({ name: 'killme', dir, port }),
+    })
+  ).json();
+  assert.equal((await authed(`/workspaces/${ws.id}/tunnel`, { method: 'POST' })).status, 201);
+
+  for (let i = 0; i < 40 && !fs.existsSync(pidFile); i++) await sleep(100);
+  assert.ok(fs.existsSync(pidFile), 'the stand-in should have reported its pid');
+  const pid = Number(fs.readFileSync(pidFile, 'utf8').trim());
+  // Signal 0 is an existence check: it throws ESRCH when nothing is there.
+  assert.doesNotThrow(() => process.kill(pid, 0), 'it should be running before we stop it');
+
+  assert.equal((await authed(`/workspaces/${ws.id}/tunnel`, { method: 'DELETE' })).status, 200);
+  let alive = true;
+  for (let i = 0; i < 40; i++) {
+    await sleep(100);
+    try {
+      process.kill(pid, 0);
+    } catch {
+      alive = false;
+      break;
+    }
+  }
+  assert.equal(alive, false, 'the tunnel process itself must be gone, not just forgotten');
+  await authed(`/workspaces/${ws.id}`, { method: 'DELETE' });
 });
 
 test('share links: removing a workspace takes its public link down with it', async () => {
@@ -1472,4 +1901,172 @@ test('an empty workspace list never wipes panes', async () => {
   } finally {
     aside.stop();
   }
+});
+
+test('categories: CRUD, validation, and filing a pane into one', async () => {
+  const ws = mkdir(path.join(tmp, 'catproj'));
+  await authed('/workspaces', { method: 'POST', body: JSON.stringify({ name: 'cat', dir: ws }) });
+
+  assert.deepEqual(await (await authed('/categories')).json(), [], 'none to begin with');
+
+  const made = await authed('/categories', {
+    method: 'POST',
+    body: JSON.stringify({ name: 'Client work', color: '#ff3b30' }),
+  });
+  assert.equal(made.status, 200);
+  const cat = await made.json();
+  assert.equal(cat.name, 'Client work');
+  assert.equal(cat.color, '#ff3b30');
+  assert.ok(cat.id);
+
+  for (const [body, why] of [
+    [{ name: '', color: '#ff3b30' }, 'empty name'],
+    [{ name: 'x'.repeat(25), color: '#ff3b30' }, 'name over 24'],
+    [{ name: 'ok', color: 'red' }, 'a color that is not #rrggbb'],
+    [{ name: 'ok', color: '#ff3b3' }, 'a five-digit hex'],
+  ]) {
+    const bad = await authed('/categories', { method: 'POST', body: JSON.stringify(body) });
+    assert.equal(bad.status, 400, `rejects ${why}`);
+  }
+
+  // File a pane into it.
+  const pane = await (
+    await authed('/sessions', { method: 'POST', body: JSON.stringify({ workspace: ws }) })
+  ).json();
+  const filed = await authed(`/sessions/${pane.id}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ categoryId: cat.id }),
+  });
+  assert.equal(filed.status, 200);
+  assert.equal((await filed.json()).categoryId, cat.id);
+
+  // A folder that doesn't exist is refused, so a pane can never point at one
+  // the UI is unable to resolve.
+  const ghost = await authed(`/sessions/${pane.id}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ categoryId: 'no-such-folder' }),
+  });
+  assert.equal(ghost.status, 400);
+
+  // null is the way out of a folder.
+  const emptied = await authed(`/sessions/${pane.id}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ categoryId: null }),
+  });
+  assert.equal((await emptied.json()).categoryId, null);
+
+  // Rename + recolor.
+  const patched = await authed(`/categories/${cat.id}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ name: 'Backend', color: '#2b4c9b' }),
+  });
+  assert.equal(patched.status, 200);
+  const after = await patched.json();
+  assert.equal(after.name, 'Backend');
+  assert.equal(after.color, '#2b4c9b');
+
+  const missing = await authed('/categories/nope', {
+    method: 'PATCH',
+    body: JSON.stringify({ name: 'x' }),
+  });
+  assert.equal(missing.status, 404);
+
+  await authed(`/sessions/${pane.id}`, { method: 'DELETE' });
+  await authed(`/categories/${cat.id}`, { method: 'DELETE' });
+});
+
+test('deleting a category empties the panes filed in it', async () => {
+  // The dangling-reference bug this codebase has already shipped twice
+  // (workspace pins on profile delete, panes with no project): a delete has to
+  // be a delete everywhere the thing is referenced, not just in its own list.
+  const ws = mkdir(path.join(tmp, 'catdel'));
+  await authed('/workspaces', { method: 'POST', body: JSON.stringify({ name: 'cd', dir: ws }) });
+  const cat = await (
+    await authed('/categories', {
+      method: 'POST',
+      body: JSON.stringify({ name: 'Doomed', color: '#4fc3f7' }),
+    })
+  ).json();
+
+  const ids = [];
+  for (let i = 0; i < 2; i++) {
+    const p = await (
+      await authed('/sessions', { method: 'POST', body: JSON.stringify({ workspace: ws }) })
+    ).json();
+    await authed(`/sessions/${p.id}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ categoryId: cat.id }),
+    });
+    ids.push(p.id);
+  }
+
+  const gone = await authed(`/categories/${cat.id}`, { method: 'DELETE' });
+  assert.equal(gone.status, 200);
+  assert.equal((await gone.json()).emptied, 2, 'reports how many panes it emptied');
+
+  const list = await (await authed('/sessions')).json();
+  for (const id of ids) {
+    assert.equal(
+      list.find((s) => s.id === id).categoryId,
+      null,
+      'the pane came out of the deleted category rather than keeping a ghost id',
+    );
+  }
+  assert.equal((await authed(`/categories/${cat.id}`, { method: 'DELETE' })).status, 404);
+
+  for (const id of ids) await authed(`/sessions/${id}`, { method: 'DELETE' });
+});
+
+test('a pane loses a category that vanished while the server was down', async () => {
+  // categories.json is not written by seedState, so the id below names a folder
+  // that has never existed — exactly the state a delete-while-offline leaves.
+  const dir = seedState('cat-ghost', {
+    workspaces: [{ id: 'w1', name: 'proj', dir: tmp }],
+    sessions: [{ id: 'ghosted', name: 'Pane', workspace: tmp, kind: 'claude', categoryId: 'gone' }],
+  });
+  const aside = await bootAside(dir);
+  try {
+    const list = await (await aside.call('/sessions')).json();
+    const pane = list.find((s) => s.id === 'ghosted');
+    assert.ok(pane, 'the pane itself survives');
+    assert.equal(pane.categoryId, null, 'but not its reference to a folder that is gone');
+  } finally {
+    aside.stop();
+  }
+});
+
+test('favorites: a pane can be starred, and it survives a restart', async () => {
+  const ws = mkdir(path.join(tmp, 'favproj'));
+  await authed('/workspaces', { method: 'POST', body: JSON.stringify({ name: 'fav', dir: ws }) });
+  const pane = await (
+    await authed('/sessions', { method: 'POST', body: JSON.stringify({ workspace: ws }) })
+  ).json();
+  assert.equal(pane.favorite, false, 'panes start unstarred');
+
+  const starred = await authed(`/sessions/${pane.id}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ favorite: true }),
+  });
+  assert.equal(starred.status, 200);
+  assert.equal((await starred.json()).favorite, true);
+
+  const bad = await authed(`/sessions/${pane.id}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ favorite: 'yes' }),
+  });
+  assert.equal(bad.status, 400, 'only a real boolean is accepted');
+
+  // The star is a preference you set once — it has to be on disk, or every
+  // restart silently empties the filter. (This server takes its data dir from
+  // LOCALAPPDATA, so that is tmp\Helm — not tmp, which is the HELM_DATA_DIR
+  // shape the seeded aside-servers use.)
+  const saved = persistedSessions(path.join(tmp, 'Helm')).find((s) => s.id === pane.id);
+  assert.equal(saved?.favorite, true, 'the star was persisted');
+
+  const off = await authed(`/sessions/${pane.id}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ favorite: false }),
+  });
+  assert.equal((await off.json()).favorite, false);
+  await authed(`/sessions/${pane.id}`, { method: 'DELETE' });
 });

@@ -6,6 +6,70 @@ All notable changes to Helm are documented here. Format follows
 
 ## [Unreleased]
 ### Added
+- **Pane categories, with a colour you pick.** Group panes the way Chrome groups
+  tabs: make a category, give it a name and any colour from a colour picker, and
+  file panes into it from the colour button in a pane's header. The category owns
+  the colour, so recolouring it repaints every pane in it at once — and the
+  palette gained bright red and navy, which were missing. Categorised panes show
+  a chip beside their name, Ctrl+K finds a pane by its category, and minimised
+  panes from the same category sit together in one tinted container in the tray.
+- **Favourite panes.** Star the panes you keep coming back to, then use the
+  Favorites toggle in the toolbar to show only those. It always says how many
+  panes it is hiding, and it never hides a pane you are jumping to — clicking a
+  result in Ctrl+K, or the "N waiting" pill, switches the filter off rather than
+  landing you on an empty grid.
+- **A floating agent HUD, and Approve/Deny from it.** A small always-on-top
+  strip listing every claude pane across every project — status, project,
+  how long it has been at it, and what it is blocked on — so five agents stay
+  glanceable while you work in your editor. Click a row to jump to that pane.
+  When a pane asks permission to run something, the HUD shows exactly what
+  (`Bash: npm run db:migrate`) with Approve and Deny, and answering there is the
+  same decision as answering in the pane. It is armed only while the HUD is
+  open: with it closed, panes prompt for themselves with no added delay, and
+  nothing is ever auto-approved. The footer shows Helm's own local 7-day cost
+  estimate — Helm has no access to Anthropic's plan percentages, and says so.
+- **The notch stops filling up.** Agents that have been idle a while collapse to
+  a "+3 quiet" line instead of taking rows, while anything working or waiting
+  always shows — and a pane that has *just* finished still shows, because that is
+  the thing you want to see. Right-click a project in the sidebar to hide it from
+  the notch entirely.
+- **The notch says what each agent is doing.** Every row now carries that
+  agent's task under its name, and when one is blocked the compact strip says
+  how long it has been waiting — "storefront 4m, needs you" rather than an amber
+  dot you have to go and investigate.
+- **The notch is just the agents now.** The header — agent count, token and cost
+  readout, collapse and close buttons — is gone; it was picture-in-picture
+  furniture that earned no room in a strip at the top of your screen. Right-click
+  the notch to close it.
+- **Clicking an agent in the notch brings Helm back.** It restores and
+  foregrounds the window if it was minimised, then selects that pane. Before, it
+  selected the pane inside a window that stayed hidden.
+- **One way to open the notch.** Ctrl+K → "Open the agent notch" launches the
+  real floating window. It replaces an older entry that opened the same page in
+  an ordinary browser window — two commands that read the same in the palette,
+  and the browser one was easy to mistake for the notch itself.
+- **The notch stays put and knows when to disappear.** It sits flush at the top
+  of your screen and can't be dragged out of place, and by default it hides
+  itself whenever Helm's own window is up — so it is there when you minimise
+  Helm and gone when you are looking at it. Appearance → Notch switches that off
+  if you would rather it were always visible. At rest it shrinks to a small strip of
+  coloured lights — one per agent, green for working, amber for waiting — so a
+  glance tells you whether anything needs you without it taking up room. When
+  something IS blocked it stops showing lights and names the project instead
+  ("storefront — Needs you"), because knowing which one is the point. Reach it
+  with your cursor and it grows into the full list. `start-helm.cmd` brings it up for you once it has been built.
+- **A real notch.** `desktop/start-notch.cmd` opens Helm's agent list as a
+  frameless, rounded, always-on-top window that floats over your editor. It
+  sizes itself to whatever it is showing, so it shrinks when the agents are
+  quiet and grows when one needs you, and you drag it around by its header.
+  Click a row to jump to that pane; Approve and Deny work from it. Windows only,
+  entirely optional, and Helm works exactly as before without it.
+- **The agent HUD can open in its own window** (Ctrl+K → "Open the agent HUD in
+  its own window"). The floating version borrows the browser's
+  picture-in-picture window, which can only be one per page and refuses to
+  shrink below a few hundred pixels. The HUD is now also a page in its own
+  right, so it can go in an ordinary window you size and place yourself — and
+  clicking an agent in it still jumps the main window to that pane.
 - **A crash in the window no longer looks like Helm dying.** Any error while
   drawing the page used to blank the whole window with nothing said, even
   though every pane was still running in the server. Now you get a card that
@@ -15,6 +79,11 @@ All notable changes to Helm are documented here. Format follows
   exactly like one from this morning. Dead panes now say how old they are, and
   one dialog lists every non-running pane oldest-first with its project and
   age, pre-ticking anything past a fortnight.
+
+### Fixed
+- **Stopping a public share link now really stops it.** Helm closed the link and
+  forgot about it, but on some setups the underlying process kept running — a
+  public URL still live with nothing left holding it. It is killed properly now.
 
 ## [0.3.0] — 2026-09-09
 ### Added
