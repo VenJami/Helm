@@ -1,5 +1,6 @@
 import type {
   AccountUsage,
+  Category,
   ConsoleState,
   Diagnostics,
   FocusRequest,
@@ -109,8 +110,22 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ text }),
     }),
-  updateSession: (id: string, patch: { name?: string; color?: string }) =>
-    req<SessionInfo>(`/sessions/${id}`, { method: 'PATCH', body: JSON.stringify(patch) }),
+  // categoryId: null files the pane out of its folder; any other value must
+  // name a folder that exists or the server 400s.
+  updateSession: (
+    id: string,
+    patch: { name?: string; color?: string; categoryId?: string | null },
+  ) => req<SessionInfo>(`/sessions/${id}`, { method: 'PATCH', body: JSON.stringify(patch) }),
+
+  // ---- pane folders (categories)
+  listCategories: () => req<Category[]>('/categories'),
+  createCategory: (name: string, color: string) =>
+    req<Category>('/categories', { method: 'POST', body: JSON.stringify({ name, color }) }),
+  updateCategory: (id: string, patch: { name?: string; color?: string }) =>
+    req<Category>(`/categories/${id}`, { method: 'PATCH', body: JSON.stringify(patch) }),
+  // Also empties every pane filed here; `emptied` says how many.
+  removeCategory: (id: string) =>
+    req<{ ok: boolean; emptied: number }>(`/categories/${id}`, { method: 'DELETE' }),
   // The floating HUD's heartbeat. This is what arms Approve/Deny server-side:
   // stop pinging and every permission request goes straight to the pane's own
   // prompt again, which is the state Helm is in whenever the HUD is closed.

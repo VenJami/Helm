@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import type { SessionInfo, Workspace } from '../types';
+import type { Category, SessionInfo, Workspace } from '../types';
+import { categoryOf, paneAccent } from '../lib/categories';
 import {
   IconBell,
   IconBug,
@@ -57,7 +58,7 @@ export interface PaletteAction {
 }
 
 type PaletteItem =
-  | { kind: 'pane'; key: string; session: SessionInfo; ws: string }
+  | { kind: 'pane'; key: string; session: SessionInfo; ws: string; category: Category | null }
   | { kind: 'workspace'; key: string; id: string; name: string; dir: string }
   | ({ kind: 'action' } & PaletteAction);
 
@@ -68,6 +69,7 @@ interface Props {
   onJumpToPane: (s: SessionInfo) => void;
   onSelectWorkspace: (id: string) => void;
   actions: PaletteAction[];
+  categories: Category[];
 }
 
 const paneDot = (s: SessionInfo) =>
@@ -84,6 +86,7 @@ export function CommandPalette({
   onJumpToPane,
   onSelectWorkspace,
   actions,
+  categories,
 }: Props) {
   const [query, setQuery] = useState('');
   const [active, setActive] = useState(0);
@@ -102,12 +105,14 @@ export function CommandPalette({
         key: `pane-${s.id}`,
         session: s,
         ws: wsName(s.workspace),
+        category: categoryOf(s, categories),
       }))
       .filter(
         (it) =>
           !q ||
           it.session.name.toLowerCase().includes(q) ||
           it.ws.toLowerCase().includes(q) ||
+          (it.category?.name.toLowerCase().includes(q) ?? false) ||
           (it.session.summary?.toLowerCase().includes(q) ?? false),
       );
 
@@ -136,7 +141,7 @@ export function CommandPalette({
     return q && actionItems.length
       ? [...actionItems, ...paneItems, ...wsItems]
       : [...paneItems, ...wsItems, ...actionItems];
-  }, [query, sessions, workspaces, wsName, actions]);
+  }, [query, sessions, workspaces, wsName, actions, categories]);
 
   // Reset the highlight whenever the result set changes shape.
   useEffect(() => {
@@ -215,9 +220,17 @@ export function CommandPalette({
                 {it.kind === 'pane' && (
                   <>
                     <span className={`dot ${paneDot(it.session)}`} />
-                    <span className="cmdk-name" style={{ color: it.session.color }}>
+                    <span
+                      className="cmdk-name"
+                      style={{ color: paneAccent(it.session, categories) }}
+                    >
                       {it.session.name}
                     </span>
+                    {it.category && (
+                      <span className="cmdk-cat" style={{ color: it.category.color }}>
+                        {it.category.name}
+                      </span>
+                    )}
                     <span className="cmdk-summary">
                       {it.session.summary ?? <em>no prompt yet</em>}
                     </span>

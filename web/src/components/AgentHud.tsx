@@ -23,7 +23,8 @@ import { accountLabel, foldMappedDefault } from '../accounts';
 import { elapsed } from '../lib/time';
 import { storage } from '../lib/storage';
 import { dotFor, projectOf, rankOf } from '../lib/paneStatus';
-import type { AccountUsage, GitInfo, Profile, SessionInfo, Workspace } from '../types';
+import { paneAccent } from '../lib/categories';
+import type { AccountUsage, Category, GitInfo, Profile, SessionInfo, Workspace } from '../types';
 
 const PING_MS = 3000; // must stay under the server's HUD_ARM_MS (8 s)
 const USAGE_MS = 60_000;
@@ -67,6 +68,9 @@ interface Props {
    * dropped: a list that quietly omits things is worse than a longer one.
    */
   quietCount?: number;
+  /** Pane folders, so a filed pane shows its category's color here too rather
+   *  than its own stale one. Defaults to none. */
+  categories?: Category[];
 }
 
 // 1.2M / 43k / 900 — the reference's compact token readout.
@@ -89,6 +93,7 @@ export function AgentHud({
   chrome = true,
   showTask = false,
   quietCount = 0,
+  categories = [],
 }: Props) {
   const [usage, setUsage] = useState<AccountUsage[] | null>(null);
   const [busy, setBusy] = useState<string | null>(null); // request id being answered
@@ -245,7 +250,7 @@ export function AgentHud({
       >
         <div className="hud-line">
           <span className={`dot ${dotFor(s)}`} />
-          <span className="hud-name" style={{ color: s.color }}>
+          <span className="hud-name" style={{ color: paneAccent(s, categories) }}>
             {s.name}
           </span>
           <span className="hud-chip hud-chip-project">{projectOf(s.workspace)}</span>
@@ -302,7 +307,7 @@ export function AgentHud({
               ))}
             </span>
             {headline ? (
-              <span className="hud-pill-name" style={{ color: headline.color }}>
+              <span className="hud-pill-name" style={{ color: paneAccent(headline, categories) }}>
                 {headline.name}
               </span>
             ) : (

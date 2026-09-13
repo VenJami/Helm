@@ -91,6 +91,7 @@ const ATTACHMENTS_DIR = path.join(HELM_DIR, 'attachments');
 // the opt-in bench log) — see the polish route for why the cwd matters.
 const VOICE_DIR = path.join(HELM_DIR, 'voice');
 const WORKSPACES_FILE = path.join(HELM_DIR, 'workspaces.json');
+const CATEGORIES_FILE = path.join(HELM_DIR, 'categories.json');
 const SESSIONS_FILE = path.join(HELM_DIR, 'sessions.json');
 const HOOK_SETTINGS_FILE = path.join(HELM_DIR, 'hook-settings.json');
 const SETTINGS_FILE = path.join(HELM_DIR, 'settings.json');
@@ -182,10 +183,20 @@ function saveSettings() {
 }
 
 /**
+ * A pane "folder": a user-made grouping with its own color. Panes reference one
+ * by id and render in its color, so recoloring the folder recolors its panes.
+ * @typedef {object} Category
+ * @property {string} id
+ * @property {string} name
+ * @property {string} color   #rrggbb
+ */
+
+/**
  * @typedef {object} Session
  * @property {string} id
  * @property {string} name
  * @property {string} color
+ * @property {string|null} categoryId   folder this pane belongs to, if any
  * @property {string} workspace
  * @property {string|null} profile
  * @property {'claude'|'dev'} kind      'claude' = a claude CLI pane; 'dev' = the workspace's dev server
@@ -325,6 +336,7 @@ const PANE_NAMES = [
   'Lantern',
   'Buoy',
 ];
+// Pool a NEW pane's color is drawn from at random.
 const PANE_COLORS = [
   '#4fc3f7',
   '#81c784',
@@ -337,6 +349,12 @@ const PANE_COLORS = [
   '#90a4ae',
   '#aed581',
 ];
+
+// The PICKER offers more than this (red and navy, plus a free color wheel) and
+// lives in web/src/components/TerminalPane.tsx — deliberately not here, because
+// red is load-bearing in Helm (the PUBLIC share flag, the notch's "needs you").
+// A fresh pane must never come up red by chance and dilute a real alarm; chosen
+// on purpose is fine. Any #rrggbb passes the PATCH validator either way.
 
 function randomPaneIdentity() {
   const taken = new Set([...sessions.values()].map((s) => s.name));
@@ -516,6 +534,7 @@ function createSession({ workspace, profile, cols, rows }) {
   const session = {
     id: crypto.randomUUID(),
     ...randomPaneIdentity(), // name + color (both customizable via PATCH)
+    categoryId: null, // assigned later via PATCH
     workspace,
     profile: profile || null,
     kind: 'claude',
@@ -564,6 +583,7 @@ function createDevSession({ workspace, command, name, cols, rows, ephemeral = fa
     id: crypto.randomUUID(),
     name: (name || 'dev').slice(0, 32),
     color: '#4dd0e1',
+    categoryId: null, // dev panes aren't filed into folders
     workspace,
     profile: null,
     kind: 'dev',
@@ -622,6 +642,11 @@ function reviveSession(session, { cols, rows }) {
 /** @type {any[]} */
 let workspaces = loadWorkspaces();
 
+// Same reason: loadPersistedSessions drops a pane's categoryId when the folder
+// it names is gone, so the list has to exist before that call.
+/** @type {Category[]} */
+let categories = loadCategories();
+
 // Declared up here, not beside persistSessions below, because the load-time
 // sweep calls that function while this module is still evaluating — a `let`
 // declared after the call is still in its temporal dead zone and throws.
@@ -661,6 +686,9 @@ function loadPersistedSessions() {
       id: s.id,
       name: s.name ?? 'Pane',
       color: s.color ?? '#90a4ae',
+      // A folder deleted while this server was down leaves a ghost id behind;
+      // drop it here rather than shipping a reference nothing can resolve.
+      categoryId: categories.some((c) => c.id === s.categoryId) ? s.categoryId : null,
       workspace: s.workspace,
       profile: s.profile ?? null,
       kind: s.kind === 'dev' ? 'dev' : 'claude',
@@ -739,6 +767,7 @@ function persistSessions() {
       id: s.id,
       name: s.name,
       color: s.color,
+      categoryId: s.categoryId ?? null,
       workspace: s.workspace,
       profile: s.profile,
       kind: s.kind,
@@ -777,6 +806,7 @@ function sessionInfo(s) {
     id: s.id,
     name: s.name,
     color: s.color,
+    categoryId: s.categoryId ?? null,
     workspace: s.workspace,
     profile: s.profile,
     kind: s.kind ?? 'claude',
@@ -1181,7 +1211,7 @@ app.delete('/api/sessions/:id', (req, res) => {
 app.patch('/api/sessions/:id', (req, res) => {
   const session = sessions.get(req.params.id);
   if (!session) return res.status(404).json({ error: 'no such session' });
-  const { name, color } = req.body || {};
+  const { name, color, categoryId } = req.body || {};
   if (name !== undefined) {
     if (typeof name !== 'string' || !name.trim() || name.trim().length > 32) {
       return res.status(400).json({ error: 'name must be 1–32 characters' });
@@ -1189,10 +1219,18 @@ app.patch('/api/sessions/:id', (req, res) => {
     session.name = name.trim();
   }
   if (color !== undefined) {
-    if (typeof color !== 'string' || !/^#[0-9a-fA-F]{6}$/.test(color)) {
+    if (typeof color !== 'string' || !isHexColor(color)) {
       return res.status(400).json({ error: 'color must be a #rrggbb hex value' });
     }
     session.color = color;
+  }
+  if (categoryId !== undefined) {
+    // null clears; anything else must name a folder that exists, so a pane can
+    // never end up pointing at one the UI can't resolve.
+    if (categoryId !== null && !categories.some((c) => c.id === categoryId)) {
+      return res.status(400).json({ error: 'no such category' });
+    }
+    session.categoryId = categoryId;
   }
   persistSessions();
   res.json(sessionInfo(session));
@@ -2058,6 +2096,96 @@ function loadWorkspaces() {
 function saveWorkspaces() {
   writeJsonAtomic(WORKSPACES_FILE, { version: 1, workspaces });
 }
+
+// ------------------------------------------------------------- categories
+// Pane "folders": a named grouping with a color, persisted in
+// %LOCALAPPDATA%\Helm\categories.json. A pane referencing one renders in its
+// color, so recoloring the folder recolors every pane in it.
+
+// A `function` on purpose, not a const arrow: loadCategories() runs while this
+// module is still evaluating, far above this line, and a const would still be
+// in its temporal dead zone there (docs/GOTCHAS.md).
+function isHexColor(v) {
+  return /^#[0-9a-fA-F]{6}$/.test(v);
+}
+
+function loadCategories() {
+  const saved = readJsonWithBackup(CATEGORIES_FILE, 'categories');
+  const list = Array.isArray(saved) ? saved : saved?.categories;
+  if (!Array.isArray(list)) return [];
+  return list.filter((c) => c?.id && typeof c.name === 'string' && isHexColor(String(c.color)));
+}
+
+function saveCategories() {
+  writeJsonAtomic(CATEGORIES_FILE, { version: 1, categories });
+}
+
+// name 1–24 chars, color #rrggbb. Returns an error string, or null when ok.
+function validateCategory({ name, color }) {
+  if (typeof name !== 'string' || !name.trim() || name.trim().length > 24) {
+    return 'name must be 1–24 characters';
+  }
+  if (typeof color !== 'string' || !isHexColor(color)) {
+    return 'color must be a #rrggbb hex value';
+  }
+  return null;
+}
+
+app.get('/api/categories', (_req, res) => {
+  res.json(categories);
+});
+
+app.post('/api/categories', (req, res) => {
+  const { name, color } = req.body || {};
+  const bad = validateCategory({ name, color });
+  if (bad) return res.status(400).json({ error: bad });
+  const category = { id: crypto.randomUUID(), name: name.trim(), color };
+  categories.push(category);
+  saveCategories();
+  dbg('categories', `created ${category.name}`);
+  res.json(category);
+});
+
+app.patch('/api/categories/:id', (req, res) => {
+  const category = categories.find((c) => c.id === req.params.id);
+  if (!category) return res.status(404).json({ error: 'no such category' });
+  const { name, color } = req.body || {};
+  if (name !== undefined) {
+    if (typeof name !== 'string' || !name.trim() || name.trim().length > 24) {
+      return res.status(400).json({ error: 'name must be 1–24 characters' });
+    }
+    category.name = name.trim();
+  }
+  if (color !== undefined) {
+    if (typeof color !== 'string' || !isHexColor(color)) {
+      return res.status(400).json({ error: 'color must be a #rrggbb hex value' });
+    }
+    category.color = color;
+  }
+  saveCategories();
+  res.json(category);
+});
+
+app.delete('/api/categories/:id', (req, res) => {
+  const before = categories.length;
+  categories = categories.filter((c) => c.id !== req.params.id);
+  if (categories.length === before) return res.status(404).json({ error: 'no such category' });
+  // Empty the panes that were filed here in the same breath. Leaving them
+  // pointing at a deleted id is the dangling-reference bug this codebase has
+  // already shipped twice (workspace pins on profile delete, panes with no
+  // project) — a delete has to be a delete everywhere it's referenced.
+  let emptied = 0;
+  for (const s of sessions.values()) {
+    if (s.categoryId === req.params.id) {
+      s.categoryId = null;
+      emptied++;
+    }
+  }
+  saveCategories();
+  if (emptied) persistSessions();
+  dbg('categories', `deleted ${req.params.id.slice(0, 8)} — ${emptied} pane(s) emptied`);
+  res.json({ ok: true, emptied });
+});
 
 app.get('/api/workspaces', (_req, res) => {
   res.json(workspaces);

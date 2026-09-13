@@ -2,13 +2,14 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { api, ApiError } from './api';
 import { storage } from './lib/storage';
+import { groupByCategory, paneAccent } from './lib/categories';
 import { useSessionsPoll } from './hooks/useSessionsPoll';
 import { useWorkspaceStatus } from './hooks/useWorkspaceStatus';
 import { useTheme } from './hooks/useTheme';
 import { useGridWeights } from './hooks/useGridWeights';
 import { pipSupported, usePipWindow } from './hooks/usePipWindow';
 import { useFocusRequests } from './hooks/useFocusRequests';
-import type { LogEntry, SessionInfo, Workspace } from './types';
+import type { Category, LogEntry, SessionInfo, Workspace } from './types';
 import { Sidebar } from './components/Sidebar';
 import { TerminalPane } from './components/TerminalPane';
 import { ProfileSelect } from './components/ProfileSelect';
@@ -28,6 +29,7 @@ import { AppearanceModal } from './components/modals/AppearanceModal';
 import { ShareModal } from './components/modals/ShareModal';
 import { InstallCloudflaredModal } from './components/modals/InstallCloudflaredModal';
 import { SharesModal } from './components/modals/SharesModal';
+import { CategoriesModal } from './components/modals/CategoriesModal';
 import { CleanupModal } from './components/modals/CleanupModal';
 import {
   IconBug,
@@ -68,6 +70,7 @@ type Dialog =
   // The live public links: full URLs, copy/open/extend/stop. A share URL needs
   // somewhere permanent to live — a toast and a tooltip weren't it.
   | { kind: 'shares' }
+  | { kind: 'categories' }
   | { kind: 'cleanup' }
   | null;
 
@@ -98,6 +101,16 @@ export function App() {
     setWsOrder(ids);
     storage.wsOrder.set(ids);
   };
+  // Pane folders. NOT polled — they only change when you change them, and the
+  // array reference has to stay stable between session polls or every pane's
+  // React.memo would miss.
+  const [categories, setCategories] = useState<Category[]>([]);
+  const refreshCategories = useCallback(() => {
+    api
+      .listCategories()
+      .then(setCategories)
+      .catch(() => {});
+  }, []);
   const [selectedId, setSelectedId] = useState<string | null>(storage.workspaceId.get());
   const [profileChoice, setProfileChoice] = useState('');
   const [dialog, setDialog] = useState<Dialog>(null);
@@ -310,6 +323,7 @@ export function App() {
       .listWorkspaces()
       .then(setWorkspaces)
       .catch(() => {});
+    refreshCategories();
     api
       .getNotch()
       .then((n) => setNotchSupported(n.supported))
@@ -322,7 +336,7 @@ export function App() {
         setNotchAutoCompact(s.notchAutoCompact);
       })
       .catch(() => {});
-  }, []);
+  }, [refreshCategories]);
 
   // Both notch toggles behave the same way: optimistic, reverted on failure.
   // The notch itself picks them up from the server on its own poll.
@@ -996,6 +1010,14 @@ export function App() {
       keywords: 'tokens cost spend money limit',
       run: openUsage,
     });
+    if (categories.length)
+      list.push({
+        key: 'categories',
+        label: 'Manage pane categories…',
+        icon: 'chart',
+        keywords: 'category categories group groups folder folders tag color rename',
+        run: () => setDialog({ kind: 'categories' }),
+      });
     if (sessions.some((s) => s.status !== 'running'))
       list.push({
         key: 'cleanup',
@@ -1186,6 +1208,25 @@ export function App() {
   const addedWorkspace = (ws: Workspace) => {
     setWorkspaces((prev) => [...prev, ws]);
     select(ws.id);
+  };
+
+  // API + state sync; validation and inline errors live in CategoriesModal.
+  const saveCategory = async (id: string, patch: { name?: string; color?: string }) => {
+    const saved = await api.updateCategory(id, patch);
+    setCategories((prev) => prev.map((c) => (c.id === id ? saved : c)));
+  };
+
+  // The server empties every pane filed here as part of the delete, so the
+  // session list has to be refetched too or those panes keep rendering in a
+  // category that no longer exists until the next poll.
+  const deleteCategory = async (id: string) => {
+    try {
+      const { emptied } = await api.removeCategory(id);
+      setCategories((prev) => prev.filter((c) => c.id !== id));
+      if (emptied) refresh();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'could not delete the category');
+    }
   };
 
   return (
@@ -1432,32 +1473,54 @@ export function App() {
                 {poppedSession && panes.some((p) => p.id === poppedSession.id) && (
                   <button
                     className="tray-chip tray-chip-popped"
-                    style={{ borderColor: poppedSession.color }}
+                    style={{ borderColor: paneAccent(poppedSession, categories) }}
                     title={`"${poppedSession.name}" is in the floating window — click to bring it back`}
                     onClick={() => togglePop(poppedSession.id)}
                   >
                     <IconPopOut size={12} />
-                    <span style={{ color: poppedSession.color }}>{poppedSession.name}</span>
+                    <span style={{ color: paneAccent(poppedSession, categories) }}>
+                      {poppedSession.name}
+                    </span>
                     <span className="tray-chip-note">floating</span>
                   </button>
                 )}
-                {minimizedPanes.map((s) => (
-                  <button
-                    key={s.id}
-                    className="tray-chip"
-                    style={{ borderColor: s.color }}
-                    title={`Restore "${s.name}"`}
-                    onClick={() => restorePane(s.id)}
+                {/* Minimized panes sit WITH the rest of their category, in one
+                    container tinted that category's color — the grid's grouping
+                    shouldn't evaporate the moment a pane is minimized. Panes in
+                    no category share the last, unlabelled group. */}
+                {groupByCategory(minimizedPanes, categories).map((g) => (
+                  <div
+                    key={g.category?.id ?? '(none)'}
+                    className={`tray-group ${g.category ? 'tray-group-named' : ''}`}
+                    style={g.category ? { borderColor: g.category.color } : undefined}
                   >
-                    <span
-                      className={`dot ${
-                        { working: 'dot-working', waiting: 'dot-waiting', idle: 'dot-live' }[
-                          s.activity ?? 'idle'
-                        ]
-                      }`}
-                    />
-                    <span style={{ color: s.color }}>{s.name}</span>
-                  </button>
+                    {g.category && (
+                      <span className="tray-group-label" style={{ color: g.category.color }}>
+                        {g.category.name}
+                      </span>
+                    )}
+                    {g.panes.map((s) => {
+                      const accent = paneAccent(s, categories);
+                      return (
+                        <button
+                          key={s.id}
+                          className="tray-chip"
+                          style={{ borderColor: accent }}
+                          title={`Restore "${s.name}"`}
+                          onClick={() => restorePane(s.id)}
+                        >
+                          <span
+                            className={`dot ${
+                              { working: 'dot-working', waiting: 'dot-waiting', idle: 'dot-live' }[
+                                s.activity ?? 'idle'
+                              ]
+                            }`}
+                          />
+                          <span style={{ color: accent }}>{s.name}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
                 ))}
               </div>
             )}
@@ -1531,6 +1594,9 @@ export function App() {
                       defaultEmail={defaultEmail}
                       mappedDefault={defaultMapped}
                       fontSize={fontSize}
+                      categories={categories}
+                      onCategoriesChanged={refreshCategories}
+                      onManageCategories={() => setDialog({ kind: 'categories' })}
                     />
                   </div>
                 ))}
@@ -1651,6 +1717,16 @@ export function App() {
         <UsageModal profiles={profiles} defaultMapped={defaultMapped} onClose={closeDialog} />
       )}
 
+      {dialog?.kind === 'categories' && (
+        <CategoriesModal
+          categories={categories}
+          sessions={sessions}
+          onClose={closeDialog}
+          onSave={saveCategory}
+          onDelete={(id) => void deleteCategory(id)}
+        />
+      )}
+
       {dialog?.kind === 'cleanup' && (
         <CleanupModal
           sessions={sessions}
@@ -1676,6 +1752,7 @@ export function App() {
           onJumpToPane={jumpToPane}
           onSelectWorkspace={select}
           actions={paletteActions}
+          categories={categories}
         />
       )}
       <Toaster />
@@ -1695,6 +1772,7 @@ export function App() {
             onJumpToPane={jumpToPane}
             onChanged={refresh}
             onClose={closePip}
+            categories={categories}
           />,
           pipWindow.document.body,
         )}
@@ -1723,6 +1801,9 @@ export function App() {
             defaultEmail={defaultEmail}
             mappedDefault={defaultMapped}
             fontSize={fontSize}
+            categories={categories}
+            onCategoriesChanged={refreshCategories}
+            onManageCategories={() => setDialog({ kind: 'categories' })}
           />,
           pipWindow.document.body,
         )}

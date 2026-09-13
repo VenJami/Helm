@@ -650,6 +650,31 @@ html, body {
   padding: 8px 8px 0;
 }
 
+/* One container per category, so minimized panes stay grouped the way they are
+   in the grid. The tinted border + label is the whole point: it says WHICH
+   group these belong to without needing to read each chip. */
+.tray-group {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.tray-group-named {
+  padding: 4px 8px 4px 6px;
+  border: 1px solid;
+  border-radius: 12px;
+  /* the category color is set inline on the border; keep the fill a neutral
+     theme token so the chips inside stay readable in light mode too */
+  background: var(--panel);
+}
+.tray-group-label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  white-space: nowrap;
+  opacity: 0.85;
+}
+
 .tray-chip {
   display: flex;
   align-items: center;
@@ -948,19 +973,41 @@ html, body {
   flex-shrink: 0;
 }
 
+/* The pane's category + color picker. A flex COLUMN, not a grid: it holds
+   sections now, and a grid would blockify each child into its own auto-row
+   (the bug that once spread the empty-workspace message across the canvas). */
 .color-panel {
   position: absolute;
   top: 6px;
   left: 6px;
   z-index: 12;
-  display: grid;
-  grid-template-columns: repeat(5, 22px);
+  display: flex;
+  flex-direction: column;
   gap: 6px;
+  width: 212px;
   background: var(--raised);
   border: 1px solid var(--border-strong);
   border-radius: 8px;
   padding: 8px;
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.6);
+}
+
+.color-panel-label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-dim);
+}
+.color-panel-hint {
+  text-transform: none;
+  letter-spacing: 0;
+  opacity: 0.8;
+}
+
+.color-swatches {
+  display: grid;
+  grid-template-columns: repeat(5, 22px);
+  gap: 6px;
 }
 
 .color-swatch {
@@ -973,6 +1020,142 @@ html, body {
 }
 .color-swatch.active { border-color: var(--text); }
 .color-swatch:hover { transform: scale(1.12); }
+
+/* The browser's own color wheel, sized to sit in the swatch grid. The inner
+   swatch padding is vendor-drawn, so it's stripped to match the buttons. */
+.color-wheel {
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  border: 1px dashed var(--border-strong);
+  background: transparent;
+  cursor: pointer;
+  padding: 0;
+}
+.color-wheel::-webkit-color-swatch-wrapper { padding: 2px; }
+.color-wheel::-webkit-color-swatch { border: none; border-radius: 4px; }
+
+/* ---- category (pane folder) bits */
+.cat-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 168px;
+  overflow-y: auto;
+}
+.cat-row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+  padding: 4px 6px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text);
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+.cat-row:hover { background: var(--hover); }
+.cat-row.active { border-color: var(--border-strong); background: var(--hover); }
+.cat-row-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cat-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.cat-empty {
+  font-size: 11px;
+  color: var(--text-dim);
+  padding: 2px 6px;
+}
+.cat-actions {
+  display: flex;
+  gap: 6px;
+}
+.cat-actions button {
+  flex: 1;
+  white-space: nowrap;
+  padding: 4px 6px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 11px;
+  cursor: pointer;
+}
+.cat-actions button:hover { color: var(--text); border-color: var(--border-hover); }
+.cat-new {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+.cat-new-name {
+  flex: 1;
+  min-width: 0;
+  padding: 4px 6px;
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 12px;
+}
+.cat-new-color {
+  width: 24px;
+  height: 24px;
+  flex-shrink: 0;
+  border-radius: 6px;
+  border: 1px solid var(--border-strong);
+  background: transparent;
+  cursor: pointer;
+  padding: 0;
+}
+.cat-new-color::-webkit-color-swatch-wrapper { padding: 2px; }
+.cat-new-color::-webkit-color-swatch { border: none; border-radius: 4px; }
+.cat-new-save {
+  padding: 4px 8px;
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text);
+  font-size: 11px;
+  cursor: pointer;
+}
+.cat-edit-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.cat-edit-row .modal-input { flex: 1; min-width: 0; }
+
+/* The folder chip beside a pane's name, and its twin in the Ctrl+K list. */
+.pane-category {
+  flex-shrink: 0;
+  max-width: 110px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 10px;
+  padding: 1px 6px;
+  border: 1px solid;
+  border-radius: 999px;
+  opacity: 0.9;
+  cursor: pointer;
+}
+.cmdk-cat {
+  flex-shrink: 0;
+  font-size: 10px;
+  padding: 1px 6px;
+  border: 1px solid currentColor;
+  border-radius: 999px;
+  opacity: 0.75;
+}
 
 .pane-header {
   display: flex;

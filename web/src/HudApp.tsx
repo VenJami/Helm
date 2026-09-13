@@ -21,7 +21,7 @@ import { storage } from './lib/storage';
 import { inNativeHost, onHostMessage, sendToHost } from './lib/nativeHost';
 import { NotchStrip, compactWidthFor } from './components/NotchStrip';
 import { foldDir, notchPanes } from './lib/paneStatus';
-import type { GitInfo, SessionInfo, Workspace } from './types';
+import type { Category, GitInfo, SessionInfo, Workspace } from './types';
 
 const WS_POLL_MS = 6000;
 
@@ -37,6 +37,7 @@ export function HudApp() {
   const { sessions, profiles, defaultEmail, defaultMapped, refresh } = useSessionsPoll(false);
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
   const [git, setGit] = useState<Record<string, GitInfo>>({});
+  const [categories, setCategories] = useState<Category[]>([]);
 
   // Mirror the app's theme. Same-origin windows share localStorage, and a
   // `storage` event fires HERE when another window writes one — so switching
@@ -66,6 +67,12 @@ export function HudApp() {
       api
         .getWorkspacesGit()
         .then((list) => setGit(Object.fromEntries(list.map((g) => [g.id, g]))))
+        .catch(() => {});
+      // Folders rarely change, so they ride this slow poll rather than the 3 s
+      // session one — a pane recolored in Helm catches up within a tick.
+      api
+        .listCategories()
+        .then(setCategories)
         .catch(() => {});
     };
     pull();
@@ -219,6 +226,7 @@ export function HudApp() {
           chrome={!NOTCH}
           showTask={NOTCH}
           quietCount={quiet}
+          categories={categories}
         />
       )}
     </div>

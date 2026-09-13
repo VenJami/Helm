@@ -1,7 +1,18 @@
+// A pane "folder" — Chrome's tab groups, for panes. Named, colored, and panes
+// are filed into it by id. The folder owns the color: a pane in one renders in
+// the folder's color (see lib/categories.ts), so recoloring the folder
+// recolors every pane in it at once.
+export interface Category {
+  id: string;
+  name: string;
+  color: string; // #rrggbb
+}
+
 export interface SessionInfo {
   id: string;
   name: string;
-  color: string; // #rrggbb accent
+  color: string; // #rrggbb accent — used when the pane is in no category
+  categoryId: string | null; // folder this pane belongs to, if any
   workspace: string;
   profile: string | null;
   kind: 'claude' | 'dev'; // 'dev' = the workspace's dev-server pane, not a claude session
