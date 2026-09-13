@@ -443,6 +443,29 @@ Markdown and CSS are not in prettier's globs (`*.{ts,tsx,mjs}` only), so a
 mixed `.md`/`.css` breaks nothing — but keep them uniform anyway so diffs stay
 readable.
 
+## Three ways a CDP check LIES about a filter or a shortcut
+All three hit while building pane categories + favourites, and each one reads
+as a broken feature when only the test is broken.
+
+1. **A "the expected rows are there" assertion passes VACUOUSLY against an
+   unfiltered list.** The first Ctrl+K category check asserted that both
+   matching panes appeared — and they did, in a list of all 21 rows, because
+   the query never reached the input. Always assert **exclusion** too: the row
+   that must NOT survive the filter is the half that has teeth.
+2. **Ctrl+K is a TOGGLE** (`setPaletteOpen((o) => !o)`). A script that leaves
+   the palette open means the next script's Ctrl+K CLOSES it, and the symptom
+   is "the keyboard shortcut stopped working". Reload the page between scripts
+   rather than assuming a fresh DOM.
+3. **A synthetic `Enter` on `document` does not select a palette row.** The
+   jump ran nowhere, so the guard under test looked broken. Click the actual
+   `.cmdk-item` element instead — and generally prefer clicking the real thing
+   over dispatching the key that would have clicked it.
+
+Related, in the smoke suite: the MAIN test server takes its data dir from
+`LOCALAPPDATA`, so its state is `tmp\Helm`, while the seeded aside-servers use
+`HELM_DATA_DIR` and theirs is the dir itself. `persistedSessions(tmp)` silently
+returns `[]` against the main server — pass `path.join(tmp, 'Helm')`.
+
 ## Testing pattern that works
 `cd server && npm run e2e` now codifies this permanently
 (`server/test/e2e-real.mjs`): it drives a real `claude` pane through

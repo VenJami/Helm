@@ -6,6 +6,18 @@ All notable changes to Helm are documented here. Format follows
 
 ## [Unreleased]
 ### Added
+- **Pane categories, with a colour you pick.** Group panes the way Chrome groups
+  tabs: make a category, give it a name and any colour from a colour picker, and
+  file panes into it from the colour button in a pane's header. The category owns
+  the colour, so recolouring it repaints every pane in it at once — and the
+  palette gained bright red and navy, which were missing. Categorised panes show
+  a chip beside their name, Ctrl+K finds a pane by its category, and minimised
+  panes from the same category sit together in one tinted container in the tray.
+- **Favourite panes.** Star the panes you keep coming back to, then use the
+  Favorites toggle in the toolbar to show only those. It always says how many
+  panes it is hiding, and it never hides a pane you are jumping to — clicking a
+  result in Ctrl+K, or the "N waiting" pill, switches the filter off rather than
+  landing you on an empty grid.
 - **A floating agent HUD, and Approve/Deny from it.** A small always-on-top
   strip listing every claude pane across every project — status, project,
   how long it has been at it, and what it is blocked on — so five agents stay

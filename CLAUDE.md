@@ -68,9 +68,10 @@ helm/
 │                           #   on /hud?notch=1 — ALL the UI stays in web/
 └── web/                    # React frontend → built to web/dist (server serves it)
     └── src/                # App.tsx (composition) · hooks/ (data polling, theme,
-                            #   grid weights, pop-out, dictation) · lib/storage.ts
-                            #   (typed localStorage) · components/ (panes, sidebar,
-                            #   modals/…) · api.ts · types.ts
+                            #   grid weights, pop-out, dictation) · lib/ (storage.ts
+                            #   = typed localStorage, paneStatus.ts, categories.ts
+                            #   = pane-folder colour rule) · components/ (panes,
+                            #   sidebar, modals/…) · api.ts · types.ts
 ```
 
 ## Development Commands

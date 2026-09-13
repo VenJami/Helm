@@ -1902,3 +1902,171 @@ test('an empty workspace list never wipes panes', async () => {
     aside.stop();
   }
 });
+
+test('categories: CRUD, validation, and filing a pane into one', async () => {
+  const ws = mkdir(path.join(tmp, 'catproj'));
+  await authed('/workspaces', { method: 'POST', body: JSON.stringify({ name: 'cat', dir: ws }) });
+
+  assert.deepEqual(await (await authed('/categories')).json(), [], 'none to begin with');
+
+  const made = await authed('/categories', {
+    method: 'POST',
+    body: JSON.stringify({ name: 'Client work', color: '#ff3b30' }),
+  });
+  assert.equal(made.status, 200);
+  const cat = await made.json();
+  assert.equal(cat.name, 'Client work');
+  assert.equal(cat.color, '#ff3b30');
+  assert.ok(cat.id);
+
+  for (const [body, why] of [
+    [{ name: '', color: '#ff3b30' }, 'empty name'],
+    [{ name: 'x'.repeat(25), color: '#ff3b30' }, 'name over 24'],
+    [{ name: 'ok', color: 'red' }, 'a color that is not #rrggbb'],
+    [{ name: 'ok', color: '#ff3b3' }, 'a five-digit hex'],
+  ]) {
+    const bad = await authed('/categories', { method: 'POST', body: JSON.stringify(body) });
+    assert.equal(bad.status, 400, `rejects ${why}`);
+  }
+
+  // File a pane into it.
+  const pane = await (
+    await authed('/sessions', { method: 'POST', body: JSON.stringify({ workspace: ws }) })
+  ).json();
+  const filed = await authed(`/sessions/${pane.id}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ categoryId: cat.id }),
+  });
+  assert.equal(filed.status, 200);
+  assert.equal((await filed.json()).categoryId, cat.id);
+
+  // A folder that doesn't exist is refused, so a pane can never point at one
+  // the UI is unable to resolve.
+  const ghost = await authed(`/sessions/${pane.id}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ categoryId: 'no-such-folder' }),
+  });
+  assert.equal(ghost.status, 400);
+
+  // null is the way out of a folder.
+  const emptied = await authed(`/sessions/${pane.id}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ categoryId: null }),
+  });
+  assert.equal((await emptied.json()).categoryId, null);
+
+  // Rename + recolor.
+  const patched = await authed(`/categories/${cat.id}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ name: 'Backend', color: '#2b4c9b' }),
+  });
+  assert.equal(patched.status, 200);
+  const after = await patched.json();
+  assert.equal(after.name, 'Backend');
+  assert.equal(after.color, '#2b4c9b');
+
+  const missing = await authed('/categories/nope', {
+    method: 'PATCH',
+    body: JSON.stringify({ name: 'x' }),
+  });
+  assert.equal(missing.status, 404);
+
+  await authed(`/sessions/${pane.id}`, { method: 'DELETE' });
+  await authed(`/categories/${cat.id}`, { method: 'DELETE' });
+});
+
+test('deleting a category empties the panes filed in it', async () => {
+  // The dangling-reference bug this codebase has already shipped twice
+  // (workspace pins on profile delete, panes with no project): a delete has to
+  // be a delete everywhere the thing is referenced, not just in its own list.
+  const ws = mkdir(path.join(tmp, 'catdel'));
+  await authed('/workspaces', { method: 'POST', body: JSON.stringify({ name: 'cd', dir: ws }) });
+  const cat = await (
+    await authed('/categories', {
+      method: 'POST',
+      body: JSON.stringify({ name: 'Doomed', color: '#4fc3f7' }),
+    })
+  ).json();
+
+  const ids = [];
+  for (let i = 0; i < 2; i++) {
+    const p = await (
+      await authed('/sessions', { method: 'POST', body: JSON.stringify({ workspace: ws }) })
+    ).json();
+    await authed(`/sessions/${p.id}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ categoryId: cat.id }),
+    });
+    ids.push(p.id);
+  }
+
+  const gone = await authed(`/categories/${cat.id}`, { method: 'DELETE' });
+  assert.equal(gone.status, 200);
+  assert.equal((await gone.json()).emptied, 2, 'reports how many panes it emptied');
+
+  const list = await (await authed('/sessions')).json();
+  for (const id of ids) {
+    assert.equal(
+      list.find((s) => s.id === id).categoryId,
+      null,
+      'the pane came out of the deleted category rather than keeping a ghost id',
+    );
+  }
+  assert.equal((await authed(`/categories/${cat.id}`, { method: 'DELETE' })).status, 404);
+
+  for (const id of ids) await authed(`/sessions/${id}`, { method: 'DELETE' });
+});
+
+test('a pane loses a category that vanished while the server was down', async () => {
+  // categories.json is not written by seedState, so the id below names a folder
+  // that has never existed — exactly the state a delete-while-offline leaves.
+  const dir = seedState('cat-ghost', {
+    workspaces: [{ id: 'w1', name: 'proj', dir: tmp }],
+    sessions: [{ id: 'ghosted', name: 'Pane', workspace: tmp, kind: 'claude', categoryId: 'gone' }],
+  });
+  const aside = await bootAside(dir);
+  try {
+    const list = await (await aside.call('/sessions')).json();
+    const pane = list.find((s) => s.id === 'ghosted');
+    assert.ok(pane, 'the pane itself survives');
+    assert.equal(pane.categoryId, null, 'but not its reference to a folder that is gone');
+  } finally {
+    aside.stop();
+  }
+});
+
+test('favorites: a pane can be starred, and it survives a restart', async () => {
+  const ws = mkdir(path.join(tmp, 'favproj'));
+  await authed('/workspaces', { method: 'POST', body: JSON.stringify({ name: 'fav', dir: ws }) });
+  const pane = await (
+    await authed('/sessions', { method: 'POST', body: JSON.stringify({ workspace: ws }) })
+  ).json();
+  assert.equal(pane.favorite, false, 'panes start unstarred');
+
+  const starred = await authed(`/sessions/${pane.id}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ favorite: true }),
+  });
+  assert.equal(starred.status, 200);
+  assert.equal((await starred.json()).favorite, true);
+
+  const bad = await authed(`/sessions/${pane.id}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ favorite: 'yes' }),
+  });
+  assert.equal(bad.status, 400, 'only a real boolean is accepted');
+
+  // The star is a preference you set once — it has to be on disk, or every
+  // restart silently empties the filter. (This server takes its data dir from
+  // LOCALAPPDATA, so that is tmp\Helm — not tmp, which is the HELM_DATA_DIR
+  // shape the seeded aside-servers use.)
+  const saved = persistedSessions(path.join(tmp, 'Helm')).find((s) => s.id === pane.id);
+  assert.equal(saved?.favorite, true, 'the star was persisted');
+
+  const off = await authed(`/sessions/${pane.id}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ favorite: false }),
+  });
+  assert.equal((await off.json()).favorite, false);
+  await authed(`/sessions/${pane.id}`, { method: 'DELETE' });
+});

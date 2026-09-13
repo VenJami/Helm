@@ -1174,6 +1174,77 @@ Regression test has the stand-in write its OWN pid (the one Helm holds is the
 shim's) and asserts it is gone after the stop; proven to have teeth by reverting
 the fix and watching it fail. Smoke 48, and a full run now leaks zero.
 
+Pane categories + a real color picker (2026-09-14) — a friend asked for bright
+red and navy pane colors and "categories for the panes, depending on the
+color"; owner's framing was Chrome's tab groups. Both halves were real gaps:
+`PANE_COLORS` was ten soft mid-tones with no red, no deep blue and no way to
+type your own, and a pane's color was random decoration that meant nothing. Now
+a **category** is a folder you create (name + any color from the browser's own
+color wheel), panes are filed into one from the swatch button in their header,
+and **the category owns the color** — a filed pane renders in its category's,
+derived at render (`web/src/lib/categories.ts`, `paneAccent`) rather than
+written onto the session, so recoloring a folder repaints every pane in it at
+once with nothing to migrate or keep in sync. New `categories.json` +
+`GET/POST/PATCH/DELETE /api/categories`, `categoryId` on the session and its
+PATCH route. Scoped by the owner to **label + search**: a chip beside the pane
+name and Ctrl+K matching the category, deliberately NOT grid grouping or a
+toolbar filter (they fight the existing drag-to-reorder and saved grid weights,
+and Chrome's other tab-group behaviour — visual clustering and collapse — can
+follow as its own piece). Red and navy are picker-only, never in the RANDOM
+pool: red is load-bearing in Helm (the PUBLIC share flag, the notch's "needs
+you") and a pane coming up red by chance would dilute a real alarm. Two
+dangling-reference guards, the bug this codebase has already shipped twice:
+deleting a category empties every pane filed there (and reports the count, so
+the confirm can name the blast radius), and a pane naming a category that
+vanished while the server was down has the reference cleared at load. The HUD
+and notch take the category color too — the same pane was otherwise two
+different colors in two places. Verified: smoke 51 (3 new, incl. a
+delete-clears test proven to have teeth by reverting the fix and watching it
+fail), 54 vitest (9 new on the pure color rule), and 25/25 by CDP in a real
+browser against an isolated 3-pane server — category created from a pane
+header, chip rendered, both filed panes repainted, recolor propagated across a
+reload, Ctrl+K narrowing 21 rows to exactly the 2 filed panes (the first cut of
+that check passed VACUOUSLY against an unfiltered list), the manage dialog
+naming how many panes a delete would empty, and after the delete the panes
+back on their own colors with no ghost ids left.
+
+Minimized panes keep their group (2026-09-14) — owner spotted the surface the
+above had missed: the tray chips still painted `session.color`, so minimizing a
+pane threw away the one thing its color was supposed to say, and panes from the
+same category scattered across the strip. The tray now renders one CONTAINER
+per category — tinted and labelled with that category's color, its chips in
+that color too — with uncategorized panes in a last, unlabelled group.
+Ordering comes from the categories list rather than the panes
+(`groupByCategory` in lib/categories.ts), so a group doesn't jump around as
+panes are minimized and restored, and an empty category never shows. The
+floating-pane chip takes the category color as well. 60 vitest (6 new on the
+grouping rule) and 11/11 by CDP against a real isolated server: two containers
+with the right chips in each, both borders and both chip colors matching their
+category, an unfiled pane landing loose and last, restore still working from
+inside a container, and the strip checked in light theme as well as dark.
+
+Favorite panes + a favorites-only filter (2026-09-14) — a star on every pane
+header (`favorite` on the session, persisted through the existing PATCH route)
+and a toolbar toggle that shows only starred panes. Owner picked the FILTER
+over sort-to-top, which is the version that can genuinely lose a pane: hiding a
+RUNNING one is the invisible-pane bug class this repo has already shipped
+(stranded panes with no project). So the filter is guarded three ways rather
+than trusted — it never turns itself on, the toggle carries the count it is
+hiding ("Favorites (1 hidden)") and an emptied grid says why and offers the way
+out instead of reading as lost panes, and **any jump to a pane it would hide
+turns it off**: both `jumpToPane` (Ctrl+K, the HUD/notch focus request) and
+`jumpToWaiting` (the "N waiting" pill). Ctrl+K itself is deliberately NOT
+filtered — the filter is about what the grid shows, not what you can find.
+Verified: smoke 52 (star round-trip, boolean validation, persisted to disk) and
+by CDP in a real browser — 9/9 on the filter and its reporting, plus the two
+cases that matter most, each staged for real: clicking a hidden pane in Ctrl+K
+reveals it rather than landing on an empty grid, and a pane driven to `waiting`
+through the REAL hook relay while unstarred stays reachable from the waiting
+pill, which turns the filter off to show it. Two testing traps of my own here:
+Ctrl+K is a TOGGLE, so a palette left open by a previous script reads as "the
+shortcut is broken", and the first jump check passed a synthetic Enter that
+never selected anything — the guard looked broken when only the test was.
+
 ## Short-term backlog (rough priority order, owner-approved direction)
 (empty — next items to be chosen with the owner)
 

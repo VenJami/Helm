@@ -100,7 +100,12 @@ Browser (React + xterm.js grid) <--WS/REST--> Node server <--PTY--> claude.cmd
 - `POST /api/sessions/:id/stop` — kill the process, KEEP the pane (its
   scrollback stays readable; it lands in `exited` and can be started again).
   409 when it isn't running. Deleting the pane outright is the DELETE above.
-- `PATCH /api/sessions/:id {name?, color?}` — pane identity (persisted).
+- `PATCH /api/sessions/:id {name?, color?, categoryId?, favorite?}` — pane identity
+  (persisted). `categoryId: null` files the pane out of its category; any other
+  value must name one that exists, else 400 — a pane must never hold a
+  reference the UI cannot resolve. `favorite` is the star the "favorites only"
+  grid filter keeps; the filter is client-side (`helm.favoritesOnly`) and never
+  hides a pane you jump to.
 - `POST /api/sessions/:id/revive` — respawn a `dead` session; uses
   `claude --resume <claudeSessionId>` when hooks captured the id (same
   conversation), else a fresh claude in the same workspace/profile. If the
@@ -268,6 +273,17 @@ and the header of `server/src/tunnel.mjs`.
   `HELM_CLOUDFLARED_CMD` overrides the binary (the test suite points it at a
   stand-in).
 
+- `GET /api/categories` → `[{id,name,color}]` — pane categories ("folders",
+  the Chrome-tab-group shape: a named, colored grouping panes are filed into).
+  `POST /api/categories {name, color}` (name 1-24 chars, color `#rrggbb`),
+  `PATCH /api/categories/:id {name?, color?}`,
+  `DELETE /api/categories/:id` → `{ok, emptied}`. The delete also clears
+  `categoryId` on every session filed there and reports how many it emptied —
+  a delete has to be a delete everywhere the id is referenced, or panes are
+  left pointing at a category that no longer exists. The category owns the
+  COLOR: a filed pane renders in its category's color (derived client-side in
+  `web/src/lib/categories.ts`, never written onto the session), so recoloring
+  a category repaints every pane in it with no migration.
 - `GET /api/profiles` → `{default:{email}, profiles:[{name,email}]}`;
   `DELETE /api/profiles/:name` (refused while a running session uses it).
 - `POST /api/hook` — hook relay (own token via `x-helm-hook` header). Answers
@@ -347,6 +363,11 @@ any pane or workspace. Transient action errors surface as toasts
 %LOCALAPPDATA%\Helm\        (~/.helm on macOS/Linux)
   token, hook-token      auth tokens (persist across restarts; delete to rotate)
   workspaces.json        sidebar workspaces
+  categories.json        pane categories ("folders": id/name/color). A pane
+                         references one by id and renders in ITS color, so
+                         recoloring a category recolors every pane in it. At
+                         load, a pane naming a category that is gone has the
+                         reference cleared rather than kept as a ghost.
   sessions.json          running sessions → revivable as 'dead' after restart
                          (at load, panes whose workspace dir is no longer in
                          workspaces.json are dropped — the grid lists panes per
