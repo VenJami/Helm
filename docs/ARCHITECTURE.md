@@ -58,20 +58,23 @@ Browser (React + xterm.js grid) <--WS/REST--> Node server <--PTY--> claude.cmd
   cursor is relative to the screen edge. Window WIDTH is a function of the mode
   (200 compact / 460 expanded), never of measured content; only height comes
   from the page. It is deliberately
-  NOT movable. While following (the default) it hides whenever a visible,
-  non-minimised window whose title ends "Helm ⎈" exists, so it is only ever on
-  screen when Helm is not; while auto-compacting (also default) it rests as a
+  NOT movable. It always hides (not a setting) whenever a visible, non-minimised
+  window whose title contains "Helm ⎈" exists — the app window or a Helm tab —
+  or the foreground window is full screen on its monitor (a maximised window
+  does not count), so it is only ever on screen when Helm is not and nothing
+  wants the whole screen; while auto-compacting (default) it rests as a
   strip of per-pane status lights (`NotchStrip`), or — when a pane is blocked —
   that project's name and "Needs you", and grows into the full list on hover.
   The compact window has two FIXED widths for those two faces; the page picks
   one by state (`compactWidthFor`) and never measures. Pure pane-state helpers
   live in `lib/paneStatus.ts` so both faces and the HUD share one definition.
-  What it lists is filtered by `notchPanes`: panes idle beyond 30 min (and dead
-  ones) collapse to a "+N quiet" line, and projects muted with `notch:false`
-  drop out entirely and are not counted. The notch only — `/hud` in a browser
-  window stays the full view.
+  What it lists is filtered by `notchPanes`: only ACTIVE panes (working, or
+  waiting on you) take rows; idle and dead ones collapse to a "+N idle" line
+  the moment they go idle, and projects muted with `notch:false` drop out
+  entirely and are not counted. The notch only — `/hud` in a browser window
+  stays the full view.
   The notch renders `AgentHud` with `chrome={false}` — no header, no count, no
-  spend, no collapse or close buttons — and closes on right-click instead. Following outranks compacting. There is deliberately NO
+  spend, no collapse or close buttons — and closes on right-click instead. Hiding outranks compacting. There is deliberately NO
   click-through message — a window that ignores the mouse stops receiving mouse
   messages, so the page could never turn it back off; instead the window HUGS its
   content (a `ResizeObserver` drives `resize`), which leaves nothing around the
@@ -201,12 +204,13 @@ Browser (React + xterm.js grid) <--WS/REST--> Node server <--PTY--> claude.cmd
   work; POST is a no-op when one is already up (checked with `tasklist` at click
   time rather than polled). Spawned detached and unref'd, so the notch outlives
   the request and a Helm shutdown doesn't close a window you opened on purpose.
-- `GET/PATCH /api/settings` — server toggles:
-  `{autoRevive, notchFollowsHelm, notchAutoHide}`.
-  `notchFollowsHelm` lives here rather than in localStorage because the native
+- `GET/PATCH /api/settings` — server toggles: `{autoRevive, notchAutoCompact}`.
+  `notchAutoCompact` lives here rather than in localStorage because the native
   notch runs in its own WebView2 profile and shares no storage with the browser;
   the notch page polls it and relays it to the host, so the auth token stays in
-  the page.
+  the page. (Hiding while Helm's window is up or another app is full screen is
+  NOT a setting — the host always does it. `notchFollowsHelm` was retired
+  2026-09-14; a saved value is ignored.)
 - `GET /api/logs?after=<seq>` — in-memory server event log for the UI's 🐞
   drawer; `startedAt`/`pid` identify the process (stale-server check).
 - `GET/POST /api/console` → `{supported, visible}` — show/hide the server's own

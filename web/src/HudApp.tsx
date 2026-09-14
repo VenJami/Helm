@@ -135,30 +135,24 @@ export function HudApp() {
     return () => cancelAnimationFrame(id);
   }, [compact]);
 
-  // Tell the host whether to hide while Helm's own window is up. Polled rather
-  // than fetched once, so flipping the toggle in Helm reaches the notch without
-  // restarting it; the host ignores a repeat of what it already knows.
+  // Tell the host whether to rest compact. Polled rather than fetched once, so
+  // flipping the toggle in Helm reaches the notch without restarting it; the
+  // host ignores a repeat of what it already knows.
   useEffect(() => {
     if (!NOTCH || !inNativeHost()) return;
     const pull = () =>
       api
         .getSettings()
-        .then((s) =>
-          sendToHost({
-            cmd: 'config',
-            follow: s.notchFollowsHelm,
-            autoCompact: s.notchAutoCompact,
-          }),
-        )
+        .then((s) => sendToHost({ cmd: 'config', autoCompact: s.notchAutoCompact }))
         .catch(() => {});
     pull();
     const timer = setInterval(pull, 4000);
     return () => clearInterval(timer);
   }, []);
 
-  // What the notch lists. Muted projects go first, then panes that have gone
-  // quiet - see notchPanes. Only in NOTCH mode: /hud in a browser window is the
-  // full view, and the notch is the glanceable one.
+  // What the notch lists. Muted projects go first, then anything not actively
+  // working or waiting on you - see notchPanes. Only in NOTCH mode: /hud in a
+  // browser window is the full view, and the notch is the glanceable one.
   const muted = useMemo(
     () => new Set(workspaces.filter((w) => w.notch === false).map((w) => foldDir(w.dir))),
     [workspaces],
@@ -211,7 +205,7 @@ export function HudApp() {
   return (
     <div className={`hud-page${NOTCH ? ' notch' : ''}${compact ? ' compact' : ''}`} ref={cardRef}>
       {compact ? (
-        <NotchStrip sessions={shown} />
+        <NotchStrip sessions={shown} idle={quiet} />
       ) : (
         <AgentHud
           sessions={shown}

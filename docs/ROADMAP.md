@@ -456,6 +456,18 @@ dangling objects immediately — old blobs may linger by direct SHA until GitHub
 GC; low-stakes here (username + project-name pixels), contact GH Support to
 purge if it ever matters.
 
+Bash launcher (2026-08-25) — `start-helm.sh` at the repo root: same as
+`start-helm.cmd` but for bash (macOS/Linux/Git Bash); executable bit set in
+git. Verified it cds + runs `npm start` (hit the already-running guard, as
+expected with a live server up). 2026-09-14: it now matches the .cmd's shape —
+if Helm is already up it opens the chrome-less app window instead of failing
+on the busy port, and on a fresh start it opens that window once /health
+answers. On Windows it delegates to `start-helm.cmd --open` (one browser hunt,
+not two); elsewhere it tries Chrome/Chromium/Edge/Brave `--app=`, then a plain
+tab. Found while doing it: under Git Bash the .cmd's bare `find` resolved to
+the Unix one, which would have stacked a second notch — now `System32ind.exe`.
+Verified from a Desktop shortcut against the live server: exactly one app window.
+
 Ctrl+V paste in panes (2026-08-26) — plain Ctrl+V never pasted: xterm maps
 ctrl+letter to a control char and calls preventDefault, so the browser's native
 paste event never fired and the PTY just got ^V (Ctrl+Shift+V worked, and
@@ -515,6 +527,12 @@ dependency changed, node-pty still pinned at exactly 1.1.0, web bundle hashes
 byte-identical. The CI gate is a hard failure again. Lesson: read what a
 dry-run actually reports before drawing a conclusion from it, and don't loosen
 a gate until the cheap fix has genuinely been tried.
+
+DEP0190 boot warning fixed (2026-08-26) — the boot-time `claude --version`
+check passed an args array together with `shell:true`, which Node 22+ warns
+about on every start (args are concatenated unescaped). Now one composed
+command string through the shell (the same idiom suggest-start already uses).
+Verified on a real isolated boot: version detected, zero warnings.
 
 Public share links (2026-08-26, owner-approved dep) — VS-Code-style port
 forwarding: each workspace with a dev-server port gets a globe button that
@@ -1244,6 +1262,38 @@ pill, which turns the filter off to show it. Two testing traps of my own here:
 Ctrl+K is a TOGGLE, so a palette left open by a previous script reads as "the
 shortcut is broken", and the first jump check passed a synthetic Enter that
 never selected anything — the guard looked broken when only the test was.
+
+Notch: hides on its own, lists only active panes (2026-09-14) — owner: "should
+automatically be hidden when helm is open or in full screen" and "should not
+show idle panes and only active ones". (1) Hiding while Helm is up already
+existed but was a TOGGLE (`notchFollowsHelm`), and the owner's settings.json
+had it OFF — so the notch never hid, and the report was correct. The toggle is
+gone: the host always hides while a Helm window is on screen, and the title
+match became CONTAINS "Helm ⎈" so a Helm tab in an ordinary browser window
+("Helm ⎈ - Microsoft Edge") counts too. NEW: it also hides while the foreground
+window is FULL SCREEN on the notch's monitor (rect covers the monitor; the same
+test Focus Assist uses) — a MAXIMISED window is deliberately excluded (with an
+auto-hidden taskbar it covers the monitor too, and a maximised editor is what
+the notch is meant to float over), as are the desktop shell and the notch
+itself. Server drops `notchFollowsHelm` (a stale saved value is ignored, the
+PATCH route ignores the key rather than 400ing an older UI). (2) `isQuiet` is
+now state-based: idle and dead panes are out at once, not after 30 min — the
+"just finished still shows" rule from 2026-09-12 is reversed on the owner's
+call. The HUD footer reads "+N idle"; the resting strip says "all idle" when
+panes exist but none is active, so an empty strip never reads as "no agents".
+Verified: smoke 52, 63 vitest (strip faces rendered to markup: "all idle" vs
+"no agents", one light per active pane), and ON SCREEN against the real notch
+reading its own decision trace — 6/6 (Helm up → hidden; minimised → shown; a
+borderless full-screen probe → hidden, closed → back; a maximised probe → still
+shown; Helm restored → hidden) plus 5/5 over the notch's debug port against a
+seeded isolated server (only working+waiting rows, "+2 idle", a pane that
+finishes drops out within a poll, all-idle → zero rows "+4 idle"). The strip's
+on-screen face could not be re-driven in that run because the Helm window
+would not stay minimised while the owner was using it — covered by the render
+tests instead. Testing trap: closing an ACTIVATED dialog can hand activation
+back to a minimised Helm and restore it, which reads as "the notch hid for no
+reason"; the trace now logs `vis=`/`helmUp=`/`fullScreen=` BEFORE the hide
+decision so it says why.
 
 ## Short-term backlog (rough priority order, owner-approved direction)
 (empty — next items to be chosen with the owner)
