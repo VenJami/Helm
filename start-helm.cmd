@@ -71,7 +71,7 @@ if defined BROWSER start "" "%BROWSER%" --app=%HELM_URL% "--window-size=1500,950
 if not defined BROWSER start "" "%HELM_URL%"
 
 rem Bring the floating notch up too, if it has ever been built. It hides itself
-rem while the Helm window is on screen (Appearance -^> Notch), so it costs
+rem while the Helm window is on screen or an app is full screen, so it costs
 rem nothing until you minimise or close Helm - at which point it is already
 rem there. Never a second copy: it is one window per machine.
 set "NOTCH=%~dp0desktop\HelmNotch\bin\Release\net8.0-windows\HelmNotch.exe"

@@ -163,12 +163,11 @@ export type WsClientMsg =
 
 export interface HelmSettings {
   autoRevive: boolean; // respawn dead panes automatically at server start
-  // The native notch hides itself while Helm's own window is on screen. Server
-  // state, not localStorage: the notch runs in its own WebView2 profile and
-  // shares no storage with the browser.
-  notchFollowsHelm: boolean;
-  // ...and when it IS on screen, rests as a strip of status lights, expanding
-  // to the full list when the cursor reaches it.
+  // The native notch rests as a strip of status lights, expanding to the full
+  // list when the cursor reaches it. Server state, not localStorage: the notch
+  // runs in its own WebView2 profile and shares no storage with the browser.
+  // (Hiding while Helm's own window is up, or something is full screen, is
+  // not a setting - the host always does it.)
   notchAutoCompact: boolean;
 }
 

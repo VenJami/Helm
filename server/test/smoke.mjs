@@ -781,55 +781,46 @@ test('notch: reports whether this machine can open one, and refuses when it cann
   assert.equal(anon.status, 401, 'launching a window is not a public capability');
 });
 
-test('settings: the notch toggles round-trip and are validated', async () => {
+test('settings: the notch toggle round-trips and is validated', async () => {
   // Server state rather than localStorage on purpose: the native notch runs in
   // its own WebView2 profile and shares no storage with the browser, so this
   // route is the only way the toggle can reach it.
   const initial = await (await authed('/settings')).json();
-  assert.equal(initial.notchFollowsHelm, true, 'the notch gets out of the way by default');
+  assert.equal(initial.notchAutoCompact, true, 'resting compact is the default');
+  assert.equal(
+    'notchFollowsHelm' in initial,
+    false,
+    'hiding while Helm is up is no longer a setting - the host always does it',
+  );
 
   const off = await authed('/settings', {
     method: 'PATCH',
-    body: JSON.stringify({ notchFollowsHelm: false }),
+    body: JSON.stringify({ notchAutoCompact: false }),
   });
   assert.equal(off.status, 200);
-  assert.equal((await off.json()).notchFollowsHelm, false);
-  assert.equal((await (await authed('/settings')).json()).notchFollowsHelm, false, 'and it sticks');
+  assert.equal((await off.json()).notchAutoCompact, false);
+  assert.equal((await (await authed('/settings')).json()).notchAutoCompact, false, 'and it sticks');
 
   // Untouched by a patch that does not mention it.
   await authed('/settings', { method: 'PATCH', body: JSON.stringify({ autoRevive: false }) });
-  assert.equal((await (await authed('/settings')).json()).notchFollowsHelm, false);
+  assert.equal((await (await authed('/settings')).json()).notchAutoCompact, false);
 
   const bad = await authed('/settings', {
     method: 'PATCH',
-    body: JSON.stringify({ notchFollowsHelm: 'yes' }),
+    body: JSON.stringify({ notchAutoCompact: 1 }),
   });
   assert.equal(bad.status, 400, 'a non-boolean is refused, not coerced');
 
-  // The second toggle: rest as a strip of lights until the cursor reaches it.
-  assert.equal(initial.notchAutoCompact, true, 'resting compact is the default');
-  const hideOff = await authed('/settings', {
+  // The retired toggle is ignored rather than stored or refused: an older UI
+  // or a stale settings.json must not break the route.
+  const stale = await authed('/settings', {
     method: 'PATCH',
-    body: JSON.stringify({ notchAutoCompact: false }),
+    body: JSON.stringify({ notchFollowsHelm: false, notchAutoCompact: true }),
   });
-  assert.equal((await hideOff.json()).notchAutoCompact, false);
-  const both = await (await authed('/settings')).json();
-  assert.equal(both.notchAutoCompact, false);
-  assert.equal(both.notchFollowsHelm, false, 'the two toggles are independent');
-  assert.equal(
-    (
-      await authed('/settings', {
-        method: 'PATCH',
-        body: JSON.stringify({ notchAutoCompact: 1 }),
-      })
-    ).status,
-    400,
-  );
-
-  await authed('/settings', {
-    method: 'PATCH',
-    body: JSON.stringify({ notchFollowsHelm: true, notchAutoCompact: true }),
-  });
+  assert.equal(stale.status, 200);
+  const after = await stale.json();
+  assert.equal(after.notchAutoCompact, true);
+  assert.equal('notchFollowsHelm' in after, false, 'a retired key never comes back');
 });
 
 // ---- cross-window focus requests ------------------------------------------

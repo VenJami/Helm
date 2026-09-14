@@ -183,12 +183,8 @@ public partial class MainWindow : Window
                 if (msg.TryGetProperty("w", out var cw)) SetCompactWidth(cw.GetDouble());
                 break;
             case "config":
-                SetConfig(
-                    msg.TryGetProperty("follow", out var f) ? f.ValueKind == JsonValueKind.True : _follow,
-                    msg.TryGetProperty("autoCompact", out var a)
-                        ? a.ValueKind == JsonValueKind.True
-                        : _autoCompact
-                );
+                if (msg.TryGetProperty("autoCompact", out var a))
+                    SetAutoCompact(a.ValueKind == JsonValueKind.True);
                 break;
             case "raiseHelm":
                 RaiseHelm();
@@ -227,14 +223,17 @@ public partial class MainWindow : Window
     // Keep in step with the border-radius in styles.css (.hud-page.notch .hud).
     private const double BottomRadiusDip = 14;
 
-    // ---- following Helm's own window ---------------------------------------
-    // The notch is for when Helm is NOT in front of you, so by default it hides
-    // itself whenever Helm's window is on screen and reappears the moment that
-    // window is minimised or closed. Watching from here rather than having the
-    // server push events keeps it to a couple of Win32 calls and survives the
-    // server restarting underneath.
+    // ---- getting out of the way ---------------------------------------------
+    // The notch is for when Helm is NOT in front of you, so it hides itself
+    // whenever Helm's window is on screen and reappears the moment that window
+    // is minimised or closed. Not a setting: it used to be one, and the owner's
+    // copy ended up with it switched off, which read as "the notch never hides".
+    // It also hides while the foreground app is FULL SCREEN (a video, a game, a
+    // presentation) - the notch is a topmost window, so without this it would
+    // sit over all of them. Watching from here rather than having the server
+    // push events keeps it to a couple of Win32 calls and survives the server
+    // restarting underneath.
     private System.Windows.Threading.DispatcherTimer? _watch;
-    private bool _follow = true;
     private bool _autoCompact = true;
 
     // At rest the notch does not go away - it shrinks to a strip of status
@@ -254,6 +253,7 @@ public partial class MainWindow : Window
     private int _leaveTicks;
     private int _helmTick;
     private bool _helmUp;
+    private bool _fullScreen;
     private bool? _compactSent; // null = the page has not been told yet
     private System.Windows.Threading.DispatcherTimer? _slide;
     private const double AnimMs = 160; // long enough to read as motion, short enough to feel instant
@@ -268,10 +268,9 @@ public partial class MainWindow : Window
         _lastH = -1,
         _lastLeft = -1;
 
-    private void SetConfig(bool follow, bool autoCompact)
+    private void SetAutoCompact(bool autoCompact)
     {
-        if (_follow == follow && _autoCompact == autoCompact) return;
-        _follow = follow;
+        if (_autoCompact == autoCompact) return;
         _autoCompact = autoCompact;
         if (!_autoCompact) _revealed = true; // pinned open
         UpdateVisibility();
@@ -279,7 +278,7 @@ public partial class MainWindow : Window
 
     // One timer, ticking fast enough for hover to feel immediate. The Helm-window
     // scan is the expensive half (it enumerates every top-level window), so it
-    // only runs every sixth tick.
+    // and the full-screen check only run every sixth tick.
     private void StartWatching()
     {
         _watch = new System.Windows.Threading.DispatcherTimer
@@ -296,12 +295,15 @@ public partial class MainWindow : Window
         {
             _helmTick = 5;
             _helmUp = HelmWindowOnScreen();
+            _fullScreen = ForegroundIsFullScreen();
         }
+        Trace(); // before the early return, so the log says WHY it is hidden
 
-        // Following wins: while Helm itself is in front of you the notch is not
-        // wanted at all, so it goes away entirely rather than sitting there as a
-        // strip. It comes back in whichever face the settings call for.
-        if (_follow && _helmUp)
+        // Getting out of the way wins: while Helm itself is in front of you, or
+        // something is running full screen, the notch is not wanted at all, so
+        // it goes away entirely rather than sitting there as a strip. It comes
+        // back in whichever face the settings call for.
+        if (_helmUp || _fullScreen)
         {
             if (Visibility != Visibility.Hidden) Visibility = Visibility.Hidden;
             _revealed = !_autoCompact;
@@ -309,7 +311,6 @@ public partial class MainWindow : Window
         }
         if (Visibility != Visibility.Visible) Visibility = Visibility.Visible;
 
-        Trace();
         if (_autoCompact)
         {
             if (CursorWantsIt())
@@ -385,9 +386,9 @@ public partial class MainWindow : Window
         {
             System.IO.File.AppendAllText(
                 TraceFile,
-                $"cursor={p.X},{p.Y} rect={r.Left},{r.Top},{r.Right},{r.Bottom} "
+                $"cursor={p.X},{p.Y} rect={r.Left},{r.Top},{r.Right},{r.Bottom} vis={Visibility} "
                     + $"revealed={_revealed} leave={_leaveTicks} autoCompact={_autoCompact} "
-                    + $"follow={_follow} helmUp={_helmUp} wants={CursorWantsIt()} "
+                    + $"helmUp={_helmUp} fullScreen={_fullScreen} wants={CursorWantsIt()} "
                     + $"W={Width:F0} H={Height:F0} tW={_targetWidth:F0} tH={_targetHeight:F0}"
                     + Environment.NewLine
             );
@@ -493,11 +494,13 @@ public partial class MainWindow : Window
     /// <summary>
     /// Helm's own window, minimised or not. Matched by TITLE, because the
     /// browser app window is hosted by an already-running browser process, so a
-    /// command line tells you nothing (GOTCHAS). Helm's page title always ENDS
-    /// with "Helm ⎈" - the count prefix ("(2 waiting) Helm ⎈") varies and other
-    /// windows that merely mention helm (an editor with the repo open) do not
-    /// end that way. Prefers one that is actually on screen when there are
-    /// several.
+    /// command line tells you nothing (GOTCHAS). Helm's page title always
+    /// CONTAINS "Helm ⎈": the app window's title is exactly that (with a
+    /// varying "(2 waiting)" prefix), and a Helm TAB in an ordinary browser
+    /// window puts it in front of " - Microsoft Edge". Contains rather than
+    /// ends-with so that second case counts as Helm being open too; the ⎈ is
+    /// what keeps an editor that merely mentions helm from matching. Prefers
+    /// one that is actually on screen when there are several.
     /// </summary>
     private static IntPtr FindHelmWindow()
     {
@@ -508,10 +511,10 @@ public partial class MainWindow : Window
             {
                 if (!IsWindowVisible(hwnd)) return true;
                 int len = GetWindowTextLength(hwnd);
-                if (len < HelmTitleSuffix.Length) return true;
+                if (len < HelmTitleMark.Length) return true;
                 var sb = new StringBuilder(len + 1);
                 GetWindowText(hwnd, sb, sb.Capacity);
-                if (!sb.ToString().EndsWith(HelmTitleSuffix, StringComparison.Ordinal)) return true;
+                if (!sb.ToString().Contains(HelmTitleMark, StringComparison.Ordinal)) return true;
                 if (IsIconic(hwnd))
                 {
                     if (minimised == IntPtr.Zero) minimised = hwnd;
@@ -529,6 +532,35 @@ public partial class MainWindow : Window
     {
         var hwnd = FindHelmWindow();
         return hwnd != IntPtr.Zero && !IsIconic(hwnd);
+    }
+
+    /// <summary>
+    /// Is the app in front full screen on the notch's monitor? The same test
+    /// Windows' own Focus Assist uses for "when I'm using an app in full-screen
+    /// mode": the foreground window's rect covers the whole monitor. A MAXIMISED
+    /// window is excluded on purpose - with an auto-hidden taskbar it covers the
+    /// monitor too, and an ordinary maximised editor is exactly what the notch
+    /// is meant to float over. So is the desktop itself (Progman/WorkerW cover
+    /// the screen by definition) and the notch, which is topmost and would
+    /// otherwise hide itself the moment it was clicked.
+    /// </summary>
+    private bool ForegroundIsFullScreen()
+    {
+        var fg = GetForegroundWindow();
+        var self = new WindowInteropHelper(this).Handle;
+        if (fg == IntPtr.Zero || fg == self) return false;
+        if (IsIconic(fg) || IsZoomed(fg)) return false;
+        var cls = new StringBuilder(64);
+        GetClassName(fg, cls, cls.Capacity);
+        var name = cls.ToString();
+        if (name == "Progman" || name == "WorkerW") return false;
+        if (!GetWindowRect(fg, out var r)) return false;
+        var mon = MonitorFromWindow(self, MONITOR_DEFAULTTOPRIMARY);
+        if (mon != MonitorFromWindow(fg, MONITOR_DEFAULTTONEAREST)) return false;
+        var info = new MONITORINFO { cbSize = Marshal.SizeOf<MONITORINFO>() };
+        if (!GetMonitorInfo(mon, ref info)) return false;
+        var m = info.rcMonitor;
+        return r.Left <= m.Left && r.Top <= m.Top && r.Right >= m.Right && r.Bottom >= m.Bottom;
     }
 
     /// <summary>
@@ -564,7 +596,7 @@ public partial class MainWindow : Window
         }
     }
 
-    private const string HelmTitleSuffix = "Helm ⎈";
+    private const string HelmTitleMark = "Helm ⎈";
 
     private void PlaceAtTopCentre()
     {
@@ -617,6 +649,33 @@ public partial class MainWindow : Window
 
     [DllImport("user32.dll")]
     private static extern bool IsIconic(IntPtr hwnd);
+
+    [DllImport("user32.dll")]
+    private static extern bool IsZoomed(IntPtr hwnd);
+
+    [DllImport("user32.dll")]
+    private static extern IntPtr GetForegroundWindow();
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    private static extern int GetClassName(IntPtr hwnd, StringBuilder text, int count);
+
+    private const uint MONITOR_DEFAULTTOPRIMARY = 1;
+    private const uint MONITOR_DEFAULTTONEAREST = 2;
+
+    [DllImport("user32.dll")]
+    private static extern IntPtr MonitorFromWindow(IntPtr hwnd, uint flags);
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct MONITORINFO
+    {
+        public int cbSize;
+        public RECT rcMonitor;
+        public RECT rcWork;
+        public uint dwFlags;
+    }
+
+    [DllImport("user32.dll")]
+    private static extern bool GetMonitorInfo(IntPtr hMonitor, ref MONITORINFO info);
 
     [DllImport("user32.dll", CharSet = CharSet.Unicode)]
     private static extern int GetWindowTextLength(IntPtr hwnd);

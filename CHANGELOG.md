@@ -28,11 +28,11 @@ All notable changes to Helm are documented here. Format follows
   open: with it closed, panes prompt for themselves with no added delay, and
   nothing is ever auto-approved. The footer shows Helm's own local 7-day cost
   estimate — Helm has no access to Anthropic's plan percentages, and says so.
-- **The notch stops filling up.** Agents that have been idle a while collapse to
-  a "+3 quiet" line instead of taking rows, while anything working or waiting
-  always shows — and a pane that has *just* finished still shows, because that is
-  the thing you want to see. Right-click a project in the sidebar to hide it from
-  the notch entirely.
+- **The notch lists only what is happening.** Only agents that are working or
+  waiting on you take rows; idle and exited panes fold into a "+3 idle" line the
+  moment they go idle, and when nothing is active the resting strip says "all
+  idle" rather than pretending there are no agents. Right-click a project in the
+  sidebar to hide it from the notch entirely.
 - **The notch says what each agent is doing.** Every row now carries that
   agent's task under its name, and when one is blocked the compact strip says
   how long it has been waiting — "storefront 4m, needs you" rather than an amber
@@ -49,10 +49,12 @@ All notable changes to Helm are documented here. Format follows
   an ordinary browser window — two commands that read the same in the palette,
   and the browser one was easy to mistake for the notch itself.
 - **The notch stays put and knows when to disappear.** It sits flush at the top
-  of your screen and can't be dragged out of place, and by default it hides
-  itself whenever Helm's own window is up — so it is there when you minimise
-  Helm and gone when you are looking at it. Appearance → Notch switches that off
-  if you would rather it were always visible. At rest it shrinks to a small strip of
+  of your screen and can't be dragged out of place, and it always hides itself
+  whenever Helm's own window is up (an app window or a Helm tab) or whatever
+  you are using is full screen — a video, a game, a presentation — so it is
+  there when you minimise Helm and gone when you are looking at it or at
+  something that wants the whole screen. (This used to be a toggle; it is not
+  any more.) At rest it shrinks to a small strip of
   coloured lights — one per agent, green for working, amber for waiting — so a
   glance tells you whether anything needs you without it taking up room. When
   something IS blocked it stops showing lights and names the project instead

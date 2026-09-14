@@ -17,8 +17,6 @@ export function AppearanceModal({
   accent,
   onTheme,
   onAccent,
-  notchFollowsHelm,
-  onNotchFollowsHelm,
   notchAutoCompact,
   onNotchAutoCompact,
   onClose,
@@ -27,8 +25,6 @@ export function AppearanceModal({
   accent: Accent;
   onTheme: (t: Theme) => void;
   onAccent: (a: Accent) => void;
-  notchFollowsHelm: boolean;
-  onNotchFollowsHelm: (on: boolean) => void;
   notchAutoCompact: boolean;
   onNotchAutoCompact: (on: boolean) => void;
   onClose: () => void;
@@ -67,27 +63,6 @@ export function AppearanceModal({
       <div className="chip-row">
         {(
           [
-            [true, 'Hide while Helm is open'],
-            [false, 'Always on screen'],
-          ] as const
-        ).map(([on, label]) => (
-          <button
-            key={String(on)}
-            className={`chip ${notchFollowsHelm === on ? 'selected' : ''}`}
-            onClick={() => onNotchFollowsHelm(on)}
-          >
-            {label}
-          </button>
-        ))}
-      </div>
-      <p className="modal-desc">
-        The floating notch (desktop/start-notch.cmd) is for when Helm is not in front of you, so by
-        default it gets out of the way while this window is up and comes back when you minimise or
-        close it.
-      </p>
-      <div className="chip-row">
-        {(
-          [
             [true, 'Compact until hovered'],
             [false, 'Always expanded'],
           ] as const
@@ -102,8 +77,10 @@ export function AppearanceModal({
         ))}
       </div>
       <p className="modal-desc">
-        At rest it shrinks to a strip of coloured lights, one per agent, so a glance tells you
-        whether anything needs you. Reach it with your cursor and it opens to the full list.
+        The floating notch (desktop/start-notch.cmd) lists only the agents that are working or
+        waiting on you, and gets out of the way on its own while this window is up or another app is
+        full screen. At rest it shrinks to a strip of coloured lights so a glance tells you whether
+        anything needs you; reach it with your cursor and it opens to the full list.
       </p>
       <div className="modal-actions">
         <button className="btn" onClick={onClose}>

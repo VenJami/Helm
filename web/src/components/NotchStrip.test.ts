@@ -3,8 +3,15 @@
 // at a glance: the strip is a couple of dozen pixels tall and only appears when
 // you are looking somewhere else.
 import { describe, expect, it } from 'vitest';
-import { COMPACT_WIDTH_NEEDY, COMPACT_WIDTH_QUIET, compactWidthFor } from './NotchStrip';
-import { QUIET_AFTER_MS, foldDir, needyPane, notchPanes, projectOf } from '../lib/paneStatus';
+import { createElement } from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
+import {
+  COMPACT_WIDTH_NEEDY,
+  COMPACT_WIDTH_QUIET,
+  NotchStrip,
+  compactWidthFor,
+} from './NotchStrip';
+import { foldDir, needyPane, notchPanes, projectOf } from '../lib/paneStatus';
 import type { SessionInfo } from '../types';
 
 const minsAgo = (m: number) => new Date(Date.now() - m * 60_000).toISOString();
@@ -117,15 +124,13 @@ describe('notchPanes', () => {
     expect(shown.map((s) => s.id).sort()).toEqual(['blocked', 'busy']);
   });
 
-  it('keeps a pane that JUST finished — that is the thing you want to see', () => {
-    const { shown } = notchPanes([justDone], new Set());
-    expect(shown.map((s) => s.id)).toEqual(['done']);
-  });
-
-  it('drops one that has been idle a long time, and says how many', () => {
-    const { shown, quiet } = notchPanes([busy, forgotten], new Set());
+  it('drops an idle pane the moment it goes idle, and says how many', () => {
+    // Owner's rule: the notch is only what is happening right now. A pane that
+    // finished two minutes ago and one that finished four hours ago are the
+    // same thing to it - not active.
+    const { shown, quiet } = notchPanes([busy, justDone, forgotten], new Set());
     expect(shown.map((s) => s.id)).toEqual(['busy']);
-    expect(quiet).toBe(1);
+    expect(quiet).toBe(2);
   });
 
   it('drops dead panes — you revive those from Helm, not the notch', () => {
@@ -149,13 +154,39 @@ describe('notchPanes', () => {
     expect(notchPanes([busy], muted).shown).toEqual([]);
   });
 
-  it('treats a pane with no activity timestamp by its age, not as fresh', () => {
-    const old = pane({
-      id: 'nohooks',
-      activity: null,
-      activitySince: null,
-      createdAt: new Date(Date.now() - QUIET_AFTER_MS - 60_000).toISOString(),
-    });
-    expect(notchPanes([old], new Set()).shown).toEqual([]);
+  it('treats a pane whose hooks never reported as idle, not as active', () => {
+    const nohooks = pane({ id: 'nohooks', activity: null, activitySince: null });
+    expect(notchPanes([nohooks], new Set()).shown).toEqual([]);
+  });
+
+  it('keeps a pane that is ASKING (held permission request) whatever its activity says', () => {
+    const asking = pane({ id: 'ask', activity: 'idle', pendingId: 'req1' });
+    expect(notchPanes([asking], new Set()).shown.map((s) => s.id)).toEqual(['ask']);
+  });
+});
+
+describe('NotchStrip faces', () => {
+  // The strip gets the ALREADY-FILTERED list plus how many were idle. Rendered
+  // to markup rather than screenshotted: it is 24px tall and only on screen
+  // when you are looking elsewhere, so a human never sees these states.
+  const render = (sessions: SessionInfo[], idle: number) =>
+    renderToStaticMarkup(createElement(NotchStrip, { sessions, idle }));
+  const busy = pane({ id: 'busy', activity: 'working' });
+
+  it('with nothing active but panes idle says "all idle" — never "no agents"', () => {
+    const html = render([], 3);
+    expect(html).toContain('all idle');
+    expect(html).not.toContain('no agents');
+    expect(html).toContain('0 active, 3 idle');
+  });
+
+  it('says "no agents" only when there really are none', () => {
+    expect(render([], 0)).toContain('no agents');
+  });
+
+  it('shows one light per ACTIVE pane and none for the idle ones', () => {
+    const html = render([busy], 5);
+    expect(html.match(/class="dot dot-working"/g)?.length).toBe(1);
+    expect(html).not.toContain('dot-live');
   });
 });

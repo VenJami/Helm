@@ -207,7 +207,6 @@ export function App() {
   // Whether the native notch window hides itself while this window is up. Server
   // state, because the notch runs in its own WebView2 profile and cannot see
   // this browser's localStorage.
-  const [notchFollowsHelm, setNotchFollowsHelm] = useState(true);
   const [notchAutoCompact, setNotchAutoCompact] = useState(true);
 
   // Server console window (start-helm.cmd terminal) show/hide toggle.
@@ -342,38 +341,23 @@ export function App() {
       .getSettings()
       .then((s) => {
         setAutoRevive(s.autoRevive);
-        setNotchFollowsHelm(s.notchFollowsHelm);
         setNotchAutoCompact(s.notchAutoCompact);
       })
       .catch(() => {});
   }, [refreshCategories]);
 
-  // Both notch toggles behave the same way: optimistic, reverted on failure.
-  // The notch itself picks them up from the server on its own poll.
-  const patchNotch = async (
-    patch: { notchFollowsHelm: boolean } | { notchAutoCompact: boolean },
-    revert: () => void,
-  ) => {
-    try {
-      const s = await api.updateSettings(patch);
-      setNotchFollowsHelm(s.notchFollowsHelm);
-      setNotchAutoCompact(s.notchAutoCompact);
-    } catch (err) {
-      revert();
-      toast.error((err as Error).message);
-    }
-  };
-
-  const setNotchFollows = (on: boolean) => {
-    const before = notchFollowsHelm;
-    setNotchFollowsHelm(on);
-    return patchNotch({ notchFollowsHelm: on }, () => setNotchFollowsHelm(before));
-  };
-
-  const setNotchCompact = (on: boolean) => {
+  // Optimistic, reverted on failure. The notch itself picks it up from the
+  // server on its own poll.
+  const setNotchCompact = async (on: boolean) => {
     const before = notchAutoCompact;
     setNotchAutoCompact(on);
-    return patchNotch({ notchAutoCompact: on }, () => setNotchAutoCompact(before));
+    try {
+      const s = await api.updateSettings({ notchAutoCompact: on });
+      setNotchAutoCompact(s.notchAutoCompact);
+    } catch (err) {
+      setNotchAutoCompact(before);
+      toast.error((err as Error).message);
+    }
   };
 
   const toggleAutoRevive = async () => {
@@ -1726,8 +1710,6 @@ export function App() {
           accent={accent}
           onTheme={setTheme}
           onAccent={setAccent}
-          notchFollowsHelm={notchFollowsHelm}
-          onNotchFollowsHelm={(on) => void setNotchFollows(on)}
           notchAutoCompact={notchAutoCompact}
           onNotchAutoCompact={(on) => void setNotchCompact(on)}
           onClose={closeDialog}

@@ -201,12 +201,13 @@ Browser (React + xterm.js grid) <--WS/REST--> Node server <--PTY--> claude.cmd
   work; POST is a no-op when one is already up (checked with `tasklist` at click
   time rather than polled). Spawned detached and unref'd, so the notch outlives
   the request and a Helm shutdown doesn't close a window you opened on purpose.
-- `GET/PATCH /api/settings` — server toggles:
-  `{autoRevive, notchFollowsHelm, notchAutoHide}`.
-  `notchFollowsHelm` lives here rather than in localStorage because the native
+- `GET/PATCH /api/settings` — server toggles: `{autoRevive, notchAutoCompact}`.
+  `notchAutoCompact` lives here rather than in localStorage because the native
   notch runs in its own WebView2 profile and shares no storage with the browser;
   the notch page polls it and relays it to the host, so the auth token stays in
-  the page.
+  the page. (Hiding while Helm's window is up or another app is full screen is
+  NOT a setting — the host always does it. `notchFollowsHelm` was retired
+  2026-09-14; a saved value is ignored.)
 - `GET /api/logs?after=<seq>` — in-memory server event log for the UI's 🐞
   drawer; `startedAt`/`pid` identify the process (stale-server check).
 - `GET/POST /api/console` → `{supported, visible}` — show/hide the server's own

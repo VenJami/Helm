@@ -16,12 +16,13 @@
 // through; anything outside the notch is already the editor underneath.
 /** Messages the page sends to a native host. Mirrored in desktop/HelmNotch. */
 export type HostMessage =
-  // How the notch should behave. The page owns these because they live behind
+  // How the notch should behave. The page owns this because it lives behind
   // the server's auth token, which the host has no way to read.
-  //   follow      - hide entirely while Helm's own window is on screen
-  //   autoCompact - otherwise rest as a strip of status lights and expand on
-  //                 hover, the way an auto-hidden taskbar slides back
-  | { cmd: 'config'; follow: boolean; autoCompact: boolean }
+  //   autoCompact - rest as a strip of status lights and expand on hover, the
+  //                 way an auto-hidden taskbar slides back
+  // (Hiding while Helm's own window is up, or the foreground app is full
+  // screen, is the host's own decision and not configurable.)
+  | { cmd: 'config'; autoCompact: boolean }
   // HEIGHT ONLY, and that is load-bearing. Driving the window's WIDTH from the
   // page is a feedback loop: a narrower window reflows the content, which
   // changes the measured width, which resizes the window again — it oscillated

@@ -398,6 +398,23 @@ drag request arrives asynchronously from the page. Post
 `WM_NCLBUTTONDOWN`/`HTCAPTION` to the window instead — it also gets you snapping
 and Aero shake for free.
 
+## Testing the notch's hide rule: a closed dialog can un-minimise Helm
+
+The notch hides while a Helm window is on screen, so any on-screen test of its
+OTHER states (full-screen detection, the resting strip) starts by minimising
+Helm. Two things then bite. (1) A probe window that ACTIVATES itself and later
+closes hands activation back to the previously active window — and Windows may
+RESTORE a minimised one to do it — so the tick after the probe closes can show
+`helmUp=True` and the notch hidden "for no reason". Check `IsIconic` on the
+Helm window after every probe and re-minimise; the host's `HELMNOTCH_LOG`
+trace logs `vis= helmUp= fullScreen=` before the hide decision precisely so
+this reads as "Helm came back", not "the fullscreen check is broken". (2) If
+the owner is using Helm at the time, the window will not stay minimised at
+all — don't fight it; the strip's faces have render tests for that reason.
+Also: never put P/Invoke definitions inline in a `powershell -Command` string
+launched from Node or Git Bash — the nested quoting mangles them silently;
+put them in a `.ps1` and pass arguments.
+
 ## `proc.kill()` kills the shell, not the program, whenever you spawned via one
 `spawn(cmd, { shell: true })` — which Node needs for a `.cmd`/`.bat` — makes
 `proc` the shell, and the thing you actually wanted is its CHILD. Killing the

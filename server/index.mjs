@@ -164,18 +164,21 @@ writeHookSettings();
 // ---------------------------------------------------------- server settings
 // Small user-facing toggles, persisted in %LOCALAPPDATA%\Helm\settings.json.
 // autoRevive: respawn every 'dead' session automatically at server start.
-// notchFollowsHelm: the native notch window (desktop/HelmNotch) hides itself
-//   whenever Helm's own window is on screen, and shows when it is minimised or
-//   closed. Lives here rather than in localStorage because the notch runs in
-//   its own WebView2 profile and shares no storage with the browser.
-// notchAutoCompact: at rest the notch shrinks to a strip of status lights (one
-//   per pane, coloured by what it is doing) and expands to the full list when
-//   the cursor reaches it - the way an auto-hidden taskbar slides back.
-const DEFAULT_SETTINGS = { autoRevive: false, notchFollowsHelm: true, notchAutoCompact: true };
+// notchAutoCompact: at rest the native notch window (desktop/HelmNotch) shrinks
+//   to a strip of status lights (one per pane, coloured by what it is doing)
+//   and expands to the full list when the cursor reaches it - the way an
+//   auto-hidden taskbar slides back. Lives here rather than in localStorage
+//   because the notch runs in its own WebView2 profile and shares no storage
+//   with the browser. (Hiding while Helm's window is up used to be a toggle,
+//   notchFollowsHelm; the owner's copy ended up with it off and the notch
+//   "never hid", so the host now always does it, and a saved value is dropped.)
+const DEFAULT_SETTINGS = { autoRevive: false, notchAutoCompact: true };
 let settings = { ...DEFAULT_SETTINGS };
 {
   const saved = readJsonWithBackup(SETTINGS_FILE, 'settings');
-  if (saved && typeof saved === 'object') settings = { ...DEFAULT_SETTINGS, ...saved };
+  if (saved && typeof saved === 'object') {
+    for (const k of Object.keys(DEFAULT_SETTINGS)) if (k in saved) settings[k] = saved[k];
+  }
 }
 
 function saveSettings() {
@@ -1809,18 +1812,12 @@ app.post('/api/broadcast', (req, res) => {
 app.get('/api/settings', (_req, res) => res.json(settings));
 
 app.patch('/api/settings', (req, res) => {
-  const { autoRevive, notchFollowsHelm, notchAutoCompact } = req.body || {};
+  const { autoRevive, notchAutoCompact } = req.body || {};
   if (autoRevive !== undefined) {
     if (typeof autoRevive !== 'boolean') {
       return res.status(400).json({ error: 'autoRevive must be true or false' });
     }
     settings.autoRevive = autoRevive;
-  }
-  if (notchFollowsHelm !== undefined) {
-    if (typeof notchFollowsHelm !== 'boolean') {
-      return res.status(400).json({ error: 'notchFollowsHelm must be true or false' });
-    }
-    settings.notchFollowsHelm = notchFollowsHelm;
   }
   if (notchAutoCompact !== undefined) {
     if (typeof notchAutoCompact !== 'boolean') {
@@ -1831,8 +1828,7 @@ app.patch('/api/settings', (req, res) => {
   saveSettings();
   dbg(
     'settings',
-    `autoRevive=${settings.autoRevive} notchFollowsHelm=${settings.notchFollowsHelm} ` +
-      `notchAutoCompact=${settings.notchAutoCompact}`,
+    `autoRevive=${settings.autoRevive} notchAutoCompact=${settings.notchAutoCompact}`,
   );
   res.json(settings);
 });
