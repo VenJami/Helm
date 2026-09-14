@@ -456,6 +456,18 @@ dangling objects immediately — old blobs may linger by direct SHA until GitHub
 GC; low-stakes here (username + project-name pixels), contact GH Support to
 purge if it ever matters.
 
+Bash launcher (2026-08-25) — `start-helm.sh` at the repo root: same as
+`start-helm.cmd` but for bash (macOS/Linux/Git Bash); executable bit set in
+git. Verified it cds + runs `npm start` (hit the already-running guard, as
+expected with a live server up). 2026-09-14: it now matches the .cmd's shape —
+if Helm is already up it opens the chrome-less app window instead of failing
+on the busy port, and on a fresh start it opens that window once /health
+answers. On Windows it delegates to `start-helm.cmd --open` (one browser hunt,
+not two); elsewhere it tries Chrome/Chromium/Edge/Brave `--app=`, then a plain
+tab. Found while doing it: under Git Bash the .cmd's bare `find` resolved to
+the Unix one, which would have stacked a second notch — now `System32ind.exe`.
+Verified from a Desktop shortcut against the live server: exactly one app window.
+
 Ctrl+V paste in panes (2026-08-26) — plain Ctrl+V never pasted: xterm maps
 ctrl+letter to a control char and calls preventDefault, so the browser's native
 paste event never fired and the PTY just got ^V (Ctrl+Shift+V worked, and
@@ -515,6 +527,12 @@ dependency changed, node-pty still pinned at exactly 1.1.0, web bundle hashes
 byte-identical. The CI gate is a hard failure again. Lesson: read what a
 dry-run actually reports before drawing a conclusion from it, and don't loosen
 a gate until the cheap fix has genuinely been tried.
+
+DEP0190 boot warning fixed (2026-08-26) — the boot-time `claude --version`
+check passed an args array together with `shell:true`, which Node 22+ warns
+about on every start (args are concatenated unescaped). Now one composed
+command string through the shell (the same idiom suggest-start already uses).
+Verified on a real isolated boot: version detected, zero warnings.
 
 Public share links (2026-08-26, owner-approved dep) — VS-Code-style port
 forwarding: each workspace with a dev-server port gets a globe button that

@@ -75,7 +75,9 @@ rem while the Helm window is on screen (Appearance -^> Notch), so it costs
 rem nothing until you minimise or close Helm - at which point it is already
 rem there. Never a second copy: it is one window per machine.
 set "NOTCH=%~dp0desktop\HelmNotch\bin\Release\net8.0-windows\HelmNotch.exe"
-tasklist /FI "IMAGENAME eq HelmNotch.exe" 2>nul | find /I "HelmNotch.exe" >nul
+rem find.exe by full path: under Git Bash (start-helm.sh delegates here) a bare
+rem "find" resolves to the Unix one, which fails and would stack a second notch.
+tasklist /FI "IMAGENAME eq HelmNotch.exe" 2>nul | "%SystemRoot%\System32\find.exe" /I "HelmNotch.exe" >nul
 if errorlevel 1 if exist "%NOTCH%" start "" "%NOTCH%" "%HELM_URL%/hud?notch=1"
 goto :eof
 

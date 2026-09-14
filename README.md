@@ -68,6 +68,8 @@ another window instead of starting a second server.
 
 Open http://127.0.0.1:7777, add a project folder as a workspace, and hit
 **New pane**. Set the `PORT` environment variable to change the port.
+`start-helm.sh` (repo root) is the bash equivalent of the Windows launcher
+(macOS/Linux/Git Bash).
 
 > `node-pty` is a native module. If `npm install` fails in `server/`, you may
 > need the standard Windows build tools (Visual Studio Build Tools + Python).
