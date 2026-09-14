@@ -32,5 +32,23 @@ process.stderr.write(
   ].join('\n'),
 );
 
+// Record our REAL pid where the suite can find it. On Windows this stand-in is
+// reached through a .cmd shim, so the process Helm spawned is cmd.exe and this
+// one is its child — which is precisely how it used to survive being "stopped".
+// The regression test asserts on THIS pid, not the one Helm holds.
+if (process.env.HELM_FAKE_CF_PIDDIR) {
+  const fs = await import('node:fs');
+  const nodePath = await import('node:path');
+  const port = /:(\d+)/.exec(target)?.[1] ?? '0';
+  try {
+    fs.writeFileSync(
+      nodePath.join(process.env.HELM_FAKE_CF_PIDDIR, `cf-${port}.pid`),
+      String(process.pid),
+    );
+  } catch {
+    /* the suite will notice the missing file */
+  }
+}
+
 // Stay up until Helm kills us, like a real tunnel process.
 setInterval(() => {}, 1 << 30);

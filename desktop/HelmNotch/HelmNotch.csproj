@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Helm's native notch window. It renders NOTHING itself: it is a frameless,
+       transparent, always-on-top window hosting a WebView2 pointed at Helm's
+       own /hud?notch=1 page, so the entire UI stays React + CSS in web/.
+       Windows-only by nature (WPF); Helm runs fine without it. -->
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>HelmNotch</AssemblyName>
+    <RootNamespace>HelmNotch</RootNamespace>
+    <!-- One self-contained folder is not worth it: the WindowsDesktop runtime
+         is already present on the target machine (this is a local companion,
+         not something we ship to strangers). -->
+    <SelfContained>false</SelfContained>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.2903.40" />
+  </ItemGroup>
+
+</Project>

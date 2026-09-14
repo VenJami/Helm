@@ -24,7 +24,7 @@
 // (Revised 2026-08-26: the original "detect, never install" call left a dead
 // end — an error naming a program most people have never heard of.)
 
-import { execFile, spawn } from 'node:child_process';
+import { execFile, execFileSync, spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { dbg } from './log.mjs';
@@ -335,16 +335,48 @@ export function extendTunnel(workspaceId) {
   return tunnel;
 }
 
+/**
+ * Kill the spawned process AND anything under it.
+ *
+ * `proc.kill()` alone is not enough whenever the spawn went through a shell:
+ * `proc` is then cmd.exe and the real process is its CHILD, so killing the
+ * parent orphans a tunnel Helm has already forgotten about — a live public URL
+ * nobody is left holding. That is exactly what `needsShell` does for a
+ * .cmd/.bat, and `cloudflared` on PATH is a .cmd shim under several package
+ * managers, so this is not only about the test stand-in. Measured: the smoke
+ * suite leaked two stand-in processes per run, forever, on any machine that ran
+ * it.
+ *
+ * Synchronous on purpose: shutdown exits a few hundred ms after calling this,
+ * and an async kill loses that race.
+ */
+function killTree(proc) {
+  if (!proc?.pid) return;
+  if (process.platform === 'win32') {
+    try {
+      execFileSync('taskkill', ['/PID', String(proc.pid), '/T', '/F'], {
+        stdio: 'ignore',
+        windowsHide: true,
+        timeout: 4000,
+      });
+      return;
+    } catch {
+      /* taskkill missing, or the tree is already gone — fall through */
+    }
+  }
+  try {
+    proc.kill();
+  } catch {
+    /* already gone */
+  }
+}
+
 export function stopTunnel(workspaceId) {
   const tunnel = tunnels.get(workspaceId);
   if (!tunnel) return false;
   tunnels.delete(workspaceId);
   if (tunnel.timer) clearTimeout(tunnel.timer);
-  try {
-    tunnel.proc?.kill();
-  } catch {
-    /* already gone */
-  }
+  killTree(tunnel.proc);
   dbg('tunnel', `workspace ${workspaceId}: share link closed`);
   return true;
 }

@@ -1,10 +1,13 @@
 import type {
   AccountUsage,
+  Category,
   ConsoleState,
   Diagnostics,
+  FocusRequest,
   GitInfo,
   HelmSettings,
   LogsResponse,
+  NotchState,
   ProfilesInfo,
   ServerInfo,
   SessionInfo,
@@ -107,8 +110,49 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ text }),
     }),
-  updateSession: (id: string, patch: { name?: string; color?: string }) =>
-    req<SessionInfo>(`/sessions/${id}`, { method: 'PATCH', body: JSON.stringify(patch) }),
+  // categoryId: null files the pane out of its folder; any other value must
+  // name a folder that exists or the server 400s.
+  updateSession: (
+    id: string,
+    patch: { name?: string; color?: string; categoryId?: string | null; favorite?: boolean },
+  ) => req<SessionInfo>(`/sessions/${id}`, { method: 'PATCH', body: JSON.stringify(patch) }),
+
+  // ---- pane folders (categories)
+  listCategories: () => req<Category[]>('/categories'),
+  createCategory: (name: string, color: string) =>
+    req<Category>('/categories', { method: 'POST', body: JSON.stringify({ name, color }) }),
+  updateCategory: (id: string, patch: { name?: string; color?: string }) =>
+    req<Category>(`/categories/${id}`, { method: 'PATCH', body: JSON.stringify(patch) }),
+  // Also empties every pane filed here; `emptied` says how many.
+  removeCategory: (id: string) =>
+    req<{ ok: boolean; emptied: number }>(`/categories/${id}`, { method: 'DELETE' }),
+  // The floating HUD's heartbeat. This is what arms Approve/Deny server-side:
+  // stop pinging and every permission request goes straight to the pane's own
+  // prompt again, which is the state Helm is in whenever the HUD is closed.
+  hudPing: () =>
+    req<{ ok: boolean; armedMs: number; holdMs: number }>('/hud/ping', {
+      method: 'POST',
+    }),
+  // Answer a tool call the pane is blocked on. Throws ApiError 409 when the
+  // request already lapsed into the pane's own prompt — expected, not a fault.
+  approve: (id: string, requestId: string, decision: 'allow' | 'deny') =>
+    req<SessionInfo>(`/sessions/${id}/approve`, {
+      method: 'POST',
+      body: JSON.stringify({ requestId, decision }),
+    }),
+  // "Bring pane X to the front", sent from a HUD running in its own window.
+  // Goes through the server rather than a BroadcastChannel because that window
+  // may be a different browser process entirely (see /api/focus in index.mjs).
+  requestFocus: (sessionId: string) =>
+    req<FocusRequest & { ok: boolean }>('/focus', {
+      method: 'POST',
+      body: JSON.stringify({ sessionId }),
+    }),
+  // Long poll: resolves as soon as a focus request newer than `since` exists,
+  // or with a null sessionId when the server's ceiling expires. `signal` lets
+  // the caller abort the in-flight request on unmount.
+  waitForFocus: (since: number, signal?: AbortSignal) =>
+    req<FocusRequest>(`/focus/wait?since=${since}`, { signal }),
   getGlobalUsage: () => req<AccountUsage[]>('/usage'),
   getLogs: (after: number) => req<LogsResponse>(`/logs?after=${after}`),
   getDiagnostics: () => req<Diagnostics>('/diagnostics'),
@@ -122,6 +166,10 @@ export const api = {
   updateSettings: (patch: Partial<HelmSettings>) =>
     req<HelmSettings>('/settings', { method: 'PATCH', body: JSON.stringify(patch) }),
 
+  getNotch: () => req<NotchState>('/notch'),
+  // Launches the floating notch if it isn't already up. One window per machine;
+  // asking twice is harmless.
+  openNotch: () => req<NotchState>('/notch', { method: 'POST' }),
   getConsole: () => req<ConsoleState>('/console'),
   setConsole: (visible: boolean) =>
     req<ConsoleState>('/console', { method: 'POST', body: JSON.stringify({ visible }) }),
@@ -139,6 +187,7 @@ export const api = {
       profile?: string | null;
       port?: number | null;
       startCommands?: string[] | null;
+      notch?: boolean;
     },
   ) => req<Workspace>(`/workspaces/${id}`, { method: 'PATCH', body: JSON.stringify(patch) }),
   // ▶ — run the project's start command(s), one dev pane each (created on first

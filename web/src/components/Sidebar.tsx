@@ -6,6 +6,7 @@ import {
   IconFolder,
   IconGitBranch,
   IconGlobe,
+  IconHud,
   IconGrip,
   IconHelm,
   IconPanelLeftClose,
@@ -57,6 +58,8 @@ interface Props {
   // or take an existing link down.
   onShare: (id: string) => void;
   onUnshare: (id: string) => void;
+  /** Show or hide this project's panes in the floating notch. */
+  onToggleNotch: (id: string, show: boolean) => void;
   onShowShares: () => void; // open the panel listing every live public link
   // Drag-to-reorder: grip on each row → drop on another row's slot.
   dragId: string | null;
@@ -102,6 +105,7 @@ export function Sidebar({
   onSuggestStart,
   onShare,
   onUnshare,
+  onToggleNotch,
   onShowShares,
   dragId,
   dragOverId,
@@ -642,6 +646,16 @@ Click to open the link panel. Expires in ${expiryLabel(tunnel.expiresAt)}.`
             }}
           >
             <IconSparkle size={13} /> Ask Claude how to start it…
+          </button>
+          <button
+            className="ws-menu-item"
+            onClick={() => {
+              onToggleNotch(menuWs.id, menuWs.notch === false);
+              setMenu(null);
+            }}
+          >
+            <IconHud size={13} />{' '}
+            {menuWs.notch === false ? 'Show in the notch' : 'Hide from the notch'}
           </button>
           <div className="ws-menu-sep" />
           <button

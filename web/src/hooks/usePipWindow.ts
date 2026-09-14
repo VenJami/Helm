@@ -30,6 +30,10 @@ const pipApi = (): PipApi | null =>
 
 export const pipSupported = (): boolean => pipApi() !== null;
 
+// What the caller is putting in the window. Only affects which remembered size
+// it opens at — the hook itself stays content-agnostic.
+export type PipKind = 'pane' | 'hud';
+
 // The PiP document is blank — clone every stylesheet in. Same-origin sheets
 // expose cssRules and are inlined; anything that throws (cross-origin) is
 // re-linked by href instead so it still loads.
@@ -82,11 +86,22 @@ export function usePipWindow() {
     // window is a no-op, so this stays safe to call defensively.
   }, []);
 
-  const open = useCallback(async (): Promise<Window | null> => {
+  // `kind` picks which remembered size to open at (and to write back on
+  // resize): a terminal pane and the agent HUD share the one allowed window
+  // but want very different shapes.
+  const open = useCallback(async (kind: PipKind = 'pane'): Promise<Window | null> => {
     const api = pipApi();
     if (!api) return null;
-    winRef.current?.close(); // one window per document — replace, don't stack
-    const size = storage.pipSize.get();
+    const store = kind === 'hud' ? storage.hudSize : storage.pipSize;
+    const size = store.get();
+    // requestWindow FIRST, and never close the old window ourselves. It needs
+    // *transient user activation*, which lives for a few seconds after a click
+    // and is spent by things like Window.close() — closing the previous window
+    // first could therefore make this very call throw "requires user
+    // activation" (reported in the wild). One window per document is the
+    // platform's own rule, so requesting a new one replaces the old, and its
+    // 'pagehide' teardown runs on its own; the caller's in-flight guard is what
+    // keeps that teardown from clearing the state we're about to set.
     const win = await api.requestWindow({ width: size.w, height: size.h });
     copyStyles(win);
     const stopMirror = mirrorTheme(win);
@@ -104,7 +119,7 @@ export function usePipWindow() {
     const teardown = () => {
       stopMirror();
       win.removeEventListener('resize', onResize);
-      storage.pipSize.set(last);
+      store.set(last);
       cleanupRef.current = null;
       if (winRef.current === win) {
         winRef.current = null;

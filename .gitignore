@@ -3,6 +3,10 @@ node_modules/
 web/dist/
 *.tsbuildinfo
 
+# .NET build output (the native notch window in desktop/)
+[Bb]in/
+[Oo]bj/
+
 # local Claude Code settings (personal machine config)
 .claude/settings.local.json
 
