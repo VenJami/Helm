@@ -18,9 +18,10 @@ drag-to-reorder panes (⠿ grip, per-workspace order in localStorage) ·
 Ctrl+Shift+M maximize · kill-confirm for mid-task panes · PWA install manifest
 + icon · exited sessions persist as revivable · revive falls back to fresh
 when the transcript was never written (claude ≥2.1.198 — GOTCHAS) ·
-usage-cache cap · macOS/Linux spawn + data dir (code support — untested
-off-Windows) · attachments: paste/drop/pick a file into a pane (saved locally,
-path typed into claude like native drag-drop; model-read verified).
+usage-cache cap · macOS/Linux spawn + data dir (smoke suite green on macOS
+2026-09-21; real-claude e2e there still unrun) · attachments: paste/drop/
+pick a file into a pane (saved locally, path typed into claude like native
+drag-drop; model-read verified).
 
 Also: GitHub release prep (2026-07-02) — MIT license, .gitignore/.gitattributes,
 CI build check, public README.
@@ -1294,6 +1295,25 @@ tests instead. Testing trap: closing an ACTIVATED dialog can hand activation
 back to a minimised Helm and restore it, which reads as "the notch hid for no
 reason"; the trace now logs `vis=`/`helmUp=`/`fullScreen=` BEFORE the hide
 decision so it says why.
+
+Helm actually runs on macOS (2026-09-21) — three fixes found from one report
+("can't add a folder as a workspace"). (1) A pasted `~/Projects/app` was
+refused as "not a directory": `~` is a SHELL expansion, and nothing expanded it
+server-side, so the path everyone writes on macOS/Linux was the one path Helm
+rejected. Both `POST /api/workspaces` and the PATCH re-root now resolve a
+leading `~` (and trim stray spaces), and the error names the EXPANDED path so a
+real miss says where Helm looked; the Add-workspace placeholder stops showing a
+Windows path on a Mac. (2) The bigger one, found while verifying: NO pane could
+spawn at all on this machine — node-pty's `spawn-helper` unpacks without its
+exec bit on POSIX, so every `pty.spawn` failed `posix_spawnp` before any Helm
+code ran. New `server/scripts/fix-pty-perms.mjs` as `postinstall` (survives
+`npm ci`; a live chmod needs no restart, the helper is read per spawn).
+(3) Two macOS-only test bugs that fell out: `fake-cloudflared.sh` had no exec
+bit (only the claude stand-in was chmod'd) and the favorites test hardcoded the
+Windows data dir. Smoke suite 53 — it had NEVER been run off Windows and was
+22/53 red here; now 52 pass, 1 skip, 0 fail, with a new test covering `~` on
+both routes. That moves macOS from "code support — untested" to "the committed
+suite passes"; the real-claude e2e on macOS is still unrun.
 
 ## Short-term backlog (rough priority order, owner-approved direction)
 (empty — next items to be chosen with the owner)

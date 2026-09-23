@@ -435,6 +435,30 @@ asserts `process.kill(pid, 0)` throws after the stop. Verified to have teeth by
 reverting the fix and watching it fail. A leak like this is invisible to every
 green test run — the suite passed the whole time.
 
+## On macOS/Linux, node-pty ships `spawn-helper` WITHOUT its exec bit
+Symptom: every pane dies at birth with `failed to spawn: posix_spawnp failed.`
+— no claude session, no dev pane, nothing — while the server itself boots fine
+and `claude --version` is detected. The error names neither node-pty nor a
+file, so it reads as "Helm is broken on this machine".
+
+Cause: on POSIX, node-pty execs a small `spawn-helper` binary
+(`node_modules/node-pty/prebuilds/<platform>/spawn-helper`) for every
+`pty.spawn`. The published tarball can unpack it `-rw-r--r--`, and a
+non-executable helper fails `posix_spawnp` before anything of ours runs.
+Windows uses ConPTY and has no helper, which is why this never showed up on the
+platform the project is developed on. Reproduce in one line — it is not
+Helm-specific:
+`node -e "require('node-pty').spawn('/bin/echo',['hi'],{})"`.
+
+Fix: `server/scripts/fix-pty-perms.mjs`, wired as `postinstall` so `npm ci`
+(which deletes `node_modules`) cannot undo it. A manual `chmod +x` works on a
+live install and needs NO server restart — node-pty reads the helper off disk
+at each spawn, so an already-running Helm starts working immediately.
+
+Two committed `.sh` stand-ins had the same disease (`test/fake-claude.sh`,
+`test/fake-cloudflared.sh`): the exec bit is now set in git, and the smoke
+harness chmods both in `before()`.
+
 ## Line endings are MIXED in this repo, and prettier will fail you for it
 `.gitattributes` says `* text=auto` and `.prettierrc` says `endOfLine: "auto"`,
 so files are checked out with CRLF on Windows — but not all of them: some
