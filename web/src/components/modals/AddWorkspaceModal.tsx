@@ -3,6 +3,12 @@ import { api } from '../../api';
 import { Modal } from '../Modal';
 import type { Profile, Workspace } from '../../types';
 
+// The example path only helps if it looks like the machine you're on — a
+// Windows path on a Mac reads as "that's not my format".
+const DIR_EXAMPLE = /Win/i.test(navigator.platform)
+  ? 'e.g. C:\\Users\\you\\Projects\\my-app'
+  : 'e.g. ~/Projects/my-app';
+
 // Add a project folder as a workspace. Owns its draft fields AND the create
 // call (validation + API errors display inline here); the parent only learns
 // about the successfully created workspace.
@@ -57,7 +63,7 @@ export function AddWorkspaceModal({
       <label className="field-label">Directory path</label>
       <input
         className="modal-input"
-        placeholder="e.g. C:\Users\you\Projects\my-app"
+        placeholder={DIR_EXAMPLE}
         value={dir}
         autoFocus
         onChange={(e) => {

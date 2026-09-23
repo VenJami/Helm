@@ -2321,6 +2321,18 @@ function devPaneLabel(command) {
     .slice(0, 20);
 }
 
+// A pasted folder path, resolved the way a shell would. `~` only expands in a
+// shell, so a macOS/Linux user typing the path they see everywhere else
+// (~/Projects/app) would otherwise be told it isn't a directory.
+function resolveWorkspaceDir(dir) {
+  const trimmed = dir.trim();
+  if (trimmed === '~') return os.homedir();
+  if (trimmed.startsWith('~/') || trimmed.startsWith('~\\')) {
+    return path.join(os.homedir(), trimmed.slice(2));
+  }
+  return trimmed;
+}
+
 // Coerce a request `port` field to a valid TCP port (1–65535) or null.
 // Returns undefined when the value is unusable (caller reports a 400).
 function parsePort(v) {
@@ -2335,16 +2347,17 @@ app.post('/api/workspaces', (req, res) => {
   if (!name || typeof name !== 'string' || !dir || typeof dir !== 'string') {
     return res.status(400).json({ error: 'name and dir are required' });
   }
+  const resolved = resolveWorkspaceDir(dir);
   let stat;
   try {
-    stat = fs.statSync(dir);
+    stat = fs.statSync(resolved);
   } catch {
     /* handled below */
   }
   if (!stat?.isDirectory()) {
-    return res.status(400).json({ error: `not a directory: ${dir}` });
+    return res.status(400).json({ error: `not a directory: ${resolved}` });
   }
-  const normalized = path.resolve(dir);
+  const normalized = path.resolve(resolved);
   const existing = workspaces.find((w) => path.resolve(w.dir) === normalized);
   if (existing) return res.status(409).json({ error: `already added as "${existing.name}"` });
   const workspace = { id: crypto.randomUUID(), name, dir: normalized };
@@ -2385,14 +2398,16 @@ app.patch('/api/workspaces/:id', (req, res) => {
   const { name, dir, profile, port } = req.body || {};
   if (typeof name === 'string' && name.trim()) ws.name = name.trim();
   if (typeof dir === 'string' && dir.trim()) {
+    const resolved = resolveWorkspaceDir(dir);
     let stat;
     try {
-      stat = fs.statSync(dir);
+      stat = fs.statSync(resolved);
     } catch {
       /* handled below */
     }
-    if (!stat?.isDirectory()) return res.status(400).json({ error: `not a directory: ${dir}` });
-    const normalized = path.resolve(dir);
+    if (!stat?.isDirectory())
+      return res.status(400).json({ error: `not a directory: ${resolved}` });
+    const normalized = path.resolve(resolved);
     const clash = workspaces.find((w) => w.id !== ws.id && path.resolve(w.dir) === normalized);
     if (clash) return res.status(409).json({ error: `already added as "${clash.name}"` });
     // Running panes were spawned in the old cwd and stay tied to it; only new

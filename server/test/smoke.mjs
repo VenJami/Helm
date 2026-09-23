@@ -150,7 +150,10 @@ async function tryBoot(port) {
 }
 
 before(async () => {
-  if (!IS_WIN) fs.chmodSync(wrapper, 0o755);
+  if (!IS_WIN) {
+    fs.chmodSync(wrapper, 0o755);
+    fs.chmodSync(cfWrapper, 0o755);
+  }
   ghStub = http.createServer((req, res) => {
     if (req.url.startsWith('/compare/')) {
       if (ghCompare === 404) {
@@ -1055,6 +1058,39 @@ test('PATCH workspace dir moves the root (and rejects a non-dir)', async () => {
   assert.equal(bad.status, 400);
   const still = (await (await authed('/workspaces')).json()).find((w) => w.id === ws.id);
   assert.equal(still.dir, path.resolve(dirB));
+});
+
+test('workspace dir accepts a leading ~ (and a stray space)', async () => {
+  // The server child runs with HOME/USERPROFILE pointed at tmp, so ~ resolves
+  // there. A shell expands ~; a path typed into the Add-workspace box does
+  // not, and this used to come back as "not a directory".
+  const real = mkdir(path.join(tmp, 'tilde-proj'));
+  const ws = await (
+    await authed('/workspaces', {
+      method: 'POST',
+      body: JSON.stringify({ name: 'tilde', dir: '  ~/tilde-proj  ' }),
+    })
+  ).json();
+  assert.equal(ws.dir, path.resolve(real));
+
+  // Same on the re-root path.
+  const other = mkdir(path.join(tmp, 'tilde-proj-2'));
+  const patched = await authed(`/workspaces/${ws.id}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ dir: '~/tilde-proj-2' }),
+  });
+  assert.equal(patched.status, 200);
+  assert.equal((await patched.json()).dir, path.resolve(other));
+
+  // A ~ path that doesn't exist is still refused, and the error names the
+  // EXPANDED path so it's obvious where Helm actually looked.
+  const bad = await authed('/workspaces', {
+    method: 'POST',
+    body: JSON.stringify({ name: 'nope', dir: '~/no-such-tilde-dir' }),
+  });
+  assert.equal(bad.status, 400);
+  assert.equal((await bad.json()).error, `not a directory: ${path.join(tmp, 'no-such-tilde-dir')}`);
+  await authed(`/workspaces/${ws.id}`, { method: 'DELETE' });
 });
 
 test('PATCH workspace port sets then clears', async () => {
@@ -2048,10 +2084,10 @@ test('favorites: a pane can be starred, and it survives a restart', async () => 
   assert.equal(bad.status, 400, 'only a real boolean is accepted');
 
   // The star is a preference you set once — it has to be on disk, or every
-  // restart silently empties the filter. (This server takes its data dir from
-  // LOCALAPPDATA, so that is tmp\Helm — not tmp, which is the HELM_DATA_DIR
-  // shape the seeded aside-servers use.)
-  const saved = persistedSessions(path.join(tmp, 'Helm')).find((s) => s.id === pane.id);
+  // restart silently empties the filter. `helmDir` is this server's data dir
+  // (tmp\Helm on Windows, tmp/.helm elsewhere) — not tmp, which is the
+  // HELM_DATA_DIR shape the seeded aside-servers use.
+  const saved = persistedSessions(helmDir).find((s) => s.id === pane.id);
   assert.equal(saved?.favorite, true, 'the star was persisted');
 
   const off = await authed(`/sessions/${pane.id}`, {
