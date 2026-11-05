@@ -6,6 +6,19 @@ All notable changes to Helm are documented here. Format follows
 
 ## [Unreleased]
 ### Added
+- **The update notice now shows what changed, and can apply it.** Being behind
+  `main` used to be one line naming the newest commit, with `git pull` printed
+  as a reminder to go and do it yourself. It now lists every new commit's
+  subject (collapsible, newest first) and carries an **Update** button that
+  fast-forwards the checkout and rebuilds the frontend for you. **One press
+  does the whole job**, including getting you back onto `main` if you were
+  parked on some other branch — the button says "Switch to main & update" when
+  that is what it will do, and the branch you leave is untouched. It still
+  refuses rather than guess when it cannot finish cleanly: no pulling over
+  uncommitted changes, and never a merge. When only the frontend changed, a
+  page reload finishes the job and your panes keep running; when server code
+  changed it says so, and leaves the restart — the one step that costs you live
+  panes — to you. `HELM_NO_SELF_UPDATE=1` switches the button off.
 - **Pane categories, with a colour you pick.** Group panes the way Chrome groups
   tabs: make a category, give it a name and any colour from a colour picker, and
   file panes into it from the colour button in a pane's header. The category owns

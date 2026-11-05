@@ -45,8 +45,12 @@ let ghCompare = {
   behind_by: 0,
   html_url: 'https://example.invalid/compare/abc...main',
   commits: [
-    { commit: { message: 'Older thing', committer: { date: '2026-08-27T00:00:00Z' } } },
     {
+      sha: '1111111111111111111111111111111111111111',
+      commit: { message: 'Older thing', committer: { date: '2026-08-27T00:00:00Z' } },
+    },
+    {
+      sha: '2222222222222222222222222222222222222222',
       commit: {
         message: 'Newest thing\n\nbody text',
         committer: { date: '2026-08-28T00:00:00Z' },
@@ -179,6 +183,8 @@ before(async () => {
   // any test touches update.mjs.
   process.env.HELM_UPDATE_URL = ghUrl;
   process.env.HELM_COMPARE_URL = ghCompareUrl;
+  // Never let the suite pull over the checkout it is running from.
+  process.env.HELM_NO_SELF_UPDATE = '1';
   for (let i = 0; i < 6; i++) {
     if (await tryBoot(await freePort())) return; // retry only guards the tiny bind race
     await sleep(100);
@@ -292,6 +298,31 @@ test('update check also reports unreleased commits on main', async () => {
   assert.equal(info.commits.url, 'https://example.invalid/compare/abc...main');
   assert.equal(info.commits.latest, 'Newest thing'); // subject only, body dropped
   assert.equal(info.commits.latestAt, '2026-08-28T00:00:00Z');
+  // The banner lists the subjects, newest first — GitHub returns them the
+  // other way round.
+  assert.deepEqual(
+    info.commits.list.map((c) => c.message),
+    ['Newest thing', 'Older thing'],
+  );
+  assert.equal(info.commits.list[0].sha, '2222222');
+  assert.equal(info.commits.list[0].at, '2026-08-28T00:00:00Z');
+});
+
+test('the Update button needs the token, and honours the off switch', async () => {
+  // NB this suite runs with HELM_NO_SELF_UPDATE=1 (set before boot): the route
+  // must be reachable and correct with NO chance of `npm test` running a real
+  // `git pull` over the checkout it is being run from.
+  const noAuth = await fetch(U('/api/update/pull'), { method: 'POST' });
+  assert.equal(noAuth.status, 401, 'pulling is not something an unauthed page may trigger');
+
+  const res = await authed('/update/pull', { method: 'POST' });
+  assert.equal(res.status, 200, 'a refusal is a 200 with ok:false, not an error');
+  const body = await res.json();
+  assert.equal(body.ok, false);
+  assert.equal(body.reason, 'disabled');
+  assert.match(body.detail, /HELM_NO_SELF_UPDATE/, 'the refusal says why, in a sentence');
+  assert.deepEqual(body.steps, []);
+  assert.equal(body.needsRestart, false);
 });
 
 test('commit check stays silent on every ambiguous answer', async (t) => {

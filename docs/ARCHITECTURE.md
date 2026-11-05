@@ -136,8 +136,32 @@ Browser (React + xterm.js grid) <--WS/REST--> Node server <--PTY--> claude.cmd
   the anonymous API's 60-requests/hour limit):
   - the latest published GitHub RELEASE vs this checkout's package version
     (`available`) — drives the loud update banner;
-  - `commits: {ahead, url, latest, latestAt} | null` — how far `main` is ahead
-    of the commit `git rev-parse HEAD` reports here, via GitHub's compare API.
+  - `commits: {ahead, url, latest, latestAt, list} | null` — how far `main` is
+    ahead of the commit `git rev-parse HEAD` reports here, via GitHub's compare
+    API. `list` is the commit subjects (newest first, capped at 30) that the
+    banner shows, each `{sha, message, at, url}`.
+  - `checkout: {branch, tracked, dirty, selfUpdate} | null` — read FRESH on
+    every request (two cheap git calls), not cached with the 2-hourly GitHub
+    answer, because the Update button labels itself from it: on a branch other
+    than `tracked` it reads "Switch to main & update". A stale branch here
+    would make the button promise the wrong thing.
+- `POST /api/update/pull` — apply those commits: `git pull --ff-only`, then
+  `npm install`/`npm run build` in `web/` if the new commits touched it.
+  Body `{switchBranch?: boolean}`: with it, a checkout parked on another
+  branch is moved to `tracked` first (clean tree required; the branch left
+  behind is untouched and the move is reported as a step). Without it that is
+  a refusal — the flag exists so the switch only ever happens when the button
+  the user pressed said it would.
+  Answers `{ok, from, to, pulled, steps[], needsRestart, needsServerInstall,
+  notchChanged}`; a refusal is **200 with `ok:false`** plus a `reason`
+  (`not-a-checkout` · `wrong-branch` · `dirty` · `checkout-failed` ·
+  `pull-failed` · `disabled`) and a `detail` sentence written for the user. Deliberately narrow: it never
+  merges (so it cannot leave a conflict), never touches `server/node_modules`
+  (the running server holds node-pty's `.node` open — Windows will not replace
+  a locked file), and never restarts the server (that kills live panes, so the
+  UI asks). Concurrent calls join the one run in flight.
+  `HELM_NO_SELF_UPDATE=1` turns the route into a refusal — the test suite sets
+  it so `npm test` can never pull over the checkout it runs from.
     Drives one quiet line, shown only when there is no release to announce.
     It is `null` on every ambiguous case: not a git checkout, git missing, the
     commit unknown to GitHub (404), or a checkout carrying its own commits

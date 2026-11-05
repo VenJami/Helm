@@ -207,6 +207,18 @@ export interface UpdateInfo {
   disabled: boolean; // HELM_NO_UPDATE_CHECK=1: no network call is ever made
   error: string | null; // last failure (offline, rate limit) — not shown in the UI
   commits: CommitsBehind | null; // null whenever the answer would be a guess
+  checkout: CheckoutState | null; // null when this isn't a git clone
+}
+
+/**
+ * Where the local checkout stands. The Update button labels itself from this,
+ * so that pressing it never does something it didn't say it would.
+ */
+export interface CheckoutState {
+  branch: string;
+  tracked: string; // the branch updates come from ("main")
+  dirty: boolean; // uncommitted changes to tracked files
+  selfUpdate: boolean; // false when HELM_NO_SELF_UPDATE=1
 }
 
 // Unreleased work: how far the tracked branch is ahead of this checkout. The
@@ -218,6 +230,32 @@ export interface CommitsBehind {
   url: string | null; // GitHub compare page for exactly that range
   latest: string | null; // newest commit's subject line
   latestAt: string | null; // ISO — when that commit landed
+  list: CommitSummary[]; // newest first, capped — what the banner lists
+}
+
+/** One commit in the "what's new" list. */
+export interface CommitSummary {
+  sha: string; // short
+  message: string; // subject line only
+  at: string | null; // ISO
+  url: string | null; // its page on GitHub
+}
+
+/**
+ * What the Update button did. A refusal is `ok:false` with a `detail` sentence
+ * written for the user, not an error code to decode.
+ */
+export interface UpdateResult {
+  ok: boolean;
+  reason?: string;
+  detail?: string;
+  from?: string;
+  to?: string;
+  pulled?: number; // files changed
+  steps: { name: string; ok: boolean; detail: string }[];
+  needsRestart: boolean; // server code changed — panes die on the restart
+  needsServerInstall: boolean; // server deps changed; never installed under a live server
+  notchChanged?: boolean;
 }
 
 // State of the server's own console window (start-helm.cmd terminal).

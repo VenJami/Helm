@@ -100,6 +100,19 @@ What that means concretely:
 - **`HELM_NO_UPDATE_CHECK=1` disables it completely** — the server then makes no
   outbound request at all and reports `disabled` on `GET /api/update`.
 
+The banner's **Update** button (`POST /api/update/pull`) runs `git pull
+--ff-only` and, when the new commits touched `web/`, `npm install` + `npm run
+build` there. It carries the same bearer token as every other route, so a
+drive-by page cannot trigger it, and it is bounded on purpose: fast-forward
+only (never a merge), never over uncommitted changes, and never a server
+restart. It will move a checkout parked on another branch onto the tracked one
+first, but only when the request says so — which is only when the button the
+user pressed said so too — and only with a clean tree; the branch left behind
+is not modified or deleted. It pulls from whatever
+`origin` your checkout already has — Helm does not choose the remote, and the
+code it fetches is whatever you already trusted enough to clone. Set
+**`HELM_NO_SELF_UPDATE=1`** to refuse it outright.
+
 ## Dictation (where your voice goes)
 
 The mic button on a pane uses the **browser's** built-in speech recognition

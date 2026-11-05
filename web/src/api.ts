@@ -14,6 +14,7 @@ import type {
   TunnelInfo,
   TunnelsResponse,
   UpdateInfo,
+  UpdateResult,
   UsageInfo,
   Workspace,
 } from './types';
@@ -157,6 +158,10 @@ export const api = {
   getLogs: (after: number) => req<LogsResponse>(`/logs?after=${after}`),
   getDiagnostics: () => req<Diagnostics>('/diagnostics'),
   getUpdate: () => req<UpdateInfo>('/update'),
+  // Pulls and rebuilds. Minutes, not milliseconds (npm install + vite build),
+  // so the caller shows progress rather than assuming this is quick.
+  pullUpdate: (switchBranch = false) =>
+    req<UpdateResult>('/update/pull', { method: 'POST', body: JSON.stringify({ switchBranch }) }),
   broadcast: (text: string, sessionIds: string[]) =>
     req<{ ok: boolean; results: Record<string, 'sent' | 'skipped'> }>('/broadcast', {
       method: 'POST',

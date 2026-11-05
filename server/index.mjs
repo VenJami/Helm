@@ -42,7 +42,7 @@ import {
   stopTunnel,
   tunnelInfo,
 } from './src/tunnel.mjs';
-import { startUpdateChecks, updateInfo } from './src/update.mjs';
+import { checkoutState, runUpdate, startUpdateChecks, updateInfo } from './src/update.mjs';
 
 const { spawn } = ptyPkg;
 
@@ -1851,8 +1851,35 @@ app.get('/api/diagnostics', (_req, res) => {
 
 // Is there a newer Helm on GitHub? Cached server-side (checked at boot, then
 // every 2 h) so every open tab is one shared, rate-limit-friendly answer.
-app.get('/api/update', (_req, res) => {
-  res.json(updateInfo());
+app.get('/api/update', async (_req, res) => {
+  // `checkout` is read fresh rather than cached with the GitHub answer: the
+  // Update button labels itself from it (it says "switch to main and update"
+  // when that is what pressing it will do), so a stale branch would make the
+  // button lie.
+  res.json({ ...updateInfo(), checkout: await checkoutState() });
+});
+
+// Apply the pending commits: fast-forward this checkout and rebuild whatever
+// the new commits touched. A refusal comes back as 200 with ok:false, because
+// every refusal here is a sentence the banner shows the user verbatim - a 4xx
+// would just read as "the button is broken". See runUpdate for what it
+// deliberately will not do (merge, touch server deps, or restart the server).
+app.post('/api/update/pull', async (req, res) => {
+  try {
+    // switchBranch: the caller has been shown that this moves them onto the
+    // tracked branch and pressed the button that says so.
+    res.json(await runUpdate({ switchBranch: req.body?.switchBranch === true }));
+  } catch (err) {
+    dbg('error', `update failed: ${err?.message || err}`);
+    res.status(500).json({
+      ok: false,
+      reason: 'crashed',
+      detail: String(err?.message || err),
+      steps: [],
+      needsRestart: false,
+      needsServerInstall: false,
+    });
+  }
 });
 
 // ------------------------------------------------------ console window toggle

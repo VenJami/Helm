@@ -1245,6 +1245,69 @@ Ctrl+K is a TOGGLE, so a palette left open by a previous script reads as "the
 shortcut is broken", and the first jump check passed a synthetic Enter that
 never selected anything — the guard looked broken when only the test was.
 
+The update notice becomes an update button (2026-09-14) - owner: "instead of
+that we just put view changes and show the commit messages and an update button
+that auto pull the changes". Fair: the quiet line said main had moved and
+printed `git pull` as a chore to go and do, which is a notification, not a
+feature. The compare API was already returning every commit in the range and we
+were keeping only the newest subject, so the LIST was free - `commits.list`
+(newest first, capped at 30, `{sha, message, at, url}`) and a collapsible panel
+that shows them.
+
+The button is the part that needed deciding, because "auto pull" is never just
+a pull. A bare `git pull` leaves the OLD server running and the OLD web/dist on
+disk, so the UI looks identical afterwards and the button reads as broken. So
+it pulls, then rebuilds what the new commits actually touched, then stops:
+`git pull --ff-only`, `npm install` + `npm run build` in web/ when web/ changed,
+and a plain statement when server/ changed, because only a restart picks that up
+and a restart kills every live pane. Owner chose that shape over both
+alternatives (pull-only, and one-click-including-restart). Web-only updates
+therefore finish completely with a page reload and no panes lost, which is the
+common case for docs and UI fixups.
+
+Owner then: "i want the updating thing to be easy and quick. i dont know how to
+change to main branch" - which retired the original wrong-branch refusal, and
+rightly. Telling someone who does not use git to go and switch branches is a
+dead end, not an instruction, and the owner's own checkout sits on whatever
+feature branch an agent last made. So the button now READS ITS OWN STATE and
+labels itself: on main it says "Update", anywhere else "Switch to main &
+update", and one press does the lot. The switch only ever happens on a request
+that explicitly asks for it, which is only ever the button that said so, with a
+clean tree, and the branch left behind is not touched or deleted - the report
+lists "switched to main" as a step rather than doing it quietly. GET
+/api/update grew `checkout {branch, tracked, dirty, selfUpdate}`, read FRESH per
+request rather than cached with the 2-hourly GitHub answer, because a stale
+branch would make the button promise the wrong thing.
+
+The remaining refusals are each a sentence the panel shows verbatim rather than
+an error code: not a git checkout, and a dirty tree. `--ff-only` is doing real work there: it can never produce a
+conflict or a merge commit for a non-git user to untangle. Two things it
+deliberately will NOT do - touch server/node_modules (the running server holds
+node-pty's .node open and Windows will not replace a locked file, so a server
+dependency change is reported for the restart, never installed underneath a
+live process), and restart itself. Concurrent presses join the one run in
+flight. New `HELM_NO_SELF_UPDATE=1` turns the route into a refusal, which is
+also how the smoke suite covers it without any chance of `npm test` pulling
+over the checkout it is running from.
+
+Verified against a REAL git pull, not a stub: the test copies the working tree
+into a throwaway repo with its own bare origin, lays three commits on it
+(docs-only, web, server - one per branch of the changed-file classification),
+rewinds the checkout and lets the route pull for real - 24/24, including the
+branch switch from a feature branch, that the abandoned branch still exists
+afterwards, that web/dist was genuinely rewritten by vite, and that a second
+press says there is nothing to pull. Then 20/20 in a real browser against that
+same clone, staged ON a `dev-server-panes` branch to match the owner's actual
+situation: the button reading "Switch to main & update", its tooltip promising
+the old branch survives, the three subjects listed newest-first, collapse/
+expand, the working state, and the finished report naming all three steps and
+the restart. Smoke 53. Two traps of my own: the first staging attempt cloned
+`main` and copied two files over it, which would not even boot (main is a whole
+feature set behind the working tree); and the browser run then failed 11 checks
+against a STALE web/dist, because the frontend had changed since the last
+build - the test serves whatever is on disk, so a rebuild is part of the test,
+not a step after it.
+
 ## Short-term backlog (rough priority order, owner-approved direction)
 (empty — next items to be chosen with the owner)
 
