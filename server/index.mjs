@@ -23,9 +23,11 @@ import {
   diagnostics,
   firstPromptSummary,
   noteDrift,
+  noteOutput,
   parseClaudeEnvelope,
   parseStartSuggestion,
   parseTranscriptFile,
+  settledActivity,
   tokenCost,
   transcriptFiles,
 } from './src/claude.mjs';
@@ -211,6 +213,10 @@ function saveSettings() {
  * @property {'working'|'waiting'|'idle'|null} activity
  * @property {string|null} activitySince
  * @property {string|null} activityNote
+ * @property {number} [lastOutputAt]    when the terminal last printed (noteOutput)
+ * @property {number} [outputBurstAt]   when the current run of output began
+ * @property {number} [lastBusyAt]      last moment the output looked like real work
+ * @property {number} [busyFrom]        when that run of real work began
  * @property {string|null} pendingId      tool_use_id of a permission request held open for the HUD
  * @property {string|null} pendingTool    its tool_name ('Bash', 'Edit', an MCP tool…)
  * @property {string|null} pendingDetail  one human line: "Bash: npm run db:migrate"
@@ -472,6 +478,7 @@ function attachPty(session, pty) {
   // one's ring buffer or mark the freshly respawned session as exited.
   pty.onData((data) => {
     if (session.pty !== pty) return;
+    noteOutput(session);
     session.buffer.push(data);
     session.bufLen += data.length;
     while (session.bufLen > RING_BUFFER_MAX && session.buffer.length > 1) {
@@ -819,8 +826,7 @@ function sessionInfo(s) {
     command: s.command ?? null,
     status: s.status,
     exitCode: s.exitCode,
-    activity: s.activity,
-    activitySince: s.activitySince,
+    ...settledActivity(s), // activity + activitySince + presumedIdle
     activityNote: s.activityNote ?? null,
     // A permission request held open for the HUD. Kept as four FLAT fields
     // rather than one object on purpose: useSessionsPoll's shallowEqual
@@ -961,13 +967,17 @@ app.post('/api/hook', (req, res) => {
     if (!hudArmed() || session.status !== 'running') return res.json({ decision: 'ask' });
 
     releaseApprovals(session.id, 'superseded'); // one open question per pane
+    // Read before pendingId is set, since a held request is never second-guessed.
+    const settled = settledActivity(session);
     session.pendingId = requestId;
     session.pendingTool = event.tool_name;
     session.pendingDetail = describeToolUse(event.tool_name, event.tool_input);
     session.pendingSince = new Date().toISOString();
     // Light the badge and the "N waiting" pill on the precise event rather
-    // than waiting for the fuzzier Notification that follows it.
-    if (session.activity !== 'waiting') {
+    // than waiting for the fuzzier Notification that follows it. A pane that went
+    // back to work after an answer in the pane is still RECORDED as waiting, so
+    // this new question needs a fresh clock or it would pass for the old one.
+    if (session.activity !== 'waiting' || settled.activity !== 'waiting') {
       session.activity = 'waiting';
       session.activitySince = session.pendingSince;
     }
@@ -1003,8 +1013,20 @@ app.post('/api/hook', (req, res) => {
     Notification: 'waiting',
   }[event.hook_event_name];
   // Only a *change* resets the clock — repeated Notifications while waiting
-  // keep the original "waiting since".
-  if (activity && session.status === 'running' && session.activity !== activity) {
+  // keep the original "waiting since". A change counts against what the pane LOOKS
+  // like (settledActivity) as well as what was recorded: after an answer in the
+  // pane it is recorded 'waiting' but working again, and the next question must
+  // get a fresh clock, or the work that answered the last one would mask it. A new
+  // prompt always restarts it: after Esc the pane still reads 'working' here
+  // (claude fires no hook), and the next turn must not inherit the interrupted
+  // one's clock, or be taken for stuck itself.
+  const newTurn = event.hook_event_name === 'UserPromptSubmit';
+  const looks = settledActivity(session).activity;
+  if (
+    activity &&
+    session.status === 'running' &&
+    (session.activity !== activity || looks !== activity || newTurn)
+  ) {
     session.activity = activity;
     session.activitySince = new Date().toISOString();
   }

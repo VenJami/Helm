@@ -2,15 +2,16 @@
 //
 // The smoke suite drives a keep-alive stand-in; this drives the REAL `claude`
 // CLI, because Helm's value-bearing features (hooks → status, transcript →
-// usage/titles, --resume revive) depend on claude's undocumented behavior that
-// only the real binary exhibits (docs/CLAUDE_INTERNALS.md). It codifies the
+// usage/titles, Esc → idle, --resume revive) depend on claude's undocumented
+// behavior that only the real binary exhibits (docs/CLAUDE_INTERNALS.md). It codifies the
 // throwaway-script pattern from docs/GOTCHAS.md as a permanent, repeatable
 // check: run it after changes to spawn/hook/usage/revive code, and after a
 // claude CLI update.
 //
-// What it costs/touches: one tiny conversation on the machine's DEFAULT claude
-// account (a few hundred tokens; the transcript lands in ~/.claude/projects
-// like any real session). Helm state is isolated in a temp dir — your real
+// What it costs/touches: one small conversation on the machine's DEFAULT claude
+// account (a few prompts, each re-reading tens of thousands of cached tokens; the
+// transcript lands in ~/.claude/projects like any real session). Helm state is
+// isolated in a temp dir — your real
 // %LOCALAPPDATA%\Helm is never touched. A live Helm on :7777 is unaffected
 // (OS-assigned port).
 //
@@ -39,6 +40,7 @@ const projDir = path.join(tmp, 'e2e-project');
 fs.mkdirSync(projDir, { recursive: true });
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const STUCK_AFTER_MS = 20000;
 const results = [];
 let failed = false;
 const check = (name, ok, extra = '') => {
@@ -92,7 +94,12 @@ async function boot() {
   TOKEN = '';
   // HELM_DATA_DIR isolates Helm's state; HOME/USERPROFILE stay REAL so the
   // machine's actual ~/.claude login is what the pane runs on.
-  const env = { ...process.env, PORT: String(PORT), HELM_DATA_DIR: helmDir };
+  const env = {
+    ...process.env,
+    PORT: String(PORT),
+    HELM_DATA_DIR: helmDir,
+    HELM_STUCK_AFTER_MS: String(STUCK_AFTER_MS), // so the Esc phase needn't wait 2 minutes
+  };
   delete env.CLAUDE_CONFIG_DIR; // default account = the machine's real ~/.claude
   child = spawn(process.execPath, ['index.mjs'], {
     cwd: serverDir,
@@ -276,6 +283,46 @@ check(
   );
 }
 
+// --------------------------------------------- phase 4b: Esc mid-turn → idle
+// Claude fires no hook when Esc interrupts a turn, so Helm goes by the terminal:
+// claude's spinner keeps printing while it works, and stops when it doesn't. Both
+// halves are claude's undocumented behavior, so both get checked here. A failure
+// after a claude update means one of them changed: if the turn below stops reading
+// `working` the spinner has gone quiet, and if `presumedIdle` is false then Stop has
+// started firing on Esc, and settledActivity in src/claude.mjs may be able to go.
+{
+  type('Count from 1 to 5000, one number per line, with no other text and no tools.');
+  await sleep(400);
+  type('\r');
+  s = await waitFor(id, (x) => x.activity === 'working', 30000, 'the long turn to start');
+  await sleep(STUCK_AFTER_MS + 4000);
+  s = await sessionInfo(id);
+  check(
+    'a real turn past the silence threshold still reads working',
+    s?.activity === 'working',
+    `activity=${s?.activity} presumedIdle=${s?.presumedIdle}`,
+  );
+  type('\x1b'); // Esc
+  const pressed = Date.now();
+  s = await waitFor(id, (x) => x.activity === 'idle', STUCK_AFTER_MS + 30000, 'the pane to settle');
+  check(
+    'Esc: no hook fires, and the silent pane settles to idle',
+    s?.activity === 'idle' && s?.presumedIdle === true,
+    `activity=${s?.activity} presumedIdle=${s?.presumedIdle} after ${Math.round((Date.now() - pressed) / 1000)}s`,
+  );
+  // Attached the whole time, so a redraw would land here: nudge one and look again.
+  ws.send(JSON.stringify({ type: 'resize', cols: 110, rows: 30 }));
+  await sleep(3000);
+  ws.send(JSON.stringify({ type: 'resize', cols: 120, rows: 30 }));
+  await sleep(3000);
+  s = await sessionInfo(id);
+  check(
+    'a redraw does not bring an interrupted pane back to working',
+    s?.activity === 'idle',
+    `activity=${s?.activity}`,
+  );
+}
+
 // ------------------------- phase 5: approve / deny a real tool call from Helm
 // The floating HUD answers a pane's permission request through claude's
 // PermissionRequest hook. The reply schema is undocumented (the published docs
@@ -340,7 +387,12 @@ check(
   // the pane, and Helm never holds the hook open.
   clearInterval(beat);
   await sleep(9000); // let the 8 s arm window lapse
-  type('Use the Write tool to create a file named helm-closed.txt containing OK');
+  // The counting gives it real work to do AFTER the answer, which is what the
+  // answered-in-the-pane check below needs to see.
+  type(
+    'Use the Write tool to create a file named helm-closed.txt containing OK. ' +
+      'Then count from 1 to 1500, one number per line, with no other text.',
+  );
   await sleep(500);
   type('\r');
   const quiet = await waitFor(id, (x) => Boolean(x.pendingId), 20000, 'a request while disarmed');
@@ -349,8 +401,32 @@ check(
     !quiet?.pendingId,
     `pendingId=${quiet?.pendingId}`,
   );
-  type(''); // Esc — leave the pane's own dialog closed before the restart
-  await sleep(1000);
+
+  // Answer it IN THE PANE. Claude goes back to work and fires no hook to say so, so
+  // the badge would read "waiting" for the rest of the turn unless Helm notices the
+  // pane printing again (settledActivity). A failure after a claude update means a
+  // waiting pane is no longer silent, or a working one no longer steadily prints.
+  s = await waitFor(id, (x) => x.activity === 'waiting', 30000, 'the pane to be waiting');
+  check('a prompt in the pane reads waiting', s?.activity === 'waiting', `activity=${s?.activity}`);
+  type('\r'); // the dialog's default answer is Yes
+  const answered = Date.now();
+  s = await waitFor(
+    id,
+    (x) => x.activity === 'working' || x.activity === 'idle',
+    40000,
+    'the answered pane to go back to work',
+  );
+  check(
+    'answered in the pane: it reads working again while claude works',
+    s?.activity === 'working' && s?.presumedIdle === false,
+    `activity=${s?.activity} after ${Math.round((Date.now() - answered) / 1000)}s`,
+  );
+  s = await waitFor(id, (x) => x.activity === 'idle', 120000, 'the turn to finish');
+  check(
+    'and the turn ends as a real finish',
+    s?.activity === 'idle' && s?.presumedIdle === false,
+    `activity=${s?.activity} presumedIdle=${s?.presumedIdle}`,
+  );
 }
 
 // --------------------------------- phase 6: server restart → revive (--resume)

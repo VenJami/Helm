@@ -1816,7 +1816,7 @@ async function tryBootAside(dataDir, extraEnv, port) {
               ...opts.headers,
             },
           });
-        return { call, stop };
+        return { call, stop, port, token };
       }
     } catch {
       /* not up yet */
@@ -2100,4 +2100,255 @@ test('favorites: a pane can be starred, and it survives a restart', async () => 
   });
   assert.equal((await off.json()).favorite, false);
   await authed(`/sessions/${pane.id}`, { method: 'DELETE' });
+});
+
+// ------------------------------------------- status the hooks can't report
+// Claude fires no hook when Esc interrupts a turn, and none when you answer a
+// question in the pane and it goes back to work. Helm reads both off the timing of
+// a pane's output (settledActivity in src/claude.mjs).
+
+async function eventually(check, what, ms = 5000) {
+  const deadline = Date.now() + ms;
+  while (Date.now() < deadline) {
+    if (await check()) return;
+    await sleep(25);
+  }
+  assert.fail(`timed out waiting for: ${what}`);
+}
+
+// Send a hook event to an aside server, the way a pane's relay would.
+const asideHook = (aside, dataDir) => {
+  const hookToken = fs.readFileSync(path.join(dataDir, 'hook-token'), 'utf8').trim();
+  return (sessionId, hook_event_name) =>
+    aside.call('/hook', {
+      method: 'POST',
+      headers: { 'x-helm-hook': hookToken },
+      body: JSON.stringify({ sessionId, event: { hook_event_name } }),
+    });
+};
+async function asidePane(aside, name) {
+  const dir = mkdir(path.join(tmp, name));
+  await aside.call('/workspaces', { method: 'POST', body: JSON.stringify({ name, dir }) });
+  const { id } = await (
+    await aside.call('/sessions', { method: 'POST', body: JSON.stringify({ workspace: dir }) })
+  ).json();
+  const info = async () => (await (await aside.call('/sessions')).json()).find((p) => p.id === id);
+  return { id, info };
+}
+
+test('a turn that ended in silence reads idle, and a redraw does not bring it back', async () => {
+  const { noteOutput, settledActivity } = await import('../src/claude.mjs');
+  const t0 = Date.parse('2026-11-05T12:00:00Z');
+  const at = (seconds) => t0 + seconds * 1000;
+  const started = new Date(t0).toISOString();
+  const turn = () => ({ activity: 'working', activitySince: started });
+  // Print every 400 ms between two moments, the way claude's spinner does.
+  const spin = (s, from, to) => {
+    for (let t = from; t <= to; t += 0.4) noteOutput(s, at(t));
+  };
+
+  // Only 'working' is ever second-guessed: a pane blocked for hours is still blocked.
+  for (const activity of ['idle', 'waiting', null]) {
+    assert.deepEqual(settledActivity({ activity, activitySince: started }, at(99_999)), {
+      activity,
+      activitySince: started,
+      presumedIdle: false,
+    });
+  }
+
+  // However long a turn runs, it stays working while the terminal keeps printing,
+  // and its clock still counts from the prompt.
+  const s = turn();
+  spin(s, 0, 600);
+  assert.deepEqual(settledActivity(s, at(600)), {
+    activity: 'working',
+    activitySince: started,
+    presumedIdle: false,
+  });
+
+  // Then silence: nothing changes until 2 minutes have passed.
+  assert.equal(settledActivity(s, at(600 + 119)).activity, 'working');
+  const settled = settledActivity(s, at(600 + 121));
+  assert.equal(settled.activity, 'idle');
+  assert.equal(settled.presumedIdle, true, 'so the UI can skip the "finished" alert');
+  assert.ok(
+    Math.abs(Date.parse(settled.activitySince) - at(600)) < 1000,
+    'idle since it went quiet, not since the prompt',
+  );
+
+  // Looking at the pane must not bring it back: a redraw is one brief burst...
+  noteOutput(s, at(900));
+  noteOutput(s, at(900.2));
+  assert.equal(settledActivity(s, at(901)).activity, 'idle', 'a redraw is not work');
+  assert.equal(settledActivity(s, at(901)).activitySince, settled.activitySince);
+  // ...and neither do several of them with pauses between.
+  // 2.5 s apart is the case a real pane caught: a looser gap chained them into a run.
+  for (const t of [910, 912.5, 915, 917.5, 920, 922.5, 925, 927.5, 930]) noteOutput(s, at(t));
+  assert.equal(settledActivity(s, at(931)).activity, 'idle', 'nor do repeated redraws');
+
+  // Real work resuming announces itself with no hook, and has to be believed.
+  spin(s, 1000, 1009);
+  assert.deepEqual(settledActivity(s, at(1009)), {
+    activity: 'working',
+    activitySince: started,
+    presumedIdle: false,
+  });
+
+  // A turn that has only just started hasn't had time to print anything.
+  const fresh = turn();
+  assert.equal(settledActivity(fresh, at(119)).activity, 'working', 'quiet start is not stuck');
+  assert.equal(settledActivity(fresh, at(121)).activity, 'idle');
+});
+
+test('a pane answered in the pane goes back to working, and a held request never does', async () => {
+  const { noteOutput, settledActivity } = await import('../src/claude.mjs');
+  const t0 = Date.parse('2026-11-05T12:00:00Z');
+  const at = (seconds) => t0 + seconds * 1000;
+  const iso = (seconds) => new Date(at(seconds)).toISOString();
+  const spin = (s, from, to) => {
+    for (let t = from; t <= to; t += 0.4) noteOutput(s, at(t));
+  };
+  const asked = () => ({ activity: 'waiting', activitySince: iso(0) });
+
+  // Waiting is silent (measured: nothing at all for 26 s), so it stays waiting.
+  const s = asked();
+  assert.equal(settledActivity(s, at(9_999)).activity, 'waiting', 'however long you take');
+  // Answering prints a keystroke or two, which is not work yet.
+  noteOutput(s, at(30));
+  noteOutput(s, at(30.1));
+  assert.equal(settledActivity(s, at(31)).activity, 'waiting');
+  // Then the spinner: working again 8 s in, on a clock from when it resumed.
+  spin(s, 40, 47);
+  assert.equal(settledActivity(s, at(47)).activity, 'waiting', 'not before 8 s of it');
+  spin(s, 47.4, 49);
+  assert.deepEqual(settledActivity(s, at(49)), {
+    activity: 'working',
+    activitySince: iso(40),
+    presumedIdle: false,
+  });
+  // And it can still be stopped with Esc, like any other turn.
+  const stopped = settledActivity(s, at(49 + 125));
+  assert.equal(stopped.activity, 'idle');
+  assert.equal(stopped.presumedIdle, true);
+
+  // The spinner running up to the moment claude asked is not an answer.
+  const busy = { activity: 'working', activitySince: iso(0) };
+  spin(busy, 0, 20);
+  busy.activity = 'waiting';
+  busy.activitySince = iso(26); // the Notification lands ~6 s after the prompt shows
+  assert.equal(settledActivity(busy, at(60)).activity, 'waiting', 'earlier work is not an answer');
+
+  // A request the HUD is holding is never second-guessed: Helm knows it's unanswered.
+  const held = { ...asked(), pendingId: 'req-1' };
+  spin(held, 5, 20);
+  assert.equal(settledActivity(held, at(20)).activity, 'waiting', 'a held request stays waiting');
+});
+
+test('a stopped pane settles, a new prompt wakes it, and an answer in the pane is noticed', async () => {
+  const dataDir = seedState('settle', {});
+  // The rules are unit-tested above; this checks the server is wired to them.
+  const aside = await bootAside(dataDir, { HELM_STUCK_AFTER_MS: '2000' });
+  try {
+    const send = asideHook(aside, dataDir);
+    const { id, info } = await asidePane(aside, 'settle-project');
+
+    // Esc: no hook comes, the terminal just goes quiet. The stand-in never prints.
+    await send(id, 'UserPromptSubmit');
+    const first = await info();
+    assert.equal(first.activity, 'working');
+    assert.equal(first.presumedIdle, false);
+    // Esc and a new prompt straight away, before the silence rule could notice: the
+    // new turn still gets its own clock, not the stopped one's.
+    await sleep(20);
+    await send(id, 'UserPromptSubmit');
+    const working = await info();
+    assert.ok(
+      Date.parse(working.activitySince) > Date.parse(first.activitySince),
+      'a new prompt restarts the clock even before the pane settles',
+    );
+    await eventually(async () => (await info()).activity === 'idle', 'the pane to settle');
+    assert.equal((await info()).presumedIdle, true, 'the list reports it as presumed');
+
+    // The next prompt wakes it at once, on a fresh clock rather than the old turn's.
+    await send(id, 'UserPromptSubmit');
+    const woken = await info();
+    assert.equal(woken.activity, 'working', 'a new prompt is believed immediately');
+    assert.equal(woken.presumedIdle, false);
+    assert.ok(
+      Date.parse(woken.activitySince) > Date.parse(working.activitySince),
+      'the new turn gets its own clock',
+    );
+
+    // A question, answered in the pane: claude goes back to work, and no hook says so.
+    await send(id, 'Notification');
+    const asked = await info();
+    assert.equal(asked.activity, 'waiting');
+    const ws = new WebSocket(`ws://127.0.0.1:${aside.port}/ws?session=${id}&token=${aside.token}`);
+    await new Promise((resolve, reject) => {
+      ws.once('open', resolve);
+      ws.once('error', reject);
+    });
+    ws.send(JSON.stringify({ type: 'input', data: 'spin\r' })); // the stand-in's spinner
+    await eventually(
+      async () => (await info()).activity === 'working',
+      'the answered pane to read working',
+      15000,
+    );
+    const resumed = await info();
+    assert.equal(resumed.presumedIdle, false);
+    assert.ok(
+      Date.parse(resumed.activitySince) > Date.parse(asked.activitySince),
+      'on a clock from when it resumed',
+    );
+
+    // The case that must never go wrong: the next question reads waiting at once,
+    // rather than hiding behind the work that answered the last one.
+    await send(id, 'Notification');
+    assert.equal((await info()).activity, 'waiting', 'a second question is not masked');
+
+    // A real finish is still told apart from a presumed one.
+    await send(id, 'Stop');
+    const done = await info();
+    assert.equal(done.activity, 'idle');
+    assert.equal(done.presumedIdle, false, 'claude said so, nothing is presumed');
+    ws.close();
+    await aside.call(`/sessions/${id}`, { method: 'DELETE' });
+  } finally {
+    aside.stop();
+  }
+});
+
+test('a held request that lapses to the pane reads waiting, even after earlier work', async () => {
+  const id = await newPane('lapseproj');
+  const info = async () => (await (await authed('/sessions')).json()).find((x) => x.id === id);
+  await hook(id, { hook_event_name: 'UserPromptSubmit' });
+  await hook(id, { hook_event_name: 'Notification', message: 'needs you' });
+
+  // Answered in the pane, so it went back to work (the stand-in's spinner).
+  const ws = new WebSocket(`ws://127.0.0.1:${PORT}/ws?session=${id}&token=${TOKEN}`);
+  await new Promise((resolve, reject) => {
+    ws.once('open', resolve);
+    ws.once('error', reject);
+  });
+  ws.send(JSON.stringify({ type: 'input', data: 'spin\r' }));
+  await eventually(
+    async () => (await info()).activity === 'working',
+    'the answered pane to read working',
+    15000,
+  );
+
+  // Then it asks again, the HUD holds it, nobody answers, and it falls back to the
+  // pane's own prompt (the hold is 1.5 s under test). That prompt must read waiting:
+  // the work before it is no answer to it.
+  await authed('/hud/ping', { method: 'POST' });
+  const lapsing = relayOut(id, permissionEvent());
+  const held = await waitForPending(id);
+  assert.equal(held?.activity, 'waiting', 'waiting while the HUD holds it');
+  await lapsing;
+  const after = await info();
+  assert.equal(after.pendingId, null, 'the hold lapsed');
+  assert.equal(after.activity, 'waiting', "the pane's own prompt is not masked by earlier work");
+
+  ws.close();
+  await authed(`/sessions/${id}`, { method: 'DELETE' });
 });

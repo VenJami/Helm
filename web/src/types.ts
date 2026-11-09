@@ -22,6 +22,10 @@ export interface SessionInfo {
   exitCode: number | null;
   activity: 'working' | 'waiting' | 'idle' | null; // from Claude Code hooks
   activitySince: string | null; // ISO — when activity last changed ("working 7m")
+  // Reads 'idle' because the terminal went silent, not because claude said so: Esc
+  // fires no hook, so this is how an interrupted turn shows up. Nothing finished,
+  // so it raises no "finished" alert.
+  presumedIdle: boolean;
   activityNote: string | null; // latest Notification message while waiting (why it's blocked)
   // A tool call claude is holding open while the floating HUD offers
   // Approve/Deny. Only ever set while the HUD is open (it heartbeats to arm

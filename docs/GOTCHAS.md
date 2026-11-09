@@ -478,6 +478,46 @@ Related, in the smoke suite: the MAIN test server takes its data dir from
 `HELM_DATA_DIR` and theirs is the dir itself. `persistedSessions(tmp)` silently
 returns `[]` against the main server — pass `path.join(tmp, 'Helm')`.
 
+## `working` can be a lie: Esc fires no hook
+Claude sends nothing when Esc interrupts a turn: no `Stop`, no `Notification`. The
+pane read `working` until its next prompt, for 10 minutes and counting when measured,
+on the badge, the sidebar, the notch, the HUD and the public Discord card alike.
+`settledActivity` in src/claude.mjs is the single fix, and everything outside the hook
+route reads it. It goes by output TIMING and never parses content (ARCHITECTURE):
+- **Measured, claude 2.1.283:** a real turn running a silent command printed ~9 frames
+  a second with a longest gap of 0.5 s, and it keeps printing with nobody attached (a
+  75 s command read `working` throughout, past a 30 s threshold). With
+  `prefersReducedMotion` it's ~4 a second, longest gap 0.8 s. After Esc: nothing.
+- **A stopped pane still prints.** Resizing makes a 9 ms burst, a whole window drag
+  under 2 s. So only a sustained run counts as work (8 s, no gap over 1.5 s).
+- **That gap is tighter than it looks like it needs to be.** At 3 s, redraws 2.5 s
+  apart chained into one long run and brought the pane back to `working`. The unit
+  test had used redraws 5 s apart, which passed; only a real pane caught it. Test
+  the awkward spacing, not the comfortable one.
+- **`presumedIdle` exists for the "finished" alert.** That alert fires on
+  working → idle, so a turn you stopped yourself would announce it had finished.
+- **The same gap at the other end of a wait.** A question or permission prompt fires
+  `Notification` about 6 s after it appears and reads `waiting`, but nothing marks
+  the END of the wait: answered IN THE PANE, it read `waiting` for the rest of the
+  turn. Measured: a pane with a prompt open prints nothing at all (0 frames in 26 s,
+  for both a permission prompt and a question), and once answered it prints
+  steadily until the turn ends. So a run of work that STARTS after the wait began
+  means it resumed, and the pane reads `working` 8 s after the answer.
+- **Getting that wrong would hide a pane that needs you, which is worse than the bug
+  it fixes.** Three guards, each with a test that has been broken on purpose to prove
+  it bites: work from BEFORE the question is no answer to it; a request the HUD is
+  holding is never second-guessed; and every new question starts a fresh waiting
+  clock, judged against what the pane LOOKS like, not just what was recorded, or the
+  work that answered the first question would mask the second.
+- **What's left:** the 6 s before `Notification` arrives. A second question in the
+  same turn reads `working` for those 6 s, which is the same delay every first
+  question has always had.
+- **A real model won't always do what a test asks.** Told to write a file, count,
+  then write another, Haiku asked for both writes at once and never counted, so the
+  check meant to see work between two prompts saw none and failed for the wrong
+  reason. Make the script detect whether the situation happened, and say "not
+  exercised" rather than pass or fail on a run that never got there.
+
 ## `npm audit fix` can crash inside npm itself
 On npm 10.9.0 (what Node 22.12 ships), `npm audit fix` and `npm update` in `web/` both
 die with `Cannot read properties of null (reading 'edgesOut')`, in arborist's

@@ -1308,6 +1308,35 @@ against a STALE web/dist, because the frontend had changed since the last
 build - the test serves whatever is on disk, so a rebuild is part of the test,
 not a step after it.
 
+Esc no longer leaves a pane "working" (2026-11-05) - claude fires no hook when Esc
+interrupts a turn, so the badge, sidebar count, notch, HUD and Discord card all said
+"working" until the next prompt: an old bug, found while testing the card. Fixed once
+at the source rather than per surface: `settledActivity` in src/claude.mjs reads a
+`working` pane with no sustained output for 2 minutes as idle, flagged `presumedIdle`
+so the "finished" alert stays quiet, and the card's private workaround went away. It
+times output and never reads it, so the "never scrape ANSI" rule stands. A new prompt
+now always restarts the clock. A real pane caught what the unit tests had not: a 3 s
+gap let redraws 2.5 s apart chain into "work" and bring the pane back, so it's now 1.5
+s and an 8 s run. Verified: smoke 62, nine deliberate breaks all caught, real-claude
+e2e 17/17 (3 new, so a claude update that changes this gets noticed), and on a real
+pane a silent 75 s command that read working throughout, nobody attached, and Esc
+settling on the threshold to the tenth of a second. Measured with reduced motion too:
+slower spinner, 0.8 s longest gap, still safe.
+
+Answering in the pane no longer leaves it "waiting" (2026-11-09) - the other end of
+the same gap: nothing marks a wait ending when you answer IN THE PANE, so the badge,
+the "N waiting" pill, the notch's "Needs you" and the card all said "waiting" for the
+rest of the turn. Measured first, because getting it wrong would HIDE a pane that
+needs you: a pane with a prompt open prints nothing (0 frames in 26 s), and once
+answered it prints steadily. So `settledActivity` reads a sustained run that STARTED
+after the wait began as `working`, and three guards keep a real question visible:
+earlier work is no answer, a request the HUD holds is never second-guessed, and each
+new question gets a fresh clock judged on what the pane looks like. Verified: smoke 65
+(stand-in `spin` command added so CI can drive it), five more deliberate breaks all
+caught, real-claude e2e 20/20 on claude 2.1.319 (3 new checks), and on a real pane:
+working 8.3 s after the answer, earlier work ignored, a second question in the same
+turn read waiting 6.2 s after it asked, and a HUD-held request waiting until approved.
+
 Audit advisories cleared again (2026-11-05) - `npm audit --audit-level=high` had gone
 red on both jobs. Server: `express`, `body-parser`, `proxy-addr`, `qs`, now 0
 advisories, node-pty still exactly 1.1.0. Web: dev tooling only, nothing in the bundle

@@ -177,7 +177,9 @@ Browser (React + xterm.js grid) <--WS/REST--> Node server <--PTY--> claude.cmd
   (dump raw hook payloads), `HELM_NO_UPDATE_CHECK=1` (never contact GitHub),
   `HELM_REPO` / `HELM_UPDATE_URL` / `HELM_COMPARE_URL` / `HELM_REPO_BRANCH`
   (point the update check elsewhere — a fork, another tracked branch, or the
-  smoke test's stub). Log entries carry a coarse `level` (`error` for
+  smoke test's stub), `HELM_STUCK_AFTER_MS` (how long a
+  `working` pane may go quiet before it reads idle, default 2 minutes; the tests
+  shorten it). Log entries carry a coarse `level` (`error` for
   error/drift tags, else `info`). On SIGINT/SIGTERM the server persists sessions
   and stops panes (no orphaned claude children).
 - `POST /api/broadcast {text, sessionIds[]}` — type one instruction into
@@ -361,6 +363,24 @@ SessionStart / UserPromptSubmit / Stop / Notification run `hook-post.mjs`,
 which POSTs to Helm. This yields per-pane `activity` (working=blue pulsing,
 waiting=amber, idle=green), plus `claudeSessionId` + `transcriptPath` — which
 power revive and usage. Never scrape ANSI output for status; hooks are the way.
+
+The one gap hooks leave: **claude fires no hook when Esc interrupts a turn**, so
+`working` can be stale. `settledActivity` (src/claude.mjs) closes it using only the
+TIMING of a pane's output, never its content: a `working` pane with no sustained
+output for 2 minutes (`HELM_STUCK_AFTER_MS`) is reported as `idle` with
+`presumedIdle: true`, which skips the "finished" alert. Sustained means a run of
+output lasting 8 s or more with no gap over 1.5 s, so a redraw from attaching,
+resizing or focusing a pane doesn't bring it back, while real work resuming does.
+Everything outside the hook route reads this rather than the raw field
+(`sessionInfo`). A new prompt always restarts the clock.
+
+The same timing closes the other end of a wait: nothing marks it when you answer a
+question IN THE PANE. A `waiting` pane is silent, so a sustained run that STARTED
+after the wait began reads as `working` (8 s after the answer). Never for a request
+the HUD is holding. The hook route compares each new event against what the pane
+LOOKS like as well as what was recorded, so a second question in the same turn
+starts a fresh waiting clock instead of hiding behind the work that answered the
+first.
 
 A `Notification` event also carries its `message` into `session.activityNote`
 (cleared when the pane starts working or goes idle), surfaced on `sessionInfo`

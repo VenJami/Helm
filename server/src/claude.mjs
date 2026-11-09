@@ -342,6 +342,71 @@ export function accountEmail(configDir) {
   }
 }
 
+// ------------------------------------------------ a turn that ended in silence
+// Claude fires NO hook when Esc interrupts a turn: Stop does not run and no
+// Notification follows, so a pane would read 'working' until its next prompt
+// (still so 10 minutes later on 2.1.283, with claude's own screen saying
+// "Interrupted"). The terminal gives it away. While claude works its spinner keeps
+// redrawing, even through a silent long-running command: 994 frames and a longest
+// gap of 0.5 s over a real 107 s turn, against zero frames in 40 s after Esc.
+//
+// Two kinds of output have to be told apart, because a pane that has stopped still
+// prints: attaching, resizing or focusing it makes the TUI redraw, in one brief
+// burst (9 ms for a resize, under 2 s for a whole window drag). Only output that
+// KEEPS coming counts as busy. So looking at an interrupted pane doesn't make it read
+// 'working' again, while real work resuming with no hook to announce it does.
+//
+// The gap has to stay tight, or separate redraws chain into one long run: at 3 s,
+// events 2.5 s apart read as work. Steady typing can still pass for work, which is
+// harmless: the pane reads 'working' a little early, or for 2 minutes if you give up.
+const OUTPUT_GAP_MS = 1500; // a longer pause than this ends a run of output
+const SUSTAINED_OUTPUT_MS = 8000; // a run this long is a spinner, not a redraw
+const STUCK_AFTER_MS = Number(process.env.HELM_STUCK_AFTER_MS) || 2 * 60 * 1000;
+
+/** Call for every chunk a pane prints. Cheap: it runs on the PTY's hot path. */
+export function noteOutput(s, now = Date.now()) {
+  if (s.lastOutputAt === undefined || now - s.lastOutputAt > OUTPUT_GAP_MS) s.outputBurstAt = now;
+  s.lastOutputAt = now;
+  if (now - s.outputBurstAt >= SUSTAINED_OUTPUT_MS) {
+    s.lastBusyAt = now;
+    s.busyFrom = s.outputBurstAt; // where this run of real work began
+  }
+}
+
+/**
+ * What a pane is really doing, as everything outside the hook route should see it.
+ * `presumedIdle` says Helm worked this out from the silence rather than being told,
+ * so the UI can skip the "finished" alert: nothing finished, the turn was stopped.
+ *
+ * @returns {{activity: string|null, activitySince: string|null, presumedIdle: boolean}}
+ */
+export function settledActivity(s, now = Date.now()) {
+  let activity = s.activity;
+  let since = s.activitySince;
+  // Answered IN THE PANE: claude goes back to work and, again, no hook says so. A
+  // waiting pane is silent (0 frames over 26 s with a permission prompt or a
+  // question open), so a run of real work that STARTED after the wait began means it
+  // resumed: 8 s after the answer, measured. A request the HUD is holding is never
+  // second-guessed, because Helm knows for certain that one is still unanswered.
+  if (activity === 'waiting' && !s.pendingId && s.busyFrom > (Date.parse(since) || 0)) {
+    activity = 'working';
+    since = new Date(s.busyFrom).toISOString();
+  }
+  if (activity === 'working') {
+    // The prompt counts as busy too: a turn that has only just started hasn't had
+    // time to print anything yet.
+    const busyAt = Math.max(s.lastBusyAt ?? 0, Date.parse(since) || 0);
+    if (now - busyAt > STUCK_AFTER_MS) {
+      return {
+        activity: 'idle',
+        activitySince: new Date(busyAt).toISOString(),
+        presumedIdle: true,
+      };
+    }
+  }
+  return { activity, activitySince: since, presumedIdle: false };
+}
+
 // ------------------------------------------------ permission-request shapes
 // The `PermissionRequest` hook hands us `tool_name` + `tool_input` for a call
 // claude is about to make, and the HUD has one line to say what it is. The

@@ -91,6 +91,20 @@ the polish call gets slow again but never wrong.
   `Notification`, `PermissionRequest`. Relay script: `server/hook-post.mjs`.
 - Hook payload fields read: `session_id`, `transcript_path`, `hook_event_name`,
   `message` (Notification text → the pane's `activityNote`).
+- **`Stop` does NOT fire when Esc interrupts a turn, and no `Notification` follows**
+  (observed on 2.1.283: still `working` 10 minutes later, with claude's own screen
+  reading "Interrupted"). So `working` can be stale until the next prompt. The
+  terminal gives it away: 994 output frames and a longest silence of 0.5 s during a
+  real 107 s turn running a silent command, against 0 frames in 40 s after Esc.
+  `settledActivity` in src/claude.mjs relies on both halves, and `npm run e2e` checks
+  both: if a claude update makes the spinner go quiet, real turns would read idle.
+- **`Notification` fires about a minute after a turn finishes** ("waiting for your
+  input"), so an idle pane reads `waiting` from then on, not just one that's blocked.
+- **A question or permission prompt fires `PermissionRequest`, then `Notification`
+  about 6 s later, and NOTHING when it's answered in the pane.** The turn just carries
+  on. Measured on 2.1.283: 0 frames of output in 26 s while a prompt is open, then a
+  steady run from the answer to the end of the turn. `settledActivity` reads that as
+  back to `working`, and `npm run e2e` checks it.
 
 ### 5a. `PermissionRequest` — the only hook whose REPLY we send back
 

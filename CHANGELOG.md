@@ -97,6 +97,19 @@ All notable changes to Helm are documented here. Format follows
 - **Stopping a public share link now really stops it.** Helm closed the link and
   forgot about it, but on some setups the underlying process kept running — a
   public URL still live with nothing left holding it. It is killed properly now.
+- **A pane you stop with Esc no longer says "working" until your next prompt.**
+  Claude sends no signal when a turn is interrupted, so the badge, the sidebar count,
+  the notch and the HUD all kept saying "working". Helm now notices the terminal has
+  gone quiet and shows the pane as idle after 2 minutes, without a false "finished"
+  alert. Looking at or resizing the pane doesn't bring it back; real work resuming
+  does. A new prompt now also restarts the "working 3m" clock after an interrupt,
+  rather than carrying on from the turn you stopped.
+- **A pane you answer in the pane no longer says "waiting" for the rest of its
+  turn.** Approving a tool call or answering a question inside the pane sends no
+  signal either, so the badge, the "N waiting" pill and the notch's "Needs you" kept
+  asking for you while Claude was already working. Helm now sees the pane printing
+  again and shows it as working about 8 seconds after you answer. A question that is
+  still open always reads "waiting", including a second one later in the same turn.
 
 ### Security
 - **Dependency advisories cleared.** On the server: `express`, `body-parser`,

@@ -47,6 +47,13 @@ if (process.argv.includes('-p')) {
 } else {
   process.stdout.write('fake-claude ready\r\n');
   process.stdin.resume(); // consume input + keep the event loop alive
+  // Typing `spin` makes it print like claude's spinner for 9 s: steady output is
+  // how Helm tells a pane that went back to work with no hook to say so.
+  process.stdin.on('data', (d) => {
+    if (!String(d).includes('spin')) return;
+    const spinner = setInterval(() => process.stdout.write('.'), 200);
+    setTimeout(() => clearInterval(spinner), 9000);
+  });
   const keep = setInterval(() => {}, 1 << 30);
   const bye = () => {
     clearInterval(keep);

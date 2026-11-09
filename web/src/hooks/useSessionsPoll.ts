@@ -48,7 +48,9 @@ export function useSessionsPoll(notifyEnabled: boolean) {
           // Prefer the hook's own message ("Claude needs permission to…") so
           // the alert says why it's blocked, not just the generic phrase.
           text = `${s.activityNote || 'needs your input'} · ${where}`;
-        } else if (s.activity === 'idle' && was === 'working') {
+        } else if (s.activity === 'idle' && was === 'working' && !s.presumedIdle) {
+          // presumedIdle: the turn was stopped, not completed. You pressed Esc
+          // yourself a couple of minutes ago, and "finished" would be untrue.
           text = `finished · ${where}`;
         }
         if (text) {
