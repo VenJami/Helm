@@ -89,6 +89,7 @@ cd server && npm run e2e   # real-claude end-to-end (spawn→hooks→usage→rev
                            #   a logged-in claude, spends a few tokens, NOT in CI
 cd web && npm test         # vitest unit tests (accounts.ts usage math)
 cd web && npm run build    # after frontend changes (or `npm run watch` while developing)
+cd web && npx tsc --noEmit # typecheck the frontend (`build` is plain vite, it won't)
 desktop\start-notch.cmd    # the native notch window (needs Helm already running).
                            #   Builds itself on first run; needs a .NET SDK, NOT
                            #   Visual Studio. Windows-only and optional.

@@ -98,6 +98,14 @@ All notable changes to Helm are documented here. Format follows
   forgot about it, but on some setups the underlying process kept running — a
   public URL still live with nothing left holding it. It is killed properly now.
 
+### Security
+- **Dependency advisories cleared.** On the server: `express`, `body-parser`,
+  `proxy-addr` and `qs`, which leaves no advisories there. On the frontend, only
+  build and lint tooling changed (`vite`, `vitest`, `zod`, `source-map-js`,
+  `brace-expansion`, `typescript-eslint`), so nothing in the browser bundle moved.
+  Seven moderate advisories remain in `typescript-eslint`'s dependency chain, which is
+  dev tooling that never ships; npm's only fix is a forced downgrade.
+
 ## [0.3.0] — 2026-09-09
 ### Added
 - **"You're N commits behind" as well as "a new version is out"** — Helm is

@@ -478,6 +478,19 @@ Related, in the smoke suite: the MAIN test server takes its data dir from
 `HELM_DATA_DIR` and theirs is the dir itself. `persistedSessions(tmp)` silently
 returns `[]` against the main server — pass `path.join(tmp, 'Helm')`.
 
+## `npm audit fix` can crash inside npm itself
+On npm 10.9.0 (what Node 22.12 ships), `npm audit fix` and `npm update` in `web/` both
+die with `Cannot read properties of null (reading 'edgesOut')`, in arborist's
+`#loadPeerSet`. It is an npm bug, and nothing is changed when it happens, so it's easy
+to read as "the fix did nothing". Run that one command through a newer npm without
+installing it: `npx -y npm@11 audit fix` from inside the package. Then prove the
+result with the machine's own npm, because that's what CI uses: `npm ci`, and
+`npm audit --audit-level=high`. Lockfile format is unchanged, and npm 11 warns about
+esbuild's install script, which the clean `npm ci` takes care of. Also, what's left
+isn't always fixable: "fix available" against `typescript-eslint` means a downgrade
+under `--force`, so check `fixAvailable` in `npm audit --json` before promising a
+clean report.
+
 ## Testing pattern that works
 `cd server && npm run e2e` now codifies this permanently
 (`server/test/e2e-real.mjs`): it drives a real `claude` pane through

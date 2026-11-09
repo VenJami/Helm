@@ -1308,6 +1308,14 @@ against a STALE web/dist, because the frontend had changed since the last
 build - the test serves whatever is on disk, so a rebuild is part of the test,
 not a step after it.
 
+Audit advisories cleared again (2026-11-05) - `npm audit --audit-level=high` had gone
+red on both jobs. Server: `express`, `body-parser`, `proxy-addr`, `qs`, now 0
+advisories, node-pty still exactly 1.1.0. Web: dev tooling only, nothing in the bundle
+moved. `npm audit fix` crashes inside npm 10.9.0 on web/, so it ran through a temporary
+npm 11 and was proven with a clean `npm ci` on the machine's own npm (GOTCHAS). Seven
+moderates remain in `typescript-eslint`'s chain: dev-only, under the gate, and npm's
+only fix is a forced downgrade.
+
 ## Short-term backlog (rough priority order, owner-approved direction)
 (empty — next items to be chosen with the owner)
 
