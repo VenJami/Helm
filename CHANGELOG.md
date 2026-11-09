@@ -112,6 +112,11 @@ All notable changes to Helm are documented here. Format follows
   age, pre-ticking anything past a fortnight.
 
 ### Fixed
+- **No more false "the transcript format may have changed" banner.** A subagent
+  log whose only reply is Claude's placeholder for a failed call has no usage
+  in it, which is correct. Helm took a big file like that for a change in
+  Claude's format and raised the warning. It now knows the difference, and
+  still warns when the format really changes.
 - **Stopping a public share link now really stops it.** Helm closed the link and
   forgot about it, but on some setups the underlying process kept running — a
   public URL still live with nothing left holding it. It is killed properly now.

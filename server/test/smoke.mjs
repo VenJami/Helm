@@ -349,6 +349,43 @@ test('diagnostics report claude health (drift alarm)', async () => {
   assert.equal(d.warnings.filter((w) => w.key.startsWith('claude-')).length, 0);
 });
 
+test('drift alarm: placeholder replies are not mistaken for a format change', async () => {
+  const { parseTranscriptFile, diagnostics } = await import('../src/claude.mjs');
+  diagnostics.warnings.delete('transcript-shape');
+  const dir = mkdir(path.join(tmp, 'transcript-shape'));
+  const attachment = JSON.stringify({
+    type: 'attachment',
+    attachment: { text: 'x'.repeat(20000) },
+  });
+
+  // What raised the banner for real: a subagent whose only reply is claude's
+  // placeholder for a failed call, made big by its attachments. No usage, but a
+  // shape Helm reads, so not drift.
+  const placeholder = path.join(dir, 'agent-placeholder.jsonl');
+  const synthetic = {
+    id: 'p1',
+    model: '<synthetic>',
+    usage: { input_tokens: 0, output_tokens: 0 },
+  };
+  fs.writeFileSync(
+    placeholder,
+    `${attachment}\n${JSON.stringify({ type: 'assistant', message: synthetic })}\n`,
+  );
+  assert.equal(parseTranscriptFile(placeholder).events.length, 0, 'a placeholder is not usage');
+  assert.equal(diagnostics.warnings.has('transcript-shape'), false, 'and not drift either');
+
+  // The alarm still works: replies whose usage moved somewhere Helm doesn't read.
+  const moved = path.join(dir, 'moved.jsonl');
+  const renamed = { id: 'm1', modelName: 'claude-x', tokenUsage: { input: 5, output: 1 } };
+  fs.writeFileSync(
+    moved,
+    `${attachment}\n${JSON.stringify({ type: 'assistant', message: renamed })}\n`,
+  );
+  parseTranscriptFile(moved);
+  assert.equal(diagnostics.warnings.has('transcript-shape'), true, 'a renamed field is drift');
+  diagnostics.warnings.delete('transcript-shape'); // the module is shared with later tests
+});
+
 test('update check reports a newer release (cached server-side)', async () => {
   let info;
   for (let i = 0; i < 50; i++) {

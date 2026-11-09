@@ -168,7 +168,9 @@ export function parseTranscriptFile(file) {
   // `byMessage` dedupes streaming (the same assistant message can be logged on
   // several lines — last occurrence wins) and persists across increments.
   const incremental = entry?.byMessage && stat.size > entry.size;
-  if (!incremental) entry = { byMessage: new Map(), pending: Buffer.alloc(0), sawJson: false };
+  if (!incremental) {
+    entry = { byMessage: new Map(), pending: Buffer.alloc(0), sawJson: false, sawShape: false };
+  }
   let lines;
   try {
     ({ lines, pending: entry.pending } = readAppendedLines(
@@ -190,13 +192,18 @@ export function parseTranscriptFile(file) {
     entry.sawJson = true; // any JSON at all → drift signal below can trust "shape" verdicts
     const usage = e?.message?.usage;
     const model = e?.message?.model;
-    // '<synthetic>' = placeholder entries (errors/retries), not real usage
-    if (e?.type === 'assistant' && usage && model && model !== '<synthetic>') {
-      entry.byMessage.set(e.message.id ?? e.uuid, {
-        model,
-        usage,
-        t: Date.parse(e.timestamp) || 0,
-      });
+    if (e?.type === 'assistant' && usage && typeof model === 'string') {
+      // A reply in the shape we read, even a '<synthetic>' placeholder: the format
+      // is understood, so finding no REAL usage is a fact about this file, not drift.
+      entry.sawShape = true;
+      // '<synthetic>' = placeholder entries (errors/retries), not real usage
+      if (model && model !== '<synthetic>') {
+        entry.byMessage.set(e.message.id ?? e.uuid, {
+          model,
+          usage,
+          t: Date.parse(e.timestamp) || 0,
+        });
+      }
     }
   }
   // Rebuild the aggregate views from the deduped messages (cheap vs parsing).
@@ -219,11 +226,14 @@ export function parseTranscriptFile(file) {
   entry.events = events;
   entry.mtimeMs = stat.mtimeMs;
   entry.size = stat.size;
-  // Drift signal: a substantial, well-formed transcript that yields zero usage
-  // events almost certainly means the JSONL shape changed (assistant/usage
+  // Drift signal: a substantial, well-formed transcript with no reply in the shape
+  // we read almost certainly means the JSONL shape changed (assistant/usage/model
   // fields renamed or moved). Gated by size so fresh/short sessions with no
-  // assistant turn yet don't false-alarm. (noteDrift dedupes by key.)
-  if (entry.sawJson && events.length === 0 && stat.size > 16 * 1024) {
+  // assistant turn yet don't false-alarm. A file whose only replies are claude's
+  // '<synthetic>' placeholders (a subagent whose call failed, padded out by big
+  // attachments) has no usage AND a known shape, so it is not drift: that used to
+  // raise the banner. (noteDrift dedupes by key.)
+  if (entry.sawJson && !entry.sawShape && stat.size > 16 * 1024) {
     noteDrift(
       'transcript-shape',
       `A ${Math.round(stat.size / 1024)} KB transcript parsed as JSON but produced 0 usage entries ` +

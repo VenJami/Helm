@@ -251,7 +251,7 @@ inline signals), exposed at `GET /api/diagnostics`:
 | CLI missing | `claude-missing` | `claude --version` fails to run |
 | Below floor | `claude-below-floor` | version < `CLAUDE_VERSION_FLOOR` |
 | Unknown model | `unknown-model:<model>` | a real model with tokens matches no `MODEL_PRICING` row |
-| Transcript shape | `transcript-shape` | a >16 KB transcript parses as JSON but yields 0 usage entries |
+| Transcript shape | `transcript-shape` | a >16 KB transcript parses as JSON but has no assistant reply in the shape Helm reads (`message.usage` + `message.model`). claude's `<synthetic>` placeholders count as readable: a subagent whose only reply is one (a failed call padded out by attachments) legitimately has no usage, and used to raise this falsely |
 | Suggest: not JSON | `suggest-nonjson` | `claude -p --output-format json` printed something unparseable |
 | Suggest: no result | `suggest-noresult` | that envelope had no string `result` field |
 | Polish: not JSON | `polish-nonjson` | the dictation-polish call printed something unparseable |

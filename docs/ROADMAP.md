@@ -1439,6 +1439,15 @@ It was then staged through the hook relay: two panes marked busy with real-sound
 prompts, so the sentences were really written but no Claude turn ran. Afterwards a
 `SessionStart` `clear` returned both panes to idle and removed the test sentences.
 
+False drift banner fixed (2026-11-10) - after a restart, Helm warned "the claude
+transcript format may have changed". The culprit was a 25 September subagent log:
+82 KB of attachments and one reply, which was claude's own `<synthetic>`
+placeholder for a failed call. It genuinely has no usage, and the check took "big
+file, zero usage" for drift. It now asks whether any reply came in the shape Helm
+reads, placeholders included, so a real field rename still trips it. Smoke 71.
+The new test fails with the old rule restored. The real file now parses to 0 usage
+and no warning.
+
 ## Short-term backlog (rough priority order, owner-approved direction)
 (empty — next items to be chosen with the owner)
 
