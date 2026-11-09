@@ -141,7 +141,7 @@ other part of Helm works exactly as before without it.
 
 ## Discord presence (what leaves your machine)
 
-Helm can put a "Playing Helm" card on your Discord profile, the way the VS Code
+Helm can put a "Coding with Helm" card on your Discord profile, the way the VS Code
 presence extensions do. After the share links and the mic, this is the third
 thing in Helm that leaves your machine, so here is exactly what it does:
 
@@ -156,7 +156,10 @@ thing in Helm that leaves your machine, so here is exactly what it does:
   listens for incoming connections. What Discord does with the text after that is
   covered by Discord's own policies, not by Helm.
 - **What is on the card:** how many agents are working, waiting or open, an elapsed
-  timer, Helm's logo, and a link to this repository.
+  timer, Helm's logo and status dot, and a link to this repository.
+- **The images come from this repository.** Discord fetches them by fixed public
+  links on GitHub and shows them through its own image proxy. Nothing about you or
+  your projects is in those links, and they are the same for everyone.
 - **Project names are opt-in, per project.** A name appears only after you
   right-click that project and choose "Show name on Discord". New projects are
   private, and a project cannot be created public.

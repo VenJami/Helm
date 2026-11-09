@@ -177,7 +177,7 @@ export interface HelmSettings {
   // ...and when it IS on screen, rests as a strip of status lights, expanding
   // to the full list when the cursor reaches it.
   notchAutoCompact: boolean;
-  // Show a "Playing Helm" card on the user's Discord profile. Public, so off by
+  // Show a "Coding with Helm" card on the user's Discord profile. Public, so off by
   // default (server/src/discord.mjs).
   discordPresence: boolean;
 }

@@ -497,6 +497,19 @@ Checked against a real Discord client on 2026-11-05, because the docs mislead:
   `GET https://discord.com/api/v10/oauth2/applications/<id>/assets` →
   `[{id, type, name}]`. The portal's "Invite Image" slot is NOT the art list: an
   image there gives a `cover_image` on the app and still no art.
+- **Images can be links, and only links animate.** `large_image` and `small_image`
+  take an https URL; the reply shows it turned into `mp:external/...` (Discord's
+  image proxy), and a GIF plays on the card. Uploaded art never animates. Checked on
+  the real client 2026-11-09 with both a GIF and a GitHub-hosted PNG badge.
+- **`party.size` is drawn as "(3 of 5)"** after the second line. Any party id works;
+  with no join secret, nobody is offered a way to join.
+- **Testing a GIF in a browser:** `ImageDecoder` (which decodes every frame) exists
+  only on secure pages. `about:blank` isn't one, `http://localhost:<port>` is.
+- **The title can be changed, the verb can't.** `name` in SET_ACTIVITY is honoured
+  (checked 2026-11-09): the reply echoes it, the card's title shows it, and the
+  short status reads "Playing <name>". The verb comes from `type`, and SET_ACTIVITY
+  allows only Playing, Listening, Watching and Competing, so no status can say
+  "Coding". Hence "Playing Coding with Helm".
 - **You can't see your own buttons.** Discord's docs say so: buttons on the card show
   only to other people, so it takes a friend or second account to check one.
 - **Reported, not reproduced here:** browser Discord has no pipe, Discord's Activity

@@ -174,7 +174,7 @@ writeHookSettings();
 // notchAutoCompact: at rest the notch shrinks to a strip of status lights (one
 //   per pane, coloured by what it is doing) and expands to the full list when
 //   the cursor reaches it - the way an auto-hidden taskbar slides back.
-// discordPresence: show a "Playing Helm" card on the user's Discord profile. Off
+// discordPresence: show a "Coding with Helm" card on the user's Discord profile. Off
 //   by default: the card is public, and a fresh install must not start publishing
 //   anything on its own (server/src/discord.mjs).
 const DEFAULT_SETTINGS = {

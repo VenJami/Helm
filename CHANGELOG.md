@@ -6,9 +6,10 @@ All notable changes to Helm are documented here. Format follows
 
 ## [Unreleased]
 ### Added
-- **Discord presence.** An optional "Playing Helm" card on your Discord profile,
-  like the VS Code presence extensions: how many agents are working or waiting,
-  an elapsed timer, and a link to the repo. Off by default, because the card is
+- **Discord presence.** An optional "Coding with Helm" card on your Discord profile,
+  like the VS Code presence extensions: how many agents are working, shown as
+  Discord's own "(3 of 5)" count, Helm's status dot, a logo that turns while agents
+  work, an elapsed timer and a link to the repo. Off by default, because the card is
   public. Project names stay private unless you right-click a project and choose
   "Show name on Discord"; prompts, paths, branches and accounts are never sent. It
   talks to the Discord desktop app over a local pipe with no new dependency, comes

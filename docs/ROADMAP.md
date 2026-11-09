@@ -1366,6 +1366,25 @@ npm 11 and was proven with a clean `npm ci` on the machine's own npm (GOTCHAS). 
 moderates remain in `typescript-eslint`'s chain: dev-only, under the gate, and npm's
 only fix is a forced downgrade.
 
+The card says "Coding with Helm" (2026-11-09) - owner: "Playing Helm" read like a
+game called Helm. Discord honours a `name` override in SET_ACTIVITY (checked on the
+real client: the card's title and the short status both took it), so the title is
+now "Coding with Helm" and the status reads "Playing Coding with Helm". The verb
+can't change: Discord allows apps only Playing, Listening, Watching or Competing.
+
+The card gets a status dot, a "(3 of 5)" count and a turning logo (2026-11-09) -
+owner wanted it "more cool" and picked these from the menu of everything a card can
+show. Helm's own look: the badge is Helm's status dot on its raised surface (amber if
+anything waits, else blue working, else green), and the large image is the real
+logo, turning slowly while agents work, read off `icon-512.png` rather than redrawn
+(`docs/discord/make-art.mjs`, Node built-ins only, including a small GIF encoder).
+The count is Discord's own party-size display. Images go by LINK, because Discord
+animates only linked images, from the `discord-art-v1` tag: a commit holding just
+the five images, pushed alone, so none of the unpushed work went public and the
+links survive branch merges. Each piece was tried on the real client before it was
+built, then the server drove all three states (working, waiting, between tasks) to
+the real profile and the owner confirmed each by eye. Smoke 65.
+
 ## Short-term backlog (rough priority order, owner-approved direction)
 (empty — next items to be chosen with the owner)
 

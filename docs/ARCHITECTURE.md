@@ -180,7 +180,8 @@ Browser (React + xterm.js grid) <--WS/REST--> Node server <--PTY--> claude.cmd
   `HELM_REPO` / `HELM_UPDATE_URL` / `HELM_COMPARE_URL` / `HELM_REPO_BRANCH`
   (point the update check elsewhere — a fork, another tracked branch, or the
   smoke test's stub), `HELM_DISCORD_APP_ID` (run the card under another Discord
-  application, for a fork), `HELM_DISCORD_PIPE` / `HELM_DISCORD_TICK_MS` (the smoke
+  application, for a fork), `HELM_DISCORD_ART` (where the card's images are linked
+  from), `HELM_DISCORD_PIPE` / `HELM_DISCORD_TICK_MS` (the smoke
   test's stand-in pipe and a faster loop), `HELM_STUCK_AFTER_MS` (how long a
   `working` pane may go quiet before it reads idle, default 2 minutes; the tests
   shorten it). Log entries carry a coarse `level` (`error` for
@@ -299,8 +300,20 @@ SECURITY.md and the header of `server/src/discord.mjs`.
   badge, so an interrupted turn stops reading `working` on both (see "Hooks →
   status/usage"). The elapsed timer starts when the card appears and holds until it
   clears.
-- **Discord setup, for a fork:** an application named as the card should read
-  ("Playing <name>"), with art named `icon-512` under Rich Presence > Art Assets.
+- **What it shows** (`buildActivity`): the title "Coding with Helm" (`CARD.name`; the
+  verb stays "Playing", as SET_ACTIVITY allows only Playing, Listening, Watching or
+  Competing); a first line only when it says something (the opted-in project, or
+  "1 agent waiting on me"); "Agents working (3 of 5)", where Discord draws the count
+  from a party size; Helm's status dot as the small image (amber if anything waits,
+  else blue while working, else green) with the counts on hover; and the logo
+  turning while agents work.
+- **Images by link, never uploaded art**, because Discord animates only linked
+  images. They live on the `discord-art-v1` tag: a commit holding just those five
+  files, made by `docs/discord/make-art.mjs`, so the links survive whatever happens to
+  the branches. New art means a new tag and a new `ART`, never a moved tag (Discord
+  caches each link). `HELM_DISCORD_ART` points a fork at its own copy.
+- **Discord setup, for a fork:** any application. Its name and any uploaded art go
+  unused.
 
 ### Public share links (Cloudflare quick tunnels)
 Publishes a **project's dev server** — never Helm's own port — to the internet.

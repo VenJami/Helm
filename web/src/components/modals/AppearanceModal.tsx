@@ -165,7 +165,7 @@ export function AppearanceModal({
         ))}
       </div>
       <p className="modal-desc">
-        Puts a public card on your Discord profile saying you are in Helm and how many agents are
+        Puts a public "Coding with Helm" card on your Discord profile with how many agents are
         working. Prompts, file paths, branches and accounts are never sent.
       </p>
       {discordPresence && (

@@ -54,7 +54,9 @@ helm/
 │   ├── ARCHITECTURE.md     # files, REST/WS API, spawn specifics, hook relay, data dirs
 │   ├── GOTCHAS.md          # hard-won traps — READ BEFORE TOUCHING SERVER CODE
 │   ├── ACCOUNTS.md         # multi-account profiles via CLAUDE_CONFIG_DIR
-│   └── ROADMAP.md          # done list + prioritized backlog
+│   ├── ROADMAP.md          # done list + prioritized backlog
+│   └── discord/            # the Discord card's images + make-art.mjs (linked from
+│                           #   the discord-art-v1 tag, see ARCHITECTURE)
 ├── server/
 │   ├── index.mjs           # backend bootstrap + sessions/PTY + routes + WS
 │   ├── src/                # log.mjs · persist.mjs (atomic state) · claude.mjs

@@ -113,8 +113,9 @@ Open http://127.0.0.1:7777, add a project folder as a workspace, and hit
   a backend *and* a frontend watcher — get one command each, in their own
   terminal panes that stay out of your way in the tray until you open them, so
   a dev server that fell over still shows why.
-- **Show it on Discord** — an optional "Playing Helm" card on your Discord
-  profile with how many agents are working, like the VS Code presence extensions.
+- **Show it on Discord** — an optional "Coding with Helm" card on your Discord
+  profile with how many agents are working, a status dot, and a logo that turns
+  while they work, like the VS Code presence extensions.
   It's off by default, and project names stay private unless you opt a project in.
   ([What does it share?](#faq))
 - **Make it yours** — dark or light theme with five accent presets, terminal

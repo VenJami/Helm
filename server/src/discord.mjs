@@ -1,5 +1,6 @@
 // Helm ⎈ — Discord Rich Presence: the card on your Discord profile that says
-// "Playing Helm / 3 agents working", the way the VS Code extensions do it.
+// "Coding with Helm / Agents working (3 of 5)", with Helm's status dot on a logo
+// that turns while agents work, the way the VS Code extensions show what you do.
 //
 // HOW: the Discord desktop app listens on a local pipe (discord-ipc-0 to 9).
 // Helm connects as a client and says what the card should read; Discord does the
@@ -23,11 +24,20 @@ import net from 'node:net';
 import path from 'node:path';
 import { dbg } from './log.mjs';
 
-// The Discord application the card runs under: its name is the "Helm" in "Playing
-// Helm", and it holds the uploaded logo. An application id is public by design
-// and Helm never needs the app's client secret. A fork can point at its own.
+// The Discord application the card runs under. It holds the uploaded logo, and its
+// name is only a fallback, since the card sets its own title (CARD.name). An
+// application id is public by design and Helm never needs the app's client
+// secret. A fork can point at its own.
 const APP_ID = process.env.HELM_DISCORD_APP_ID || '1567725173568831508';
 const REPO_URL = `https://github.com/${process.env.HELM_REPO || 'VenJami/Helm'}`;
+// The card's images, loaded by LINK: Discord only animates linked images, never
+// uploaded art, and links need no portal upload. They live on the `discord-art-v1`
+// tag, which holds those five files and nothing else, so the links survive
+// whatever happens to the branches. New art goes on a new tag, never a moved one:
+// Discord caches each link, so changed bytes behind an old link may never show.
+const ART =
+  process.env.HELM_DISCORD_ART ||
+  `https://raw.githubusercontent.com/${process.env.HELM_REPO || 'VenJami/Helm'}/discord-art-v1/docs/discord`;
 
 // One timer drives everything. At 5 s it cannot send more than 4 updates in 20 s,
 // inside Discord's limit of 5, so there is no throttling code to get wrong.
@@ -50,11 +60,18 @@ const OP_PING = 3;
 const OP_PONG = 4;
 
 const CARD = {
-  type: 0, // "Playing". SET_ACTIVITY only allows Playing, Listening, Watching, Competing
-  // large_image is the name the art has under the app's Rich Presence settings.
-  assets: { large_image: 'icon-512', large_text: 'Helm, an operations hub for Claude Code' },
+  // The title, so the card reads as someone coding rather than a game called
+  // "Helm". Discord honours it on the real client: it's the card's title and the
+  // short status reads "Playing Coding with Helm".
+  name: 'Coding with Helm',
+  // The verb can't be changed: SET_ACTIVITY allows only Playing, Listening,
+  // Watching or Competing, and "Playing" fits a working session best.
+  type: 0,
   buttons: [{ label: 'Helm on GitHub', url: REPO_URL }],
 };
+// Any id will do: it only groups the "(3 of 5)" count. With no join secret, no one
+// is offered a way to join anything.
+const PARTY_ID = 'helm-agents';
 
 const agents = (n) => `${n} agent${n === 1 ? '' : 's'}`;
 
@@ -75,7 +92,7 @@ export function buildActivity(panes, activeSince, now = Date.now()) {
 
   const working = panes.filter((p) => p.activity === 'working').length;
   const waiting = panes.filter((p) => p.activity === 'waiting').length;
-  const open = `${panes.length} open`;
+  const open = panes.length;
 
   // Only a pane that is itself still active can name a project, or a stale name
   // would sit on the card while the real work happens in a private project.
@@ -86,27 +103,56 @@ export function buildActivity(panes, activeSince, now = Date.now()) {
     .filter((p) => p.project)
     .sort((a, b) => rank(a) - rank(b) || a.since - b.since);
 
+  // Line 1 only when it says something: the opted-in project, or who needs me.
+  // Left out otherwise, rather than filled with a line repeating the count.
   let details;
-  let state;
   if (named) {
     const verb = { working: 'Working on', waiting: 'Waiting in' }[named.activity] ?? 'In';
     const name = [...String(named.project)].slice(0, MAX_PROJECT_NAME).join('');
     details = `${verb} ${name}`;
-    const counts = [working && `${agents(working)} working`, waiting && `${waiting} waiting`];
-    state = counts.filter(Boolean).join(' · ') || open;
-  } else if (working) {
-    details = `${agents(working)} working`;
-    state = [waiting && `${waiting} waiting`, open].filter(Boolean).join(' · ');
   } else if (waiting) {
-    details = `${agents(waiting)} waiting`;
-    state = open;
-  } else {
-    details = 'Between tasks';
-    state = open;
+    details = `${agents(waiting)} waiting on me`;
   }
 
+  // Line 2 carries the count, drawn by Discord itself as "(3 of 5)".
+  let state = 'Between tasks';
+  let party;
+  if (working) {
+    state = 'Agents working';
+    party = { id: PARTY_ID, size: [working, open] };
+  } else if (waiting) {
+    state = 'Waiting on me';
+    party = { id: PARTY_ID, size: [waiting, open] };
+  }
+
+  // The badge is Helm's own status dot: amber if anything needs me, else blue
+  // while working, else green. The logo turns only while agents are working.
+  const badge = waiting ? 'waiting' : working ? 'working' : 'idle';
+  const assets = {
+    large_image: `${ART}/${working ? 'helm-working.gif' : 'helm.png'}`,
+    large_text: 'Helm, an operations hub for Claude Code',
+    small_image: `${ART}/${badge}.png`,
+    small_text: [
+      working && `${working} working`,
+      waiting && `${waiting} waiting on me`,
+      `${open} open`,
+    ]
+      .filter(Boolean)
+      .join(' · '),
+  };
+
   const start = activeSince ?? now;
-  return { activity: { ...CARD, details, state, timestamps: { start } }, activeSince: start };
+  return {
+    activity: { ...CARD, details, state, party, assets, timestamps: { start } },
+    activeSince: start,
+  };
+}
+
+/** The card as a person would read it: "Working on x / Agents working (3 of 5) · [working]". */
+export function describeCard(a) {
+  const count = a.party ? ` (${a.party.size[0]} of ${a.party.size[1]})` : '';
+  const badge = a.assets.small_image.split('/').pop().replace('.png', '');
+  return `${[a.details, `${a.state}${count}`].filter(Boolean).join(' / ')} · [${badge}]`;
 }
 
 // ---------------------------------------------------------------- the pipe
@@ -281,10 +327,7 @@ function tick() {
   if (json === lastSent) return;
   lastSent = json;
   // In the debug drawer on purpose: what Helm has published should be checkable.
-  dbg(
-    'discord',
-    next.activity ? `card: ${next.activity.details} / ${next.activity.state}` : 'card cleared',
-  );
+  dbg('discord', next.activity ? `card: ${describeCard(next.activity)}` : 'card cleared');
   socket.write(
     encode(OP_FRAME, {
       cmd: 'SET_ACTIVITY',

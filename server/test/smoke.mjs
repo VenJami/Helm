@@ -2521,14 +2521,24 @@ test('discord: turning it on connects and publishes the counts', async () => {
   assert.deepEqual(discord.handshakes, [{ v: 1, client_id: 'test-app-id' }]);
 
   // A brand-new pane has just done something, so the card goes up at once.
-  await eventually(() => lastCard()?.details === 'Between tasks', 'the first card');
-  assert.equal(lastCard().state, '1 open');
+  await eventually(() => lastCard()?.state === 'Between tasks', 'the first card');
+  assert.equal(lastCard().details, undefined, 'no first line when there is nothing to say');
+  assert.equal(lastCard().party, undefined, 'and no count with nobody working');
+  assert.match(lastCard().assets.small_image, /\/idle\.png$/, 'the green dot');
+  assert.match(lastCard().assets.large_image, /\/helm\.png$/, 'a still logo between tasks');
 
   await hook(pane.id, { hook_event_name: 'UserPromptSubmit' });
-  await eventually(() => lastCard()?.details === '1 agent working', 'the working card');
-  assert.equal(lastCard().state, '1 open');
+  await eventually(() => lastCard()?.state === 'Agents working', 'the working card');
+  assert.deepEqual(lastCard().party.size, [1, 1], 'drawn by Discord as (1 of 1)');
   assert.equal(lastCard().type, 0, '"Playing"');
-  assert.equal(lastCard().assets.large_image, 'icon-512');
+  assert.equal(lastCard().name, 'Coding with Helm', 'the card reads as coding, not a game');
+  assert.match(
+    lastCard().assets.large_image,
+    /\/discord-art-v1\/docs\/discord\/helm-working\.gif$/,
+    'the turning logo, by link',
+  );
+  assert.match(lastCard().assets.small_image, /\/working\.png$/, 'the blue dot');
+  assert.equal(lastCard().assets.small_text, '1 working · 1 open');
   assert.equal(lastCard().buttons[0].label, 'Helm on GitHub');
   const { start } = lastCard().timestamps;
   assert.ok(start > 1e12, 'milliseconds');
@@ -2539,7 +2549,10 @@ test('discord: turning it on connects and publishes the counts', async () => {
   assert.equal(discord.activities.length, sent, 'an unchanged card is not resent');
 
   await hook(pane.id, { hook_event_name: 'Notification', message: 'needs you' });
-  await eventually(() => lastCard()?.details === '1 agent waiting', 'the waiting card');
+  await eventually(() => lastCard()?.details === '1 agent waiting on me', 'the waiting card');
+  assert.equal(lastCard().state, 'Waiting on me');
+  assert.match(lastCard().assets.small_image, /\/waiting\.png$/, 'the amber dot');
+  assert.match(lastCard().assets.large_image, /\/helm\.png$/, 'the logo stops turning');
   assert.equal(lastCard().timestamps.start, start, 'the elapsed timer must not jump');
 
   // A dev pane is not an agent, so a running one must not be counted as one.
@@ -2560,7 +2573,11 @@ test('discord: turning it on connects and publishes the counts', async () => {
   const withDev = discord.activities.length;
   await sleep(400);
   assert.equal(discord.activities.length, withDev, 'a dev pane starting changes nothing');
-  assert.equal(lastCard().state, '1 open', 'still one agent, with a dev server also running');
+  assert.deepEqual(
+    lastCard().party.size,
+    [1, 1],
+    'still one agent, with a dev server also running',
+  );
 
   // The last agent closing takes the card down, even with that dev pane still up.
   await authed(`/sessions/${pane.id}`, { method: 'DELETE' });
@@ -2607,7 +2624,7 @@ test('discord: a project name is private until opted in, and nothing else ever l
 
   // Private by default: the card is up, and the name is nowhere in it.
   await setDiscord(true);
-  await eventually(() => lastCard()?.details === '1 agent waiting', 'the private card');
+  await eventually(() => lastCard()?.details === '1 agent waiting on me', 'the private card');
   for (const frame of discord.raw) assert.ok(!frame.includes(secret), `name leaked: ${frame}`);
   assertNothingLeaked(discord.raw);
 
@@ -2615,13 +2632,13 @@ test('discord: a project name is private until opted in, and nothing else ever l
   const shared = await shareName(ws.id, true);
   assert.equal(shared.discord, true);
   await eventually(() => lastCard()?.details === `Waiting in ${secret}`, 'the named card');
-  assert.equal(lastCard().state, '1 waiting');
+  assert.equal(lastCard().state, 'Waiting on me');
   assertNothingLeaked(discord.raw);
 
   // Opted back out: gone from the card, and from everything sent after it.
   const hidden = await shareName(ws.id, false);
   assert.equal(hidden.discord, undefined, 'opting out stores nothing');
-  await eventually(() => lastCard()?.details === '1 agent waiting', 'the name to go');
+  await eventually(() => lastCard()?.details === '1 agent waiting on me', 'the name to go');
   const afterOptOut = discord.raw.length;
   await sleep(300);
   for (const frame of discord.raw.slice(afterOptOut)) {
@@ -2637,7 +2654,7 @@ test('discord: survives Discord going away, coming back, and refusing', async ()
   const { pane } = await paneInProject('discord-fail');
   await hook(pane.id, { hook_event_name: 'UserPromptSubmit' });
   await setDiscord(true);
-  await eventually(() => lastCard()?.details === '1 agent working', 'the card');
+  await eventually(() => lastCard()?.state === 'Agents working', 'the card');
   const { start } = lastCard().timestamps;
 
   // Discord quits. That is normal, so it is not an error, and Helm carries on.
@@ -2650,7 +2667,7 @@ test('discord: survives Discord going away, coming back, and refusing', async ()
   const before = discord.activities.length;
   await startFakeDiscord();
   await eventually(() => discord.activities.length > before, 'the card to be re-sent');
-  assert.equal(lastCard().details, '1 agent working');
+  assert.equal(lastCard().state, 'Agents working');
   assert.equal(lastCard().timestamps.start, start, 'the timer carries on across the gap');
 
   // PING is answered with its own payload. Two at once, because a pipe may hand
@@ -2754,56 +2771,79 @@ test('discord: the setting survives a restart, and a dead server lets go of the 
 });
 
 test('discord: what the card says', async () => {
-  const { buildActivity } = await import('../src/discord.mjs');
+  const { buildActivity, describeCard } = await import('../src/discord.mjs');
   const now = Date.parse('2026-11-05T12:00:00Z');
   const pane = (activity, minutesAgo, project = null) => ({
     activity,
     since: now - minutesAgo * 60_000,
     project,
   });
+  // The card as a person reads it: "line 1 / line 2 (n of m) · [badge]".
   const say = (...panes) => {
     const { activity } = buildActivity(panes, null, now);
-    return activity && [activity.details, activity.state];
+    return activity && describeCard(activity);
   };
   const many = (n, ...args) => Array.from({ length: n }, () => pane(...args));
 
-  // The counts, singular and plural.
+  // The counts, singular and plural, and which dot.
   assert.equal(say(), null, 'no panes, no card');
-  assert.deepEqual(say(pane('working', 0)), ['1 agent working', '1 open']);
-  assert.deepEqual(say(...many(3, 'working', 0), pane('waiting', 0), pane('idle', 0)), [
-    '3 agents working',
-    '1 waiting · 5 open',
-  ]);
-  assert.deepEqual(say(...many(2, 'waiting', 0), pane('idle', 0)), ['2 agents waiting', '3 open']);
-  assert.deepEqual(say(...many(5, 'idle', 0)), ['Between tasks', '5 open']);
-  assert.deepEqual(say(pane(null, 0)), ['Between tasks', '1 open'], 'no hook yet reads as idle');
+  assert.equal(say(pane('working', 0)), 'Agents working (1 of 1) · [working]');
+  assert.equal(
+    say(...many(3, 'working', 0), pane('waiting', 0), pane('idle', 0)),
+    '1 agent waiting on me / Agents working (3 of 5) · [waiting]',
+    'anything waiting turns the dot amber',
+  );
+  assert.equal(
+    say(...many(2, 'waiting', 0), pane('idle', 0)),
+    '2 agents waiting on me / Waiting on me (2 of 3) · [waiting]',
+  );
+  assert.equal(say(...many(5, 'idle', 0)), 'Between tasks · [idle]');
+  assert.equal(say(pane(null, 0)), 'Between tasks · [idle]', 'no hook yet reads as idle');
 
-  // Opted-in names.
-  assert.deepEqual(say(...many(3, 'working', 0, 'storefront'), pane('waiting', 0)), [
-    'Working on storefront',
-    '3 agents working · 1 waiting',
-  ]);
-  assert.deepEqual(say(pane('waiting', 0, 'storefront')), ['Waiting in storefront', '1 waiting']);
-  assert.deepEqual(say(pane('idle', 0, 'storefront')), ['In storefront', '1 open']);
+  // Opted-in names take the first line.
+  assert.equal(
+    say(...many(3, 'working', 0, 'storefront'), pane('waiting', 0)),
+    'Working on storefront / Agents working (3 of 4) · [waiting]',
+  );
+  assert.equal(
+    say(pane('waiting', 0, 'storefront')),
+    'Waiting in storefront / Waiting on me (1 of 1) · [waiting]',
+  );
+  assert.equal(say(pane('idle', 0, 'storefront')), 'In storefront / Between tasks · [idle]');
 
   // Which name: working beats waiting beats idle, and the longest in that state
   // wins, so the name doesn't flip each time another pane changes.
-  assert.equal(
-    say(pane('idle', 0, 'a'), pane('waiting', 0, 'b'), pane('working', 0, 'c'))[0],
-    'Working on c',
+  assert.match(
+    say(pane('idle', 0, 'a'), pane('waiting', 0, 'b'), pane('working', 0, 'c')),
+    /^Working on c \//,
   );
-  assert.equal(say(pane('working', 1, 'new'), pane('working', 9, 'old'))[0], 'Working on old');
+  assert.match(say(pane('working', 1, 'new'), pane('working', 9, 'old')), /^Working on old \//);
   // A private pane's work must not borrow a shared project's name as "Working on".
-  assert.deepEqual(say(pane('working', 0), pane('idle', 0, 'shop')), [
-    'In shop',
-    '1 agent working',
-  ]);
+  assert.equal(
+    say(pane('working', 0), pane('idle', 0, 'shop')),
+    'In shop / Agents working (1 of 2) · [working]',
+  );
   // A shared project that has gone quiet names nothing, even if others are busy.
-  assert.deepEqual(say(pane('working', 0), pane('idle', 45, 'old')), ['1 agent working', '2 open']);
+  assert.equal(
+    say(pane('working', 0), pane('idle', 45, 'old')),
+    'Agents working (1 of 2) · [working]',
+  );
 
   // A long name is cut, not wrapped, and never mid-character.
   const long = '😀'.repeat(50);
-  assert.equal(say(pane('working', 0, long))[0], `Working on ${'😀'.repeat(40)}`);
+  assert.match(say(pane('working', 0, long)), new RegExp(`^Working on ${'😀'.repeat(40)} /`, 'u'));
+
+  // The images: the logo turns only while agents work; the dot follows the state;
+  // the hover text spells the counts out.
+  const art = (panes) => buildActivity(panes, null, now).activity.assets;
+  assert.match(art([pane('working', 0)]).large_image, /\/helm-working\.gif$/);
+  assert.match(art([pane('waiting', 0)]).large_image, /\/helm\.png$/);
+  assert.match(art([pane('idle', 0)]).large_image, /\/helm\.png$/);
+  assert.equal(
+    art([...many(3, 'working', 0), pane('waiting', 0), pane('idle', 0)]).small_text,
+    '3 working · 1 waiting on me · 5 open',
+  );
+  assert.equal(art([pane('idle', 0)]).small_text, '1 open');
 
   // The 30-minute rule, and that waiting ages out where working does not.
   assert.ok(say(pane('idle', 29)), 'recent enough');
@@ -2837,9 +2877,9 @@ test('discord: the card follows the settled status, not just the hooks', async (
     const send = asideHook(aside, dataDir);
     const { id } = await asidePane(aside, 'settle-card-project');
     await send(id, 'UserPromptSubmit');
-    await eventually(() => lastCard()?.details === '1 agent working', 'the card to say working');
+    await eventually(() => lastCard()?.state === 'Agents working', 'the card to say working');
     // Esc: the pane settles, and the public card must not keep claiming work.
-    await eventually(() => lastCard()?.details === 'Between tasks', 'the card to agree');
+    await eventually(() => lastCard()?.state === 'Between tasks', 'the card to agree');
     await aside.call(`/sessions/${id}`, { method: 'DELETE' });
   } finally {
     aside.stop();
