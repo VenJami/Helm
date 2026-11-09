@@ -38,6 +38,8 @@ export function AppearanceModal({
   onNotchAutoCompact,
   discordPresence,
   onDiscordPresence,
+  taskLines,
+  onTaskLines,
   sharedProjects,
   onClose,
 }: {
@@ -51,6 +53,8 @@ export function AppearanceModal({
   onNotchAutoCompact: (on: boolean) => void;
   discordPresence: boolean;
   onDiscordPresence: (on: boolean) => void;
+  taskLines: boolean;
+  onTaskLines: (on: boolean) => void;
   sharedProjects: string[]; // the projects whose names are public on the card
   onClose: () => void;
 }) {
@@ -147,6 +151,30 @@ export function AppearanceModal({
         At rest it shrinks to a strip of coloured lights, one per agent, so a glance tells you
         whether anything needs you. Reach it with your cursor and it opens to the full list.
       </p>
+      <label className="field-label">Task lines</label>
+      <div className="chip-row">
+        {(
+          [
+            [false, 'Off'],
+            [true, 'Write one per prompt'],
+          ] as const
+        ).map(([on, label]) => (
+          <button
+            key={String(on)}
+            className={`chip ${taskLines === on ? 'selected' : ''}`}
+            onClick={() => onTaskLines(on)}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+      <p className="modal-desc">
+        Claude's quick model reads each new prompt and writes one line about what that agent is
+        doing, like "Debugging the reported bug on ticket 7". It shows in the notch, and on your
+        Discord card for projects whose names you share; with several agents busy, the card takes
+        turns, 20 seconds each. It runs on that pane's own account, at a small fraction of a cent
+        per prompt.
+      </p>
       <label className="field-label">Discord</label>
       <div className="chip-row">
         {(
@@ -166,14 +194,17 @@ export function AppearanceModal({
       </div>
       <p className="modal-desc">
         Puts a public "Coding with Helm" card on your Discord profile with how many agents are
-        working. Prompts, file paths, branches and accounts are never sent.
+        working. Your prompts, file paths, branches and accounts are never sent
+        {taskLines
+          ? '. With task lines on, projects whose names you share also show the one line written from their latest prompt, and it shows under your name in member lists.'
+          : '.'}
       </p>
       {discordPresence && (
         <p className="modal-desc">
           <span data-testid="discord-status">{discordLine(discordStatus)}</span>{' '}
           <span data-testid="discord-names">
             {sharedProjects.length
-              ? `Names shown: ${sharedProjects.join(', ')}. Right-click a project to change this.`
+              ? `${taskLines ? 'Names and task lines' : 'Names'} shown: ${sharedProjects.join(', ')}. Right-click a project to change this.`
               : 'No project names are shown. Right-click a project to show its name.'}
           </span>
         </p>

@@ -156,17 +156,28 @@ thing in Helm that leaves your machine, so here is exactly what it does:
   listens for incoming connections. What Discord does with the text after that is
   covered by Discord's own policies, not by Helm.
 - **What is on the card:** how many agents are working, waiting or open, an elapsed
-  timer, Helm's logo and status dot, and a link to this repository.
+  timer, Helm's logo and status dot, and a link to this repository. Opt-in extras:
+  project names, and task lines (both below).
 - **The images come from this repository.** Discord fetches them by fixed public
   links on GitHub and shows them through its own image proxy. Nothing about you or
   your projects is in those links, and they are the same for everyone.
 - **Project names are opt-in, per project.** A name appears only after you
   right-click that project and choose "Show name on Discord". New projects are
   private, and a project cannot be created public.
-- **Never sent:** prompts or task titles, file paths, git branches, account emails,
-  tool details, or pane names. This is enforced by construction: the module that
-  talks to Discord (`server/src/discord.mjs`) is never handed any of them, and a
-  smoke test searches every byte sent to a stand-in Discord for them.
+- **Task lines are the one thing written from your prompts, and they are opt-in
+  twice over.** With the Task lines setting on (off by default), claude's quick
+  model writes one sentence per prompt, such as "Debugging the reported bug on
+  ticket 7". That sentence reaches the card, and the member list under your name,
+  only for projects whose names you share. The prompt itself never does. The
+  model is told to leave out people, companies, emails, links, paths, keys and
+  money, and the code rejects any sentence that still contains a link, an email,
+  a path, a long number or a key-like string. `npm run task-rough` is a committed
+  bench of leak and injection cases. Writing the sentence sends your prompt to
+  claude on that pane's own account, which is where the prompt was already going.
+- **Never sent:** your prompts, the first-prompt titles, file paths, git branches,
+  account emails, tool details, or pane names. This is enforced by construction:
+  the module that talks to Discord (`server/src/discord.mjs`) is never handed any
+  of them, and a smoke test searches every byte sent to a stand-in Discord for them.
 - **You can check what went out.** Every card is written to the debug drawer.
 - **The card clears itself** after 30 minutes with nothing happening, and when Helm
   stops or crashes, because Discord takes the card down when the connection drops.

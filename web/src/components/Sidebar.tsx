@@ -63,6 +63,9 @@ interface Props {
   onToggleNotch: (id: string, show: boolean) => void;
   /** Is the Discord card on? The per-project choice below means nothing while it's off. */
   discordPresence: boolean;
+  /** Task lines on: sharing a project's name shares its agents' sentences too,
+   *  so the menu has to say so. */
+  taskLines: boolean;
   /** Show or hide this project's name on the public Discord card. */
   onToggleDiscord: (id: string, show: boolean) => void;
   onShowShares: () => void; // open the panel listing every live public link
@@ -112,6 +115,7 @@ export function Sidebar({
   onUnshare,
   onToggleNotch,
   discordPresence,
+  taskLines,
   onToggleDiscord,
   onShowShares,
   dragId,
@@ -673,7 +677,13 @@ Click to open the link panel. Expires in ${expiryLabel(tunnel.expiresAt)}.`
               }}
             >
               <IconEye size={13} />{' '}
-              {menuWs.discord ? 'Hide name from Discord' : 'Show name on Discord'}
+              {menuWs.discord
+                ? taskLines
+                  ? 'Hide from Discord'
+                  : 'Hide name from Discord'
+                : taskLines
+                  ? 'Show name and tasks on Discord'
+                  : 'Show name on Discord'}
             </button>
           )}
           <div className="ws-menu-sep" />

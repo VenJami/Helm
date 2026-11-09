@@ -262,6 +262,10 @@ export function transcriptFiles(configDir) {
 // found; before then only the bytes APPENDED since the last poll are read (this
 // runs for every session on every 3 s /api/sessions poll — a full re-read of a
 // growing multi-MB transcript here used to stall the event loop).
+// Text claude wraps around things the person did NOT type (slash-command
+// echoes, system reminders). Both the first-prompt title and task lines skip it.
+export const META_PROMPT_PREFIXES = ['<command-', '<local-command', '<system-reminder', 'Caveat:'];
+
 const summaryCache = new Map(); // transcript path → {mtimeMs, size, pending, summary}
 const SUMMARY_CACHE_MAX = 512; // bound memory like fileUsageCache (sessions churn)
 
@@ -310,14 +314,7 @@ export function firstPromptSummary(file) {
     str = str.replace(/\s+/g, ' ').trim();
     // Skip tool results (no text), slash-command wrappers, and system-reminder
     // injections — we want the human's actual opening ask.
-    if (
-      !str ||
-      str.startsWith('<command-') ||
-      str.startsWith('<local-command') ||
-      str.startsWith('<system-reminder') ||
-      str.startsWith('Caveat:')
-    )
-      continue;
+    if (!str || META_PROMPT_PREFIXES.some((p) => str.startsWith(p))) continue;
     c.summary = str.slice(0, 100);
     break;
   }
@@ -553,4 +550,77 @@ export function cleanPolished(text, transcript) {
   // short dictation ("fix the login bug") from tripping the ratio.
   if (out.length > Math.max(240, transcript.trim().length * 3)) return null;
   return out;
+}
+
+// ------------------------------------------------------------- task lines
+// The one-line "what this pane is doing" sentence ("Debugging the reported bug on
+// ticket 7"), written by claude's quick model from each new prompt when the Task
+// lines setting is on. It shows in the notch, and on the PUBLIC Discord card for
+// projects whose names are shared. These two guard both ends of that call.
+// Both fail closed: a prompt that isn't worth a call, or a reply that isn't fit to
+// show, keeps the pane's previous sentence.
+
+// Replies that carry no new task. Only reached by prompts of 3+ words, so the
+// short ones ("yes", "go ahead") never get this far.
+const ACK_PROMPT =
+  /^(?:y(?:es|ep|eah)?|no(?:pe)?|ok(?:ay)?|sure|thanks?(?: you)?|ty|go(?: ahead| on)?|continue|keep going|proceed|do it|sounds good|lgtm|looks good|perfect|great|nice|cool|done|that works)(?:[\s,.!]+(?:please|thanks?|then|now|do it|go ahead|continue|keep going|ok(?:ay)?))*[\s.!]*$/i;
+
+/** Is this prompt worth a model call? Slash commands, claude's own wrappers,
+ *  short replies and acknowledgements are not: the pane keeps its last line. */
+export function isTaskPrompt(prompt) {
+  if (typeof prompt !== 'string') return false;
+  const text = prompt.replace(/\s+/g, ' ').trim();
+  if (!text || text.startsWith('/')) return false;
+  if (META_PROMPT_PREFIXES.some((p) => text.startsWith(p))) return false;
+  if (text.split(' ').length < 3) return false;
+  return !ACK_PROMPT.test(text);
+}
+
+const TASK_LINE_MAX = 60; // a notch row and one card line; a cut beats a wrap
+const TASK_LEADIN = /^(?:status(?: line)?|task(?: line)?|here(?:'s| is)[^:\n]{0,40})\s*:\s*/i;
+// Never fit for a public card, whatever the prompt told the model. Each is a way a
+// detail from the prompt could ride out on the line.
+/** @type {[RegExp, string][]} */
+const TASK_LEAKS = [
+  [/https?:\/\/|www\./i, 'a link'],
+  [/[^\s@]+@[^\s@]+\.[a-z]{2,}/i, 'an email address'],
+  [/[a-z]:[\\/]|\\\\|(?:^|\s)~?\/[\w.-]+\/|[\w-]+\/[\w.-]+\.[a-z]{1,5}\b/i, 'a file path'],
+  [/\d{7,}/, 'a long number'],
+  [/\S{25,}/, 'a key-like string'],
+];
+// The model talking about the prompt instead of describing the work. Specific on
+// purpose: "the user" alone would also reject "Fixing the user avatar upload".
+const TASK_META =
+  /\b(?:i can(?:'|no)?t|i cannot|i'?m sorry|as an ai|i (?:will|would|need)|the user (?:wants|is asking|asks|asked|requests|would like|needs)|(?:the|this) (?:prompt|message|instruction) (?:is|asks|says|contains|does|has)|no (?:real |clear )?task)\b/i;
+// Quotes, markdown and closing punctuation around the sentence, in any order.
+const stripWrapping = (s) => s.replace(/^[\s"'“‘`*_]+|[\s"'”’`*_.!…]+$/gu, '');
+
+/**
+ * Trim a task-line reply to the bare sentence, or say why it can't be shown.
+ * @param {unknown} text the model's reply
+ * @returns {{line: string|null, why: string|null}} line null = keep the old one
+ */
+export function cleanTaskLine(text) {
+  if (typeof text !== 'string') return { line: null, why: 'no reply' };
+  let out = text.trim();
+  const fence = /^```[a-z]*\s*\n([\s\S]*?)\n?```$/i.exec(out);
+  if (fence) out = fence[1].trim();
+  out = out.split(/\r?\n/).find((l) => l.trim()) ?? '';
+  // Twice: "**Status:** Fixing it." has wrapping on both sides of the lead-in.
+  out = stripWrapping(stripWrapping(out).replace(TASK_LEADIN, '')).replace(/\s+/g, ' ');
+  if (/^skip\b/i.test(out)) return { line: null, why: 'nothing to describe' };
+  if (!out) return { line: null, why: 'empty reply' };
+  for (const [re, what] of TASK_LEAKS) {
+    if (re.test(out)) return { line: null, why: `it contained ${what}` };
+  }
+  if (out.includes('?')) return { line: null, why: 'it was a question' };
+  if (TASK_META.test(out)) return { line: null, why: 'it talked about the prompt' };
+  const words = out.split(' ').length;
+  if (words < 2 || words > 12) {
+    return { line: null, why: `it was ${words} word${words === 1 ? '' : 's'} long` };
+  }
+  if (out.length > TASK_LINE_MAX) {
+    out = out.slice(0, out.lastIndexOf(' ', TASK_LINE_MAX - 1)).replace(/[,;:\s]+$/, '') + '…';
+  }
+  return { line: out[0].toUpperCase() + out.slice(1), why: null };
 }

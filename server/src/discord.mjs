@@ -11,9 +11,11 @@
 //
 // PRIVACY, read before changing what goes on the card: the card is PUBLIC, anyone
 // who can see the profile can read it, and it is off until the owner turns it on.
-// This module is handed only { activity, since, project } per pane, with project
-// null unless the owner opted that project in (presencePanes in index.mjs). It
-// never sees paths, prompts, pane names or accounts, so it cannot leak them.
+// This module is handed only { activity, since, project, task } per pane, with
+// project null unless the owner opted that project in, and task (the one-line
+// sentence Task lines writes from a prompt) null unless that project is opted in
+// AND Task lines is on (presencePanes in index.mjs). It never sees prompts, paths,
+// pane names or accounts, so it cannot leak them.
 //
 // Failing quietly is correct here: Discord being closed is normal, not a problem
 // to report. Dropping the connection is what clears the card, so a Helm crash
@@ -52,6 +54,13 @@ const MAX_FRAME_BYTES = 64 * 1024; // READY and acks are tiny; bigger isn't Disc
 // here a waiting pane ages out too.
 const QUIET_AFTER_MS = 30 * 60 * 1000;
 const MAX_PROJECT_NAME = 40; // the card's lines are short, and a cut is better than a wrap
+const MAX_LINE = 128; // Discord's own limit for a card line
+// With several agents busy, their task lines take turns on line 1, this long each.
+// Changing every 20 s stays well inside Discord's limit of 5 updates per 20 s.
+const ROTATE_MS = Number(process.env.HELM_DISCORD_ROTATE_MS) || 20_000;
+// Which line Discord shows under the owner's name in member lists:
+// 0 the title (the default), 1 line 2, 2 line 1.
+const STATUS_DISPLAY_DETAILS = 2;
 
 const OP_HANDSHAKE = 0;
 const OP_FRAME = 1;
@@ -78,7 +87,7 @@ const agents = (n) => `${n} agent${n === 1 ? '' : 's'}`;
 /**
  * What the card should say. Pure, so every rule can be tested without a pipe.
  *
- * @param {{activity: string|null, since: number, project: string|null}[]} panes
+ * @param {{activity: string|null, since: number, project: string|null, task?: string|null}[]} panes
  *   the running claude panes; since is in milliseconds
  * @param {number|null} activeSince when the card appeared, or null if it is down
  * @param {number} now
@@ -103,18 +112,46 @@ export function buildActivity(panes, activeSince, now = Date.now()) {
     .filter((p) => p.project)
     .sort((a, b) => rank(a) - rank(b) || a.since - b.since);
 
-  // Line 1 only when it says something: the opted-in project, or who needs me.
-  // Left out otherwise, rather than filled with a line repeating the count.
+  const clip = (s, n) => [...String(s)].slice(0, n).join('');
+  const name = named ? clip(named.project, MAX_PROJECT_NAME) : null;
+  // With Task lines on, a sentence ("Debugging the reported bug on ticket 7") is
+  // line 1 while its pane works or waits. Between tasks it would describe finished
+  // work, so the card goes back to saying what it always did. Several such panes
+  // take turns, ROTATE_MS each, in a steady order (longest in that state first),
+  // worked out from the clock so this stays a pure function of `now`. Only panes in
+  // the named pane's state get a turn, so while anything works line 1 never shows
+  // a finished task next to "Agents working". One turn per distinct sentence, so a
+  // broadcast doesn't repeat the same line.
+  const top = named ? rank(named) : 2;
+  const turns =
+    top < 2
+      ? [
+          ...new Map(
+            fresh
+              .filter((p) => p.project && p.task && rank(p) === top)
+              .sort((a, b) => a.since - b.since)
+              .map((p) => [`${p.project}\n${p.task}`, p]),
+          ).values(),
+        ]
+      : [];
+  const shown = turns.length ? turns[Math.floor(now / ROTATE_MS) % turns.length] : null;
+  const task = shown ? clip(shown.task, MAX_LINE) : null;
+
+  // Line 1 only when it says something: the sentence, the opted-in project, or
+  // who needs me. Left out otherwise, rather than filled with a line repeating
+  // the count.
   let details;
-  if (named) {
+  if (task) {
+    details = task;
+  } else if (named) {
     const verb = { working: 'Working on', waiting: 'Waiting in' }[named.activity] ?? 'In';
-    const name = [...String(named.project)].slice(0, MAX_PROJECT_NAME).join('');
     details = `${verb} ${name}`;
   } else if (waiting) {
     details = `${agents(waiting)} waiting on me`;
   }
 
-  // Line 2 carries the count, drawn by Discord itself as "(3 of 5)".
+  // Line 2 carries the count, drawn by Discord itself as "(3 of 5)". When line 1
+  // is a sentence, the project that sentence belongs to leads line 2.
   let state = 'Between tasks';
   let party;
   if (working) {
@@ -124,6 +161,7 @@ export function buildActivity(panes, activeSince, now = Date.now()) {
     state = 'Waiting on me';
     party = { id: PARTY_ID, size: [waiting, open] };
   }
+  if (task) state = clip(`${clip(shown.project, MAX_PROJECT_NAME)} · ${state}`, MAX_LINE);
 
   // The badge is Helm's own status dot: amber if anything needs me, else blue
   // while working, else green. The logo turns only while agents are working.
@@ -142,23 +180,29 @@ export function buildActivity(panes, activeSince, now = Date.now()) {
   };
 
   const start = activeSince ?? now;
-  return {
-    activity: { ...CARD, details, state, party, assets, timestamps: { start } },
-    activeSince: start,
-  };
+  /** @type {Record<string, any>} */
+  const activity = { ...CARD, details, state, party, assets, timestamps: { start } };
+  // The member list shows the sentence under the owner's name instead of the
+  // title. Only when there is one: otherwise it keeps saying "Coding with Helm".
+  if (task) activity.status_display_type = STATUS_DISPLAY_DETAILS;
+  return { activity, activeSince: start };
 }
 
-/** The card as a person would read it: "Working on x / Agents working (3 of 5) · [working]". */
+/**
+ * The card as a person would read it: "Working on x / Agents working (3 of 5) ·
+ * [working]", plus where the member list takes its line from when that isn't the title.
+ */
 export function describeCard(a) {
   const count = a.party ? ` (${a.party.size[0]} of ${a.party.size[1]})` : '';
   const badge = a.assets.small_image.split('/').pop().replace('.png', '');
-  return `${[a.details, `${a.state}${count}`].filter(Boolean).join(' / ')} · [${badge}]`;
+  const list = a.status_display_type === STATUS_DISPLAY_DETAILS ? ' · list: line 1' : '';
+  return `${[a.details, `${a.state}${count}`].filter(Boolean).join(' / ')} · [${badge}]${list}`;
 }
 
 // ---------------------------------------------------------------- the pipe
 
 let isEnabled = () => false;
-/** @type {() => {activity: string|null, since: number, project: string|null}[]} */
+/** @type {() => {activity: string|null, since: number, project: string|null, task?: string|null}[]} */
 let getPanes = () => [];
 
 /** @type {net.Socket|null} */
@@ -168,6 +212,8 @@ let connected = false; // READY received, so the card can be set
 let user = /** @type {string|null} */ (null); // shown only in Helm's own settings
 let lastError = /** @type {string|null} */ (null);
 let lastSent = /** @type {string|undefined} */ (undefined); // undefined: nothing sent yet
+let lastActivity = /** @type {Record<string, any>|null} */ (null); // the card last sent
+let lastDropped = ''; // what Discord last left out of it, logged only on change
 let activeSince = /** @type {number|null} */ (null);
 let retryIn = 0;
 let handshakeTicks = 0;
@@ -192,6 +238,23 @@ function pipeTargets() {
       ? `\\\\.\\pipe\\discord-ipc-${n}`
       : path.join(unixDir, `discord-ipc-${n}`),
   );
+}
+
+// Discord leaves out what it won't take without saying so: an image link it
+// can't load, a field it doesn't know. Its echo of the card is the only evidence,
+// so compare that with what was sent. This is how Helm can tell from its own side
+// whether the member-list line (status_display_type) took.
+function noteDropped(echo) {
+  if (!lastActivity || !echo || typeof echo !== 'object') return;
+  const dropped = ['status_display_type', 'party', 'buttons'].filter(
+    (k) => lastActivity[k] !== undefined && echo[k] === undefined,
+  );
+  for (const k of ['large_image', 'small_image']) {
+    if (lastActivity.assets?.[k] && !echo.assets?.[k]) dropped.push(k);
+  }
+  const note = dropped.join(', ');
+  if (note && note !== lastDropped) dbg('discord', `Discord dropped: ${note}`);
+  lastDropped = note;
 }
 
 // Logged only when it changes: a bad app id comes back on every 15 s retry.
@@ -240,6 +303,7 @@ function onFrame(op, body) {
     noteError(msg.data?.message || 'Discord refused the update');
   } else if (msg?.cmd === 'SET_ACTIVITY') {
     lastError = null;
+    noteDropped(msg.data);
   }
 }
 
@@ -326,6 +390,7 @@ function tick() {
   const json = JSON.stringify(next.activity);
   if (json === lastSent) return;
   lastSent = json;
+  lastActivity = next.activity;
   // In the debug drawer on purpose: what Helm has published should be checkable.
   dbg('discord', next.activity ? `card: ${describeCard(next.activity)}` : 'card cleared');
   socket.write(

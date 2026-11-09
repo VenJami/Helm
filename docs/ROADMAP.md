@@ -1385,6 +1385,60 @@ links survive branch merges. Each piece was tried on the real client before it w
 built, then the server drove all three states (working, waiting, between tasks) to
 the real profile and the owner confirmed each by eye. Smoke 65.
 
+Task lines (2026-11-10) - owner: the card should say what an agent is actually doing,
+"debugging the reported bug on ticket 7", not just "Working on <project>", and the notch
+should use the same sentence. Research came first, and ruled out every free source:
+- **Claude's AI session title** is set once per conversation and never updates.
+  Helm's panes don't get one at all, because `-n <star name>` suppresses it.
+- **To-do lines:** zero to-do lists in 30 days of the owner's sessions.
+- **The terminal title** only repeats the pane name.
+So claude's quick model writes the sentence from each prompt, which the hook relay
+already carried and Helm had ignored. It uses the same tool-less, thinking-off call
+as dictation (`spawnPolish` became `spawnQuickClaude`), after the hook has answered.
+Replies like "yes" and slash commands never reach the model (`isTaskPrompt`), and
+`cleanTaskLine` rejects any reply carrying a link, email, path, long number or
+key-like string. A per-pane counter makes the newest prompt win, and a cache makes a
+broadcast cost one call per project. Owner's choices: ONE switch (Appearance > Task
+lines, off by default), shown in the notch and, for projects whose names are already
+shared, on the card. Switching it off clears every sentence. The member list under
+the owner's name shows the sentence too: `status_display_type: 2`, set only while
+there is a sentence. The card compares Discord's echo with what it sent, so a field
+Discord quietly drops gets logged. Verified:
+- **Smoke:** 69 tests (68 pass, 1 old skip), 4 of them new. 9 deliberate breaks were
+  all caught, including both privacy layers broken at once.
+- **`npm run task-rough`** (new, committed): 24 adversarial cases against the real
+  model, 23 checked and 1 judgement call, all passing twice. The privacy cases kept
+  the client name, person, email, URL, key, path, money and password off the line,
+  and "ignore all instructions" was rejected. About $0.0001 per call, 2.5 s median.
+- **Real-claude e2e:** 24/24 on 2.1.319, with 3 new checks: the hook carries
+  `prompt` and `source`, and a real prompt became "Explaining binary search concept".
+- **On the owner's real Helm and Discord:** a real prompt became "Summarizing project
+  structure and purpose" in 3.1 s for $0.0002. The member list showed the sentence,
+  the card showed it over "<project> · Agents working (1 of 4)", and the notch showed it
+  under the pane. With the setting off, the member list read "Coding with Helm"
+  again. Discord dropped no field. One behaviour to know: claude's "waiting for your
+  input" notification, about a minute after a turn, brings the sentence back over
+  "Waiting on me", because the pane is now waiting on its owner.
+
+Busy agents take turns on the card (2026-11-10) - owner asked what the card shows
+with several panes working. It showed one: whichever agent had been working longest.
+That had a quirk: a new prompt to the agent on the card restarted its clock and
+handed the card to the other one. Offered newest-wins, two-per-card, one card per
+agent, or turns; the owner picked turns. Every busy agent's sentence now gets 20
+seconds on line 1, with its own project leading line 2. The count and the member
+list follow along. Only agents in the top state take part, so while anything works,
+a pane waiting on its owner sits out and line 1 never shows a finished task beside
+"Agents working". A broadcast's repeated sentence gets one turn. The turn comes from
+the clock, so `buildActivity` stays pure. Smoke 70: rotation unit cases plus a
+two-pane test with turns sped up to 300 ms. 4 deliberate breaks, all caught. On the
+owner's real Discord the turns ran on the clock's 20 s marks (Rigel's sentence,
+Bosun's, Rigel's again), the owner saw the member list take turns, and Discord
+dropped nothing. The first attempt used real prompts and proved nothing: both
+answers finished in about 8 s, less than one turn, and one prompt got no sentence.
+It was then staged through the hook relay: two panes marked busy with real-sounding
+prompts, so the sentences were really written but no Claude turn ran. Afterwards a
+`SessionStart` `clear` returned both panes to idle and removed the test sentences.
+
 ## Short-term backlog (rough priority order, owner-approved direction)
 (empty — next items to be chosen with the owner)
 

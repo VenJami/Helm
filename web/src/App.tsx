@@ -210,6 +210,7 @@ export function App() {
   const [notchFollowsHelm, setNotchFollowsHelm] = useState(true);
   const [notchAutoCompact, setNotchAutoCompact] = useState(true);
   const [discordPresence, setDiscordPresence] = useState(false);
+  const [taskLines, setTaskLinesState] = useState(false);
 
   // Server console window (start-helm.cmd terminal) show/hide toggle.
   // Whether this machine can open the native notch (Windows + built).
@@ -346,6 +347,7 @@ export function App() {
         setNotchFollowsHelm(s.notchFollowsHelm);
         setNotchAutoCompact(s.notchAutoCompact);
         setDiscordPresence(s.discordPresence);
+        setTaskLinesState(s.taskLines);
       })
       .catch(() => {});
   }, [refreshCategories]);
@@ -385,6 +387,19 @@ export function App() {
       setDiscordPresence((await api.updateSettings({ discordPresence: on })).discordPresence);
     } catch (err) {
       setDiscordPresence(before);
+      toast.error((err as Error).message);
+    }
+  };
+
+  // Same shape. Switching off also empties every pane's sentence server-side, and
+  // the next sessions poll carries that to the notch.
+  const setTaskLines = async (on: boolean) => {
+    const before = taskLines;
+    setTaskLinesState(on);
+    try {
+      setTaskLinesState((await api.updateSettings({ taskLines: on })).taskLines);
+    } catch (err) {
+      setTaskLinesState(before);
       toast.error((err as Error).message);
     }
   };
@@ -1325,6 +1340,7 @@ export function App() {
             });
           }}
           discordPresence={discordPresence}
+          taskLines={taskLines}
           onToggleDiscord={(id, show) => {
             // Optimistic, like the notch above: the server picks it up on its
             // next tick, and the menu label should not wait for a round trip.
@@ -1757,6 +1773,8 @@ export function App() {
           onNotchAutoCompact={(on) => void setNotchCompact(on)}
           discordPresence={discordPresence}
           onDiscordPresence={(on) => void setDiscord(on)}
+          taskLines={taskLines}
+          onTaskLines={(on) => void setTaskLines(on)}
           sharedProjects={workspaces.filter((w) => w.discord).map((w) => w.name)}
           onClose={closeDialog}
         />

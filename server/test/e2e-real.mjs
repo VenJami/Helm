@@ -18,8 +18,9 @@
 // Flow: boot isolated server → real pane in a temp workspace → accept the
 // folder-trust dialog if it appears → prompt → assert SessionStart/
 // UserPromptSubmit/Stop hook transitions, transcript on disk, usage tokens,
-// first-prompt summary → RESTART the server → assert the pane came back dead+
-// resumable → revive → assert the SAME claude session id (no fork).
+// first-prompt summary, a task line from a real prompt → RESTART the server →
+// assert the pane came back dead+resumable → revive → assert the SAME claude
+// session id (no fork).
 
 import fs from 'node:fs';
 import net from 'node:net';
@@ -99,6 +100,7 @@ async function boot() {
     PORT: String(PORT),
     HELM_DATA_DIR: helmDir,
     HELM_STUCK_AFTER_MS: String(STUCK_AFTER_MS), // so the Esc phase needn't wait 2 minutes
+    HELM_DEBUG_HOOKS: '1', // raw hook payloads in the log: the task-line phase reads them
   };
   delete env.CLAUDE_CONFIG_DIR; // default account = the machine's real ~/.claude
   child = spawn(process.execPath, ['index.mjs'], {
@@ -281,6 +283,38 @@ check(
     u.available && totalIn > 0 && totalOut > 0,
     `in+cache=${totalIn} out=${totalOut} models=${Object.keys(u.models ?? {}).join(',')}`,
   );
+}
+
+// ---------------------------------------- phase 4a: task lines from a real prompt
+// Task lines lean on two more claude internals: UserPromptSubmit carries the
+// prompt text, and SessionStart says why it started (a /clear empties the line).
+// Then a real prompt has to come back from the real quick model as a sane line.
+{
+  const raw = (await (await api('/logs?after=0')).json()).entries
+    .filter((e) => e.tag === 'hook-raw')
+    .map((e) => e.msg);
+  check(
+    'UserPromptSubmit hook carries the prompt text',
+    raw.some((m) => m.includes('"UserPromptSubmit"') && m.includes(`"prompt":"${PROMPT}"`)),
+  );
+  check(
+    'SessionStart hook carries its source',
+    raw.some((m) => m.includes('"SessionStart"') && /"source":"\w+"/.test(m)),
+  );
+
+  await api('/settings', { method: 'PATCH', body: JSON.stringify({ taskLines: true }) });
+  type('In one short sentence, explain what a binary search does. No tools.');
+  await sleep(400);
+  type('\r');
+  s = await waitFor(id, (x) => Boolean(x.taskLine), 30000, 'a task line');
+  check(
+    'a real prompt becomes a task line',
+    /^[A-Z][a-z]+ing\b/.test(s?.taskLine ?? '') && s.taskLine.length <= 61,
+    `taskLine=${JSON.stringify(s?.taskLine)}`,
+  );
+  s = await waitFor(id, (x) => x.activity === 'idle', 120000, 'that turn to finish');
+  await api('/settings', { method: 'PATCH', body: JSON.stringify({ taskLines: false }) });
+  check('switching task lines off clears it', (await sessionInfo(id))?.taskLine === null);
 }
 
 // --------------------------------------------- phase 4b: Esc mid-turn → idle

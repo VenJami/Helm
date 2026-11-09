@@ -36,6 +36,9 @@ export interface SessionInfo {
   pendingDetail: string | null; // one human line: "Bash: npm run db:migrate"
   pendingSince: string | null; // ISO — when it arrived
   summary: string | null; // auto-title from the conversation's first prompt (search/palette)
+  // What it is doing now, one sentence written from the latest prompt by claude's
+  // quick model ("Debugging the reported bug on ticket 7"). Only with Task lines on.
+  taskLine: string | null;
   canResume: boolean; // claude session id captured → revive resumes it
   hasTranscript: boolean;
   attached: number;
@@ -180,6 +183,9 @@ export interface HelmSettings {
   // Show a "Coding with Helm" card on the user's Discord profile. Public, so off by
   // default (server/src/discord.mjs).
   discordPresence: boolean;
+  // One sentence per pane written from each prompt, shown in the notch and on the
+  // Discord card for projects whose names are shared. Off by default.
+  taskLines: boolean;
 }
 
 // GET /api/discord: where the card stands, for the status line beside its toggle.

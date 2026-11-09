@@ -31,6 +31,7 @@ const pane = (over: Partial<SessionInfo>): SessionInfo =>
     pendingDetail: null,
     pendingSince: null,
     summary: null,
+    taskLine: null,
     canResume: false,
     hasTranscript: false,
     attached: 0,

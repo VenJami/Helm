@@ -16,6 +16,7 @@
     "e2e": "node test/e2e-real.mjs",
     "voice-bench": "node test/voice-bench.mjs",
     "voice-rough": "node test/voice-rough.mjs",
+    "task-rough": "node test/task-rough.mjs",
     "typecheck": "tsc -p tsconfig.json",
     "lint": "eslint . --max-warnings 0",
     "format": "prettier --write \"*.mjs\" \"src/**/*.mjs\" \"test/**/*.mjs\"",

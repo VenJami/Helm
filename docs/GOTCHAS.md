@@ -51,6 +51,12 @@
 - **`npm run dev` (--watch) restarts on server-file edits and kills all live
   panes** (they become revivable `dead` sessions, but still). `npm start` for
   daily use.
+- **A quick restart leaves an open Helm window's panes "disconnected".** A pane
+  reconnects its socket only when its session's status changes, or when you click
+  Reconnect. With auto-revive on, a restart is over in about 3 s, inside the page's
+  3 s poll, so the page never sees the panes die and they sit there disconnected.
+  Seen 2026-11-09: the server log had no `ws` "attached" line in the 17 minutes
+  after a restart. Reload the page (Ctrl+R) after every restart.
 - **Token injection:** the built `index.html` contains the placeholder
   `%%HELM_TOKEN%%`; the server `replaceAll`s it when serving `/`. Don't put
   that placeholder string anywhere else in the HTML (a comment containing it
@@ -512,6 +518,18 @@ Checked against a real Discord client on 2026-11-05, because the docs mislead:
   "Coding". Hence "Playing Coding with Helm".
 - **You can't see your own buttons.** Discord's docs say so: buttons on the card show
   only to other people, so it takes a friend or second account to check one.
+- **The member list's line can be changed, and it doesn't stick.** `status_display_type:
+  2` in SET_ACTIVITY makes member lists show the card's first line (`details`) under
+  the name instead of its title (checked 2026-11-10 on the owner's client: the task
+  line showed there, and Discord's echo kept the field). Leave it out of the next
+  update and the title comes back, so it never has to be reset explicitly.
+- **Discord drops what it won't take without an error.** An unknown image or field
+  simply goes missing from its echo of the card. That echo is the only evidence, so
+  Helm compares it with what it sent and logs `Discord dropped: …`.
+- **Your own profile popup can hide your own card.** Clicking your own name in the
+  member list showed the card folded into a thin bar under "Game Collection", while
+  the bottom-left avatar popup showed it in full. It's Discord's layout, not
+  something the card controls, so check from the avatar or a friend's account.
 - **Reported, not reproduced here:** browser Discord has no pipe, Discord's Activity
   Privacy setting can hide the card, and running only one of the two apps as
   Administrator can block the pipe. Check these first when a card won't appear.

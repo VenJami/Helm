@@ -15,6 +15,15 @@ All notable changes to Helm are documented here. Format follows
   talks to the Discord desktop app over a local pipe with no new dependency, comes
   back by itself when Discord restarts, and clears after 30 quiet minutes or if
   Helm stops. Turn it on in Appearance.
+- **Task lines: one sentence per pane about what it's doing.** Claude's quick model
+  reads each new prompt and writes a line like "Debugging the reported bug on
+  ticket 7". It shows in the notch in place of the first prompt, and on the
+  Discord card, and under your name in member lists, for projects whose names you
+  share. With several agents busy, the card takes turns, 20 seconds each. Replies
+  like "yes" and slash commands are skipped without a call. The
+  model is told to leave out names, emails, links, paths and keys, and the code
+  rejects a sentence that still has one. Costs well under a cent per prompt, on
+  that pane's own account. Off by default: Appearance > Task lines.
 - **The update notice now shows what changed, and can apply it.** Being behind
   `main` used to be one line naming the newest commit, with `git pull` printed
   as a reminder to go and do it yourself. It now lists every new commit's

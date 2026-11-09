@@ -88,6 +88,9 @@ cd server && npm run voice-bench  # review dictation raw/polished pairs side by 
                            #   (record them first: run the server with HELM_VOICE_BENCH=1)
 cd server && npm run voice-rough  # 24-case ADVERSARIAL bench for the polish prompt
                            #   (real claude, ~$0.04; run after editing POLISH_PROMPT)
+cd server && npm run task-rough   # 24-case ADVERSARIAL bench for task lines: leaks,
+                           #   injection, chit-chat (real claude, about a cent;
+                           #   run after editing taskLinePrompt or cleanTaskLine)
 cd server && npm run e2e   # real-claude end-to-end (spawn→hooks→usage→revive); needs
                            #   a logged-in claude, spends a few tokens, NOT in CI
 cd web && npm test         # vitest unit tests (accounts.ts usage math)

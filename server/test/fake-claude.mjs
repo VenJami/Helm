@@ -3,6 +3,8 @@
 // killed) and never touches the network. Helm's spawn args (--settings, -n …)
 // are irrelevant here and ignored. Exits cleanly on kill so node-pty teardown
 // stays quiet.
+import fs from 'node:fs';
+
 // `claude --version` — Helm's boot-time drift check calls this; answer at the
 // tested floor so the isolated test server reads as a healthy claude and exits.
 if (process.argv.includes('--version')) {
@@ -26,23 +28,51 @@ if (process.argv.includes('-p')) {
     // "ramble" in the transcript triggers an over-long reply, the signature of
     // a model answering the request instead of rewriting it.
     const dictation = /<dictation>\n([\s\S]*)\n<\/dictation>/.exec(prompt);
-    const result = dictation
-      ? /ramble/i.test(dictation[1])
-        ? `Here's the cleaned version: "${'and then it kept going. '.repeat(40)}"`
-        : `Here's the cleaned version: "${dictation[1].replace(/\bum\b,?\s*/gi, '').trim()}"`
-      : sawPrompt
-        ? '["cd api && npm start", "cd web && npm run watch"]'
-        : '[] (no prompt arrived on stdin)';
-    process.stdout.write(
-      JSON.stringify({
-        type: 'result',
-        subtype: 'success',
-        is_error: false,
-        total_cost_usd: 0.0123,
-        result,
-      }) + '\n',
+    // The task-line call (Task lines). The sentence is built from the prompt's
+    // LAST WORD, so every prompt gets its own line while the prompt itself never
+    // appears in it, which is what lets the Discord test search for the prompt.
+    // It comes back wrapped (lead-in, quotes, full stop) so the sanitizer does
+    // real work. Each call is logged so tests can count them. Trigger words:
+    // "leak" answers with an email, "skipme" with SKIP, "boom" fails outright,
+    // "slowly" takes 1.5 s.
+    const task = /<prompt>\n([\s\S]*)\n<\/prompt>/.exec(prompt);
+    const said = task?.[1].trim() ?? '';
+    const last = said.split(/\s+/).at(-1);
+    if (task && process.env.HELM_FAKE_TASK_LOG) {
+      fs.appendFileSync(process.env.HELM_FAKE_TASK_LOG, `${last}\n`);
+    }
+    if (task && /boom/i.test(said)) {
+      process.stderr.write('fake-claude: boom');
+      process.exit(1);
+    }
+    const result = task
+      ? /leak/i.test(said)
+        ? 'Status: Mailing the report to boss@client-name.com'
+        : /skipme/i.test(said)
+          ? 'SKIP'
+          : `Status: "Fixing the ${last} bug."`
+      : dictation
+        ? /ramble/i.test(dictation[1])
+          ? `Here's the cleaned version: "${'and then it kept going. '.repeat(40)}"`
+          : `Here's the cleaned version: "${dictation[1].replace(/\bum\b,?\s*/gi, '').trim()}"`
+        : sawPrompt
+          ? '["cd api && npm start", "cd web && npm run watch"]'
+          : '[] (no prompt arrived on stdin)';
+    setTimeout(
+      () => {
+        process.stdout.write(
+          JSON.stringify({
+            type: 'result',
+            subtype: 'success',
+            is_error: false,
+            total_cost_usd: 0.0123,
+            result,
+          }) + '\n',
+        );
+        process.exit(0);
+      },
+      task && /slowly/i.test(said) ? 1500 : 0,
     );
-    process.exit(0);
   });
 } else {
   process.stdout.write('fake-claude ready\r\n');

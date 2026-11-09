@@ -118,6 +118,10 @@ Open http://127.0.0.1:7777, add a project folder as a workspace, and hit
   while they work, like the VS Code presence extensions.
   It's off by default, and project names stay private unless you opt a project in.
   ([What does it share?](#faq))
+- **Task lines** — turn them on and Claude writes one line per prompt about what
+  each agent is doing ("Debugging the reported bug on ticket 7"). They show in
+  the notch, and on your Discord card for projects whose names you share. Well
+  under a cent per prompt, on that pane's own account.
 - **Make it yours** — dark or light theme with five accent presets, terminal
   font-size stepper, pane names & colors, PWA install (native-app feel, no
   Electron). Terminals stay dark in light mode so Claude's TUI stays legible.
@@ -199,7 +203,9 @@ Only what you can see on it: how many agents are working or waiting, a timer,
 Helm's logo and a link to this repo. It's off until you turn it on in Appearance,
 and it's public, so anyone who can see your profile can read it. A project's name
 appears only if you right-click that project and choose "Show name on Discord".
-Prompts, file paths, branches and account emails are never sent. It needs the
+With task lines on, those same projects also show the one-line sentence Claude
+wrote from their latest prompt, never the prompt itself. File paths, branches and
+account emails are never sent. It needs the
 Discord desktop app (browser Discord can't do this) and Discord's activity sharing
 turned on. The card goes away by itself after 30 quiet minutes, or if Helm stops.
 

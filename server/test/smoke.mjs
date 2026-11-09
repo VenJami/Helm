@@ -29,6 +29,9 @@ const wrapper = path.join(testDir, IS_WIN ? 'fake-claude.cmd' : 'fake-claude.sh'
 // Stand-in for cloudflared, so share links can be driven without the real
 // binary or any network (see fake-cloudflared.mjs).
 const cfWrapper = path.join(testDir, IS_WIN ? 'fake-cloudflared.cmd' : 'fake-cloudflared.sh');
+// The fake claude logs every task-line call here (the prompt's last word), so the
+// task-line tests count real calls instead of guessing from timing.
+const taskLog = path.join(tmp, 'task-calls.log');
 
 let child;
 // Stand-in for the GitHub releases + compare APIs, so both halves of the
@@ -75,7 +78,12 @@ const discord = {
   pongs: [],
   answer: 'ready', // how a handshake is answered: 'ready' | 'reject' | 'silent'
   refuseActivity: false,
+  // Fields left out of the echo, the way the real Discord quietly drops what it
+  // won't take (an image it can't load, a field it doesn't know).
+  dropFields: [],
 };
+const without = (obj, keys) =>
+  obj && Object.fromEntries(Object.entries(obj).filter(([k]) => !keys.includes(k)));
 const discordFrame = (op, payload) => {
   const body = Buffer.from(JSON.stringify(payload));
   const header = Buffer.alloc(8);
@@ -110,7 +118,12 @@ function onDiscordMessage(sock, op, msg) {
         1,
         discord.refuseActivity
           ? { cmd: msg.cmd, evt: 'ERROR', nonce: msg.nonce, data: { code: 4000, message: 'Nope' } }
-          : { cmd: msg.cmd, evt: null, nonce: msg.nonce, data: msg.args.activity },
+          : {
+              cmd: msg.cmd,
+              evt: null,
+              nonce: msg.nonce,
+              data: without(msg.args.activity, discord.dropFields),
+            },
       ),
     );
   }
@@ -203,6 +216,8 @@ async function tryBoot(port) {
     HELM_DISCORD_PIPE: discordPipe, // never the real Discord (see the stand-in above)
     HELM_DISCORD_APP_ID: 'test-app-id',
     HELM_DISCORD_TICK_MS: '100', // the card tests wait on the 5 s loop otherwise
+    HELM_DISCORD_ROTATE_MS: '300', // busy agents' turns on the card, rather than 20 s
+    HELM_FAKE_TASK_LOG: taskLog, // the fake claude counts task-line calls here
   };
   delete env.CLAUDE_CONFIG_DIR; // don't inherit a real default account
   child = spawn(process.execPath, ['index.mjs'], {
@@ -2442,6 +2457,171 @@ test('a held request that lapses to the pane reads waiting, even after earlier w
   await authed(`/sessions/${id}`, { method: 'DELETE' });
 });
 
+// ------------------------------------------------------------- task lines
+// One sentence per pane, written from each new prompt by claude's quick model
+// (the fake one here: see its <prompt> branch), driven through the real hook route.
+// Calls are counted from the fake's own log, never guessed from timing.
+
+const setTaskLines = (on) =>
+  authed('/settings', { method: 'PATCH', body: JSON.stringify({ taskLines: on }) });
+const typePrompt = (id, prompt) => hook(id, { hook_event_name: 'UserPromptSubmit', prompt });
+const lineOf = async (id) =>
+  (await (await authed('/sessions')).json()).find((s) => s.id === id)?.taskLine;
+const taskCalls = () => {
+  try {
+    return fs.readFileSync(taskLog, 'utf8').split('\n').filter(Boolean);
+  } catch {
+    return [];
+  }
+};
+const logLines = async (tag) =>
+  (await (await authed('/logs?after=0')).json()).entries
+    .filter((e) => e.tag === tag)
+    .map((e) => e.msg);
+
+test('task lines: off by default, then each real prompt becomes a sentence', async () => {
+  assert.equal((await (await authed('/settings')).json()).taskLines, false, 'off by default');
+  const { pane } = await paneInProject('tasks-basic');
+  const start = taskCalls().length;
+
+  // Off, a prompt reaches nobody. On, the reply comes back wrapped as
+  // `Status: "Fixing the alpha bug."` and is stored bare.
+  await typePrompt(pane.id, 'fix the redirect for zulu');
+  await setTaskLines(true);
+  await typePrompt(pane.id, 'please fix the login redirect for alpha');
+  await eventually(async () => (await lineOf(pane.id)) === 'Fixing the alpha bug', 'the sentence');
+  assert.deepEqual(taskCalls().slice(start), ['alpha'], 'nothing was sent while it was off');
+
+  // Replies and commands never reach the model. Followed by a real prompt, so
+  // "no call" is measured against a call that did happen.
+  let before = taskCalls().length;
+  for (const p of ['yes do it', 'continue', '/compact', 'ok', 'sounds good thanks']) {
+    await typePrompt(pane.id, p);
+  }
+  await typePrompt(pane.id, 'now tidy up the settings page for bravo');
+  await eventually(async () => (await lineOf(pane.id)) === 'Fixing the bravo bug', 'the next one');
+  assert.deepEqual(taskCalls().slice(before), ['bravo'], 'one call, for the one real prompt');
+
+  // A reply carrying an email, a SKIP and a failed call each keep the sentence.
+  for (const [p, why] of [
+    ['send the report out, leak charlie', 'it contained an email address'],
+    ['nothing to do here skipme delta', 'nothing to describe'],
+    ['this one goes boom echo', 'claude gave no answer'],
+  ]) {
+    before = (await logLines('task')).length;
+    await typePrompt(pane.id, p);
+    await eventually(
+      async () => (await logLines('task')).slice(before).some((m) => m.includes(why)),
+      `"${why}" for "${p}"`,
+    );
+  }
+  assert.equal(await lineOf(pane.id), 'Fixing the bravo bug', 'kept through all three');
+  for (const m of await logLines('task')) {
+    assert.ok(!/leak charlie|skipme delta|boom echo/.test(m), `a prompt reached the log: ${m}`);
+  }
+
+  // Saved with the pane, so a restart keeps it.
+  await eventually(() => {
+    const saved = JSON.parse(fs.readFileSync(path.join(helmDir, 'sessions.json'), 'utf8'));
+    return saved.sessions.find((s) => s.id === pane.id)?.taskLine === 'Fixing the bravo bug';
+  }, 'the sentence on disk');
+
+  await authed(`/sessions/${pane.id}`, { method: 'DELETE' });
+  await setTaskLines(false);
+});
+
+test('task lines: the newest prompt wins, /clear empties, and off clears them all', async () => {
+  await setTaskLines(true);
+  const { dir, pane } = await paneInProject('tasks-order');
+
+  // A slow answer to an older prompt must not overwrite the newer one's.
+  await typePrompt(pane.id, 'slowly work through the first change for foxtrot');
+  await typePrompt(pane.id, 'then handle the second change for golf');
+  await eventually(async () => (await lineOf(pane.id)) === 'Fixing the golf bug', 'the newer one');
+  await sleep(1700); // the slow answer arrives inside this window and must be dropped
+  assert.equal(await lineOf(pane.id), 'Fixing the golf bug');
+
+  // The same prompt in two panes of one project, as a broadcast sends it: one call.
+  const twin = await (
+    await authed('/sessions', { method: 'POST', body: JSON.stringify({ workspace: dir }) })
+  ).json();
+  const before = taskCalls().length;
+  await typePrompt(pane.id, 'rename the export button for hotel');
+  await eventually(async () => (await lineOf(pane.id)) === 'Fixing the hotel bug', 'pane one');
+  await typePrompt(twin.id, 'rename the export button for hotel');
+  await eventually(async () => (await lineOf(twin.id)) === 'Fixing the hotel bug', 'pane two');
+  assert.equal(taskCalls().length, before + 1, 'one call for the same prompt in the same project');
+
+  // /clear starts the conversation over; a plain resume does not.
+  await hook(pane.id, { hook_event_name: 'SessionStart', source: 'clear' });
+  assert.equal(await lineOf(pane.id), null);
+  await hook(twin.id, { hook_event_name: 'SessionStart', source: 'resume' });
+  assert.equal(await lineOf(twin.id), 'Fixing the hotel bug');
+
+  // A non-boolean is refused; off clears every pane's sentence.
+  const bad = await authed('/settings', {
+    method: 'PATCH',
+    body: JSON.stringify({ taskLines: 'yes' }),
+  });
+  assert.equal(bad.status, 400);
+  await setTaskLines(false);
+  assert.equal(await lineOf(twin.id), null, 'off means off everywhere');
+
+  for (const id of [pane.id, twin.id]) await authed(`/sessions/${id}`, { method: 'DELETE' });
+});
+
+test('task lines: which prompts are worth a call, and which replies are fit to show', async () => {
+  const { isTaskPrompt, cleanTaskLine } = await import('../src/claude.mjs');
+  for (const p of [
+    'fix the login redirect on ticket 7',
+    'great, now add tests for it',
+    'why does CI fail on main?',
+  ]) {
+    assert.equal(isTaskPrompt(p), true, p);
+  }
+  for (const p of [
+    'yes do it',
+    'ok go ahead then',
+    'continue',
+    '/clear',
+    '<command-name>/x</command-name>',
+    'sounds good thanks',
+    '',
+    null,
+  ]) {
+    assert.equal(isTaskPrompt(p), false, String(p));
+  }
+
+  const line = (reply) => cleanTaskLine(reply).line;
+  assert.equal(
+    line('Status: "Fixing the login bug on ticket 7."'),
+    'Fixing the login bug on ticket 7',
+  );
+  assert.equal(line('**Status:** Debugging the reported bug.'), 'Debugging the reported bug');
+  assert.equal(
+    line('```\nAdding retry to the update check\n```'),
+    'Adding retry to the update check',
+  );
+  assert.equal(line('fixing the user avatar upload'), 'Fixing the user avatar upload');
+  // Each of these could carry something private onto a public card.
+  for (const [reply, what] of [
+    ['Updating https://acme.com docs', 'a link'],
+    ['Emailing bob@acme.com about the release', 'an email address'],
+    ['Editing C:\\Users\\alex\\notes', 'a file path'],
+    ['Fixing the src/app.tsx crash', 'a file path'],
+    ['Calling 09171234567 about the outage', 'a long number'],
+    ['Rotating key sk-ant-api03-abcdefghijklmnopqrstuvwxyz', 'a key-like string'],
+  ]) {
+    assert.deepEqual(cleanTaskLine(reply), { line: null, why: `it contained ${what}` }, reply);
+  }
+  assert.equal(cleanTaskLine('Is this a bug in the parser?').why, 'it was a question');
+  assert.equal(cleanTaskLine('I cannot describe this prompt').why, 'it talked about the prompt');
+  assert.equal(cleanTaskLine('SKIP').why, 'nothing to describe');
+  assert.equal(cleanTaskLine('Fixing').why, 'it was 1 word long');
+  const long = line('Refactoring the notch window resize logic so the strip stops jittering');
+  assert.ok(long.length <= 61 && long.endsWith('…'), `cut at a word: ${long}`);
+});
+
 // ------------------------------------------------------- the Discord card
 // Last in the file because these clear every pane first: the counts on the card
 // are the whole point, and a pane left over from an earlier test would skew them.
@@ -2470,6 +2650,7 @@ async function discordFresh() {
     pongs: [],
     answer: 'ready',
     refuseActivity: false,
+    dropFields: [],
   });
 }
 async function paneInProject(name) {
@@ -2646,6 +2827,93 @@ test('discord: a project name is private until opted in, and nothing else ever l
   }
 
   await authed(`/sessions/${pane.id}`, { method: 'DELETE' });
+  await setDiscord(false);
+});
+
+test('discord: a task line reaches the card only for a shared project', async () => {
+  await discordFresh();
+  await setTaskLines(true);
+  const { ws, pane } = await paneInProject('discord-tasks');
+  const prompt = 'please sort out the flaky upload for kilo';
+  await typePrompt(pane.id, prompt);
+  await eventually(async () => (await lineOf(pane.id)) === 'Fixing the kilo bug', 'the sentence');
+
+  // Private project: the plain working card, and the sentence is nowhere in it.
+  await setDiscord(true);
+  await eventually(() => lastCard()?.state === 'Agents working', 'the private card');
+  assert.equal(lastCard().details, undefined);
+  assert.equal(lastCard().status_display_type, undefined, 'the member list keeps the title');
+  for (const frame of discord.raw) {
+    assert.ok(!frame.includes('kilo'), `a private project's sentence leaked: ${frame}`);
+  }
+
+  // Shared: the sentence leads, its project heads line 2, the member list shows it.
+  await shareName(ws.id, true);
+  await eventually(() => lastCard()?.details === 'Fixing the kilo bug', 'the sentence on the card');
+  assert.equal(lastCard().state, 'discord-tasks · Agents working');
+  assert.deepEqual(lastCard().party.size, [1, 1], 'still drawn as (1 of 1)');
+  assert.equal(lastCard().status_display_type, 2, 'the member list shows line 1');
+
+  // Between tasks the sentence would describe finished work: the usual card.
+  await hook(pane.id, { hook_event_name: 'Stop' });
+  await eventually(() => lastCard()?.details === 'In discord-tasks', 'the between-tasks card');
+  assert.equal(lastCard().status_display_type, undefined);
+
+  // Discord quietly leaving a field out is noticed rather than assumed away.
+  discord.dropFields = ['status_display_type'];
+  await hook(pane.id, { hook_event_name: 'UserPromptSubmit' }); // working again, same sentence
+  await eventually(() => lastCard()?.status_display_type === 2, 'the sentence card again');
+  await eventually(
+    async () => (await logLines('discord')).includes('Discord dropped: status_display_type'),
+    'the dropped field to be logged',
+  );
+  discord.dropFields = [];
+
+  // Task lines off: the sentence goes, shared project or not.
+  await setTaskLines(false);
+  await eventually(() => lastCard()?.details === 'Working on discord-tasks', 'the sentence to go');
+  assert.equal(lastCard().status_display_type, undefined);
+
+  // The prompt itself never reached Discord at any point.
+  for (const frame of discord.raw) {
+    assert.ok(!frame.includes(prompt), `the prompt reached Discord: ${frame}`);
+  }
+  await authed(`/sessions/${pane.id}`, { method: 'DELETE' });
+  await setDiscord(false);
+});
+
+test('discord: several busy agents take turns on the card', async () => {
+  await discordFresh();
+  await setTaskLines(true);
+  const { ws, dir, pane } = await paneInProject('discord-turns');
+  const other = await (
+    await authed('/sessions', { method: 'POST', body: JSON.stringify({ workspace: dir }) })
+  ).json();
+  await typePrompt(pane.id, 'please sort out the cache headers for lima');
+  await typePrompt(other.id, 'please sort out the retry logic for mike');
+  await eventually(
+    async () =>
+      (await lineOf(pane.id)) === 'Fixing the lima bug' &&
+      (await lineOf(other.id)) === 'Fixing the mike bug',
+    'both sentences',
+  );
+  await shareName(ws.id, true);
+  await setDiscord(true);
+
+  // Turns run every 300 ms here (HELM_DISCORD_ROTATE_MS), so both come round.
+  const shown = () => new Set(discord.activities.filter(Boolean).map((a) => a.details));
+  await eventually(
+    () => shown().has('Fixing the lima bug') && shown().has('Fixing the mike bug'),
+    'each agent to get a turn',
+  );
+  for (const card of discord.activities.filter((a) => a?.details?.startsWith('Fixing the'))) {
+    assert.equal(card.state, 'discord-turns · Agents working');
+    assert.deepEqual(card.party.size, [2, 2], 'the count stays put while the sentence turns');
+    assert.equal(card.status_display_type, 2, 'and the member list follows each turn');
+  }
+
+  for (const id of [pane.id, other.id]) await authed(`/sessions/${id}`, { method: 'DELETE' });
+  await setTaskLines(false);
   await setDiscord(false);
 });
 
@@ -2832,6 +3100,74 @@ test('discord: what the card says', async () => {
   // A long name is cut, not wrapped, and never mid-character.
   const long = '😀'.repeat(50);
   assert.match(say(pane('working', 0, long)), new RegExp(`^Working on ${'😀'.repeat(40)} /`, 'u'));
+
+  // Task lines: the named pane's sentence leads while it works or waits, its
+  // project heads line 2, and the member list shows the sentence.
+  const tasked = (activity, project, task) => ({ ...pane(activity, 0, project), task });
+  assert.equal(
+    say(tasked('working', 'shop', 'Fixing the cart total'), pane('idle', 0)),
+    'Fixing the cart total / shop · Agents working (1 of 2) · [working] · list: line 1',
+  );
+  assert.equal(
+    say(tasked('waiting', 'shop', 'Fixing the cart total')),
+    'Fixing the cart total / shop · Waiting on me (1 of 1) · [waiting] · list: line 1',
+  );
+  assert.equal(
+    say(tasked('idle', 'shop', 'Fixing the cart total')),
+    'In shop / Between tasks · [idle]',
+    'between tasks, finished work is not claimed',
+  );
+  // A sentence with no shared project behind it is never used (presencePanes never
+  // sends one, and the card doesn't trust that alone).
+  assert.equal(
+    say(tasked('working', null, 'Fixing the cart total')),
+    'Agents working (1 of 1) · [working]',
+  );
+  // The named pane's own sentence, not some other pane's.
+  assert.match(
+    say(
+      tasked('working', 'a', 'Fixing the old thing'),
+      tasked('idle', 'b', 'Fixing the new thing'),
+    ),
+    /^Fixing the old thing \/ a · /,
+  );
+
+  // Several busy agents take turns on line 1, 20 s each, each with its own project
+  // on line 2. A waiting pane sits out while others work, so line 1 never shows a
+  // finished task beside "Agents working", and a repeated sentence gets one turn.
+  const turnAt = (k, panes) => {
+    const t = (Math.floor(now / 20_000) + k) * 20_000 + 1; // just inside turn k
+    return describeCard(buildActivity(panes, null, t).activity);
+  };
+  const busy = [
+    { ...pane('working', 9, 'a'), task: 'Fixing the old thing' },
+    { ...pane('working', 1, 'b'), task: 'Adding the new thing' },
+    { ...pane('waiting', 0, 'a'), task: 'Waiting on a reply' },
+    { ...pane('working', 0, 'b'), task: 'Adding the new thing' }, // a broadcast twin
+  ];
+  const seen = [0, 1, 2, 3].map((k) => turnAt(k, busy));
+  assert.deepEqual(
+    new Set(seen),
+    new Set([
+      'Fixing the old thing / a · Agents working (3 of 4) · [waiting] · list: line 1',
+      'Adding the new thing / b · Agents working (3 of 4) · [waiting] · list: line 1',
+    ]),
+    'both working sentences take turns, and nothing else does',
+  );
+  assert.notEqual(seen[0], seen[1], 'the turns alternate');
+  assert.equal(seen[0], seen[2], 'two turns, not three: the repeated sentence counts once');
+  // With nothing working, the agents waiting on me take the turns instead.
+  const asking = [
+    { ...pane('waiting', 5, 'a'), task: 'Fixing the old thing' },
+    { ...pane('waiting', 2, 'a'), task: 'Adding the new thing' },
+  ];
+  assert.deepEqual(
+    new Set([0, 1].map((k) => turnAt(k, asking))),
+    new Set([
+      'Fixing the old thing / a · Waiting on me (2 of 2) · [waiting] · list: line 1',
+      'Adding the new thing / a · Waiting on me (2 of 2) · [waiting] · list: line 1',
+    ]),
+  );
 
   // The images: the logo turns only while agents work; the dot follows the state;
   // the hover text spells the counts out.
