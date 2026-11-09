@@ -90,6 +90,9 @@ export interface Workspace {
   // the escape hatch for a project you never want glancing at; the notch drops
   // long-idle panes on its own without any of this.
   notch?: boolean;
+  // Show this project's NAME on the public Discord card? Absent = no, the
+  // opposite of the notch: a new project must never go public by accident.
+  discord?: boolean;
 }
 
 // Per-workspace dev-server liveness for the sidebar. Only workspaces with a
@@ -174,6 +177,18 @@ export interface HelmSettings {
   // ...and when it IS on screen, rests as a strip of status lights, expanding
   // to the full list when the cursor reaches it.
   notchAutoCompact: boolean;
+  // Show a "Playing Helm" card on the user's Discord profile. Public, so off by
+  // default (server/src/discord.mjs).
+  discordPresence: boolean;
+}
+
+// GET /api/discord: where the card stands, for the status line beside its toggle.
+export interface DiscordStatus {
+  enabled: boolean;
+  connected: boolean;
+  connecting: boolean; // looking for Discord, or waiting for it to answer
+  user: string | null; // the Discord display name, once connected
+  error: string | null; // why not, when Discord gave a reason
 }
 
 // claude-CLI drift diagnostics — Helm reads undocumented claude formats, so

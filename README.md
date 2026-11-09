@@ -113,6 +113,10 @@ Open http://127.0.0.1:7777, add a project folder as a workspace, and hit
   a backend *and* a frontend watcher — get one command each, in their own
   terminal panes that stay out of your way in the tray until you open them, so
   a dev server that fell over still shows why.
+- **Show it on Discord** — an optional "Playing Helm" card on your Discord
+  profile with how many agents are working, like the VS Code presence extensions.
+  It's off by default, and project names stay private unless you opt a project in.
+  ([What does it share?](#faq))
 - **Make it yours** — dark or light theme with five accent presets, terminal
   font-size stepper, pane names & colors, PWA install (native-app feel, no
   Electron). Terminals stay dark in light mode so Claude's TUI stays legible.
@@ -174,10 +178,10 @@ No. One local Node server on loopback; state stays in `%LOCALAPPDATA%\Helm`.
 No telemetry, ever. Helm's only outbound requests on its own are two anonymous
 GitHub calls that ask whether there is a newer Helm: the latest release, and how
 far `main` is ahead of the commit you have. They send nothing about you (only
-that public commit id), and `HELM_NO_UPDATE_CHECK=1` turns them off. Two
-features do leave your machine, both only when you ask them to: a public share
-link (which is the whole point of it) and the mic — see the
-next answer and [SECURITY.md](SECURITY.md).
+that public commit id), and `HELM_NO_UPDATE_CHECK=1` turns them off. Three
+features do leave your machine, each only when you ask: a public share link
+(which is the whole point of it), the mic, and the Discord card. See the next
+answers and [SECURITY.md](SECURITY.md).
 
 **Where does my voice go when I use the mic?**
 Speech-to-text is done by your **browser**, not by Helm and not by Claude
@@ -188,6 +192,15 @@ only when you stop dictating. Nothing is written to disk unless you explicitly
 set `HELM_VOICE_BENCH=1`. The button only appears where the browser supports
 the API, and if you'd rather no audio ever left the machine, don't press it —
 everything else works exactly the same.
+
+**What does the Discord card share?**
+Only what you can see on it: how many agents are working or waiting, a timer,
+Helm's logo and a link to this repo. It's off until you turn it on in Appearance,
+and it's public, so anyone who can see your profile can read it. A project's name
+appears only if you right-click that project and choose "Show name on Discord".
+Prompts, file paths, branches and account emails are never sent. It needs the
+Discord desktop app (browser Discord can't do this) and Discord's activity sharing
+turned on. The card goes away by itself after 30 quiet minutes, or if Helm stops.
 
 **The browser crashed / I closed the tab mid-task. Did I lose the session?**
 No — sessions live on the server, and the pane repaints from a replay buffer

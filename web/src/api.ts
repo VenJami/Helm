@@ -7,6 +7,7 @@ import type {
   GitInfo,
   HelmSettings,
   LogsResponse,
+  DiscordStatus,
   NotchState,
   ProfilesInfo,
   ServerInfo,
@@ -171,6 +172,8 @@ export const api = {
   updateSettings: (patch: Partial<HelmSettings>) =>
     req<HelmSettings>('/settings', { method: 'PATCH', body: JSON.stringify(patch) }),
 
+  getDiscord: () => req<DiscordStatus>('/discord'),
+
   getNotch: () => req<NotchState>('/notch'),
   // Launches the floating notch if it isn't already up. One window per machine;
   // asking twice is harmless.
@@ -193,6 +196,7 @@ export const api = {
       port?: number | null;
       startCommands?: string[] | null;
       notch?: boolean;
+      discord?: boolean;
     },
   ) => req<Workspace>(`/workspaces/${id}`, { method: 'PATCH', body: JSON.stringify(patch) }),
   // ▶ — run the project's start command(s), one dev pane each (created on first

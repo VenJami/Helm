@@ -14,7 +14,9 @@ Browser (React + xterm.js grid) <--WS/REST--> Node server <--PTY--> claude.cmd
   cloudflared quick tunnels — read its header comment before touching it, it
   is the one place Helm leaves loopback) · `update.mjs` (is a newer Helm
   released, and how far is `main` ahead of this checkout? two anonymous GitHub
-  calls, off with `HELM_NO_UPDATE_CHECK=1`).
+  calls, off with `HELM_NO_UPDATE_CHECK=1`) · `discord.mjs` (the optional Discord
+  profile card, over the Discord app's local pipe; read its header first, the card
+  is public).
   Sessions map (id → {pty, ring buffer, sockets, name, color, activity,
   claudeSessionId, transcriptPath…}), REST under `/api`, WS attach, hook
   endpoint, usage parsing, persistence.
@@ -177,7 +179,9 @@ Browser (React + xterm.js grid) <--WS/REST--> Node server <--PTY--> claude.cmd
   (dump raw hook payloads), `HELM_NO_UPDATE_CHECK=1` (never contact GitHub),
   `HELM_REPO` / `HELM_UPDATE_URL` / `HELM_COMPARE_URL` / `HELM_REPO_BRANCH`
   (point the update check elsewhere — a fork, another tracked branch, or the
-  smoke test's stub), `HELM_STUCK_AFTER_MS` (how long a
+  smoke test's stub), `HELM_DISCORD_APP_ID` (run the card under another Discord
+  application, for a fork), `HELM_DISCORD_PIPE` / `HELM_DISCORD_TICK_MS` (the smoke
+  test's stand-in pipe and a faster loop), `HELM_STUCK_AFTER_MS` (how long a
   `working` pane may go quiet before it reads idle, default 2 minutes; the tests
   shorten it). Log entries carry a coarse `level` (`error` for
   error/drift tags, else `info`). On SIGINT/SIGTERM the server persists sessions
@@ -228,7 +232,7 @@ Browser (React + xterm.js grid) <--WS/REST--> Node server <--PTY--> claude.cmd
   time rather than polled). Spawned detached and unref'd, so the notch outlives
   the request and a Helm shutdown doesn't close a window you opened on purpose.
 - `GET/PATCH /api/settings` — server toggles:
-  `{autoRevive, notchFollowsHelm, notchAutoHide}`.
+  `{autoRevive, notchFollowsHelm, notchAutoCompact, discordPresence}`.
   `notchFollowsHelm` lives here rather than in localStorage because the native
   notch runs in its own WebView2 profile and shares no storage with the browser;
   the notch page polls it and relays it to the host, so the auth token stays in
@@ -274,6 +278,30 @@ Browser (React + xterm.js grid) <--WS/REST--> Node server <--PTY--> claude.cmd
   CLAUDE_INTERNALS §6 for the exact invocation). Costs a real few cents and
   takes ~5–20 s. It **only suggests**: nothing is saved and nothing is spawned,
   because the UI shows the commands for the owner to accept first.
+### Discord presence (the profile card)
+Off by default (`discordPresence` in settings), because the card is public. See
+SECURITY.md and the header of `server/src/discord.mjs`.
+- `GET /api/discord` → `{enabled, connected, connecting, user, error}`, for the
+  status line beside the toggle in Appearance. `connected:false` with no `error`
+  and not `connecting` means the Discord desktop app simply isn't running.
+- `PATCH /api/workspaces/:id {discord:boolean}` opts a project's NAME onto the card.
+  Stored only when `true`, the opposite of `notch`: absent means private, so a new
+  project cannot go public by accident, and POST ignores the field.
+- **The privacy boundary is `presencePanes()` in index.mjs:** discord.mjs receives
+  only `{activity, since, project}` per running claude pane, with `project` null
+  unless opted in. Dev panes are excluded.
+- **One 5 s timer drives everything:** work out the card (`buildActivity`, pure),
+  send it only if it changed, retry the pipe every 15 s while it's down. That caps
+  sends at 4 per 20 s, inside Discord's limit of 5, with no throttling code. Every
+  card is logged under the `discord` tag in the 🐞 drawer.
+- **The card** shows while an agent is working or a pane changed state in the last
+  30 minutes, otherwise it's cleared. It reads the same settled status as the pane
+  badge, so an interrupted turn stops reading `working` on both (see "Hooks →
+  status/usage"). The elapsed timer starts when the card appears and holds until it
+  clears.
+- **Discord setup, for a fork:** an application named as the card should read
+  ("Playing <name>"), with art named `icon-512` under Rich Presence > Art Assets.
+
 ### Public share links (Cloudflare quick tunnels)
 Publishes a **project's dev server** — never Helm's own port — to the internet.
 The URLs are unauthenticated, so the guards are load-bearing; see SECURITY.md
@@ -372,7 +400,7 @@ output for 2 minutes (`HELM_STUCK_AFTER_MS`) is reported as `idle` with
 output lasting 8 s or more with no gap over 1.5 s, so a redraw from attaching,
 resizing or focusing a pane doesn't bring it back, while real work resuming does.
 Everything outside the hook route reads this rather than the raw field
-(`sessionInfo`). A new prompt always restarts the clock.
+(`sessionInfo`, `presencePanes`). A new prompt always restarts the clock.
 
 The same timing closes the other end of a wait: nothing marks it when you answer a
 question IN THE PANE. A `waiting` pane is silent, so a sustained run that STARTED

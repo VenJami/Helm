@@ -209,6 +209,7 @@ export function App() {
   // this browser's localStorage.
   const [notchFollowsHelm, setNotchFollowsHelm] = useState(true);
   const [notchAutoCompact, setNotchAutoCompact] = useState(true);
+  const [discordPresence, setDiscordPresence] = useState(false);
 
   // Server console window (start-helm.cmd terminal) show/hide toggle.
   // Whether this machine can open the native notch (Windows + built).
@@ -344,6 +345,7 @@ export function App() {
         setAutoRevive(s.autoRevive);
         setNotchFollowsHelm(s.notchFollowsHelm);
         setNotchAutoCompact(s.notchAutoCompact);
+        setDiscordPresence(s.discordPresence);
       })
       .catch(() => {});
   }, [refreshCategories]);
@@ -374,6 +376,17 @@ export function App() {
     const before = notchAutoCompact;
     setNotchAutoCompact(on);
     return patchNotch({ notchAutoCompact: on }, () => setNotchAutoCompact(before));
+  };
+
+  const setDiscord = async (on: boolean) => {
+    const before = discordPresence;
+    setDiscordPresence(on);
+    try {
+      setDiscordPresence((await api.updateSettings({ discordPresence: on })).discordPresence);
+    } catch (err) {
+      setDiscordPresence(before);
+      toast.error((err as Error).message);
+    }
   };
 
   const toggleAutoRevive = async () => {
@@ -1125,7 +1138,7 @@ export function App() {
       key: 'appearance',
       label: 'Appearance…',
       icon: 'palette',
-      keywords: 'theme dark light accent colour color font',
+      keywords: 'theme dark light accent colour color font discord presence status',
       run: () => setDialog({ kind: 'appearance' }),
     });
     list.push({
@@ -1307,6 +1320,18 @@ export function App() {
               ws.map((w) => (w.id === id ? { ...w, notch: show ? undefined : false } : w)),
             );
             void api.updateWorkspace(id, { notch: show }).catch((err: Error) => {
+              toast.error(err.message);
+              void api.listWorkspaces().then(setWorkspaces);
+            });
+          }}
+          discordPresence={discordPresence}
+          onToggleDiscord={(id, show) => {
+            // Optimistic, like the notch above: the server picks it up on its
+            // next tick, and the menu label should not wait for a round trip.
+            setWorkspaces((ws) =>
+              ws.map((w) => (w.id === id ? { ...w, discord: show ? true : undefined } : w)),
+            );
+            void api.updateWorkspace(id, { discord: show }).catch((err: Error) => {
               toast.error(err.message);
               void api.listWorkspaces().then(setWorkspaces);
             });
@@ -1730,6 +1755,9 @@ export function App() {
           onNotchFollowsHelm={(on) => void setNotchFollows(on)}
           notchAutoCompact={notchAutoCompact}
           onNotchAutoCompact={(on) => void setNotchCompact(on)}
+          discordPresence={discordPresence}
+          onDiscordPresence={(on) => void setDiscord(on)}
+          sharedProjects={workspaces.filter((w) => w.discord).map((w) => w.name)}
           onClose={closeDialog}
         />
       )}

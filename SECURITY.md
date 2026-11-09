@@ -139,6 +139,40 @@ and installs nothing. Being straight about the trade:
 If you would rather no audio ever left the machine, don't use the button — every
 other part of Helm works exactly as before without it.
 
+## Discord presence (what leaves your machine)
+
+Helm can put a "Playing Helm" card on your Discord profile, the way the VS Code
+presence extensions do. After the share links and the mic, this is the third
+thing in Helm that leaves your machine, so here is exactly what it does:
+
+- **It is off until you turn it on.** With the setting off, Helm never opens the
+  connection at all. Appearance > Discord turns it on and off, and off takes
+  effect immediately.
+- **The card is public.** Anyone who can see your Discord profile can read it,
+  including people who only share a server with you.
+- **Helm itself sends nothing over the network.** It connects to the Discord
+  desktop app through a local pipe (`discord-ipc-0` to `9`) and says what the card
+  should read; the Discord app publishes it. No new port is opened and nothing
+  listens for incoming connections. What Discord does with the text after that is
+  covered by Discord's own policies, not by Helm.
+- **What is on the card:** how many agents are working, waiting or open, an elapsed
+  timer, Helm's logo, and a link to this repository.
+- **Project names are opt-in, per project.** A name appears only after you
+  right-click that project and choose "Show name on Discord". New projects are
+  private, and a project cannot be created public.
+- **Never sent:** prompts or task titles, file paths, git branches, account emails,
+  tool details, or pane names. This is enforced by construction: the module that
+  talks to Discord (`server/src/discord.mjs`) is never handed any of them, and a
+  smoke test searches every byte sent to a stand-in Discord for them.
+- **You can check what went out.** Every card is written to the debug drawer.
+- **The card clears itself** after 30 minutes with nothing happening, and when Helm
+  stops or crashes, because Discord takes the card down when the connection drops.
+
+The application id in the source is public by design, like the one VS Code
+extensions ship. Helm has no Discord credentials and never asks for your login. A
+malicious local process could pretend to be Discord's pipe and read the card text,
+but that is the out-of-scope case below, and it would learn only what the card says.
+
 ## Approving tool calls from the floating HUD
 
 The agent HUD can answer a pane's permission prompt ("may I run this?") without

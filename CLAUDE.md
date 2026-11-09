@@ -61,6 +61,7 @@ helm/
 │   │                       #   (ALL claude-internals: parsing/pricing/drift)
 │   │                       #   · tunnel.mjs (public share links — leaves loopback)
 │   │                       #   · update.mjs (newer release? behind main?)
+│   │                       #   · discord.mjs (the optional Discord profile card)
 │   └── hook-post.mjs       # runs inside panes; relays Claude Code hook events
 ├── desktop/                # OPTIONAL native notch window (C#/WPF, Windows-only)
 │   ├── start-notch.cmd     #   double-click: builds on first run, then launches

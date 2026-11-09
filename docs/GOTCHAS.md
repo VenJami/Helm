@@ -478,6 +478,43 @@ Related, in the smoke suite: the MAIN test server takes its data dir from
 `HELM_DATA_DIR` and theirs is the dir itself. `persistedSessions(tmp)` silently
 returns `[]` against the main server — pass `path.join(tmp, 'Helm')`.
 
+## Discord presence: what the real client actually does
+Checked against a real Discord client on 2026-11-05, because the docs mislead:
+
+- **`SET_ACTIVITY` over the pipe needs no OAuth.** Discord's RPC page says every
+  command needs authentication (error 4006). Handshake, wait for READY, send:
+  accepted, every time.
+- **Dropping the connection clears the card**, with no goodbye needed, so a hard
+  crash can't leave a stale card behind. `activity: null` clears it too.
+- **A bad application id is a CLOSE frame** (opcode 2),
+  `{code: 4000, message: 'Invalid Client ID'}`, then the pipe closes.
+- **`timestamps.start` takes seconds or milliseconds.** Discord's reply shows seconds
+  multiplied up to milliseconds.
+- **An unknown image name fails SILENTLY, which cost a debugging round.** No error,
+  and the card just has no art. The reply is the tell: `assets.large_image` comes
+  back as an id when the name resolved and is missing when it didn't. To see what an
+  application really has, with no auth:
+  `GET https://discord.com/api/v10/oauth2/applications/<id>/assets` →
+  `[{id, type, name}]`. The portal's "Invite Image" slot is NOT the art list: an
+  image there gives a `cover_image` on the app and still no art.
+- **You can't see your own buttons.** Discord's docs say so: buttons on the card show
+  only to other people, so it takes a friend or second account to check one.
+- **Reported, not reproduced here:** browser Discord has no pipe, Discord's Activity
+  Privacy setting can hide the card, and running only one of the two apps as
+  Administrator can block the pipe. Check these first when a card won't appear.
+
+**Three testing traps from building this:**
+1. **The real Discord is one setting away.** Only the smoke suite's main server is
+   pinned to the stand-in. An aside server that turns presence on must be given
+   `HELM_DISCORD_PIPE` too, or it publishes to the real profile of whoever runs it.
+2. **A helper that resets state can hide what you're testing.** The "off by default"
+   check first ran after `discordFresh()`, which switches presence off, so it could
+   not fail. Breaking the code on purpose is what exposed it: temporarily flip the
+   default and watch the test go red.
+3. **Check a long-running test really ran long.** A "run a 150 s command" measurement
+   came back with a reassuring number after only 13 s, because the command never
+   ran. Assert on the duration, and read what the pane actually did.
+
 ## `working` can be a lie: Esc fires no hook
 Claude sends nothing when Esc interrupts a turn: no `Stop`, no `Notification`. The
 pane read `working` until its next prompt, for 10 minutes and counting when measured,

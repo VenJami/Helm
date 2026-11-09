@@ -58,6 +58,90 @@ let ghCompare = {
     },
   ],
 };
+// Stand-in for the Discord desktop app's local pipe, so the presence card can be
+// driven without Discord and without publishing anything (HELM_DISCORD_PIPE pins
+// the server to it). `raw` keeps every JSON body the server sent, unparsed,
+// because that is what the privacy test has to search.
+const discordPipe = IS_WIN
+  ? `\\\\.\\pipe\\helm-smoke-discord-${process.pid}`
+  : path.join(tmp, 'discord-ipc-test');
+const discord = {
+  server: null,
+  sockets: new Set(),
+  connections: 0,
+  handshakes: [],
+  activities: [], // the activity of every SET_ACTIVITY, in order; null = cleared
+  raw: [],
+  pongs: [],
+  answer: 'ready', // how a handshake is answered: 'ready' | 'reject' | 'silent'
+  refuseActivity: false,
+};
+const discordFrame = (op, payload) => {
+  const body = Buffer.from(JSON.stringify(payload));
+  const header = Buffer.alloc(8);
+  header.writeUInt32LE(op, 0);
+  header.writeUInt32LE(body.length, 4);
+  return Buffer.concat([header, body]);
+};
+function onDiscordMessage(sock, op, msg) {
+  if (op === 4) discord.pongs.push(msg);
+  if (op === 0) {
+    discord.handshakes.push(msg);
+    if (discord.answer === 'reject') {
+      sock.end(discordFrame(2, { code: 4000, message: 'Invalid Client ID' }));
+    } else if (discord.answer === 'ready') {
+      const ready = discordFrame(1, {
+        cmd: 'DISPATCH',
+        evt: 'READY',
+        data: { v: 1, user: { username: 'tester', global_name: 'Test Human' } },
+      });
+      // In two pieces, cut inside the 8-byte header: a pipe owes nobody whole
+      // messages, so this is what proves the server reassembles them.
+      sock.write(ready.subarray(0, 5));
+      setTimeout(() => {
+        if (!sock.destroyed) sock.write(ready.subarray(5));
+      }, 20);
+    }
+  }
+  if (op === 1 && msg.cmd === 'SET_ACTIVITY') {
+    discord.activities.push(msg.args.activity);
+    sock.write(
+      discordFrame(
+        1,
+        discord.refuseActivity
+          ? { cmd: msg.cmd, evt: 'ERROR', nonce: msg.nonce, data: { code: 4000, message: 'Nope' } }
+          : { cmd: msg.cmd, evt: null, nonce: msg.nonce, data: msg.args.activity },
+      ),
+    );
+  }
+}
+function startFakeDiscord() {
+  discord.server = net.createServer((sock) => {
+    discord.connections++;
+    discord.sockets.add(sock);
+    sock.on('close', () => discord.sockets.delete(sock));
+    sock.on('error', () => {});
+    let buf = Buffer.alloc(0);
+    sock.on('data', (chunk) => {
+      buf = Buffer.concat([buf, chunk]);
+      while (buf.length >= 8) {
+        const op = buf.readUInt32LE(0);
+        const length = buf.readUInt32LE(4);
+        if (buf.length < 8 + length) break;
+        const body = buf.subarray(8, 8 + length).toString('utf8');
+        buf = buf.subarray(8 + length);
+        discord.raw.push(body);
+        onDiscordMessage(sock, op, JSON.parse(body));
+      }
+    });
+  });
+  return new Promise((resolve) => discord.server.listen(discordPipe, resolve));
+}
+function stopFakeDiscord() {
+  for (const sock of discord.sockets) sock.destroy();
+  return new Promise((resolve) => (discord.server ? discord.server.close(resolve) : resolve()));
+}
+
 let PORT = 0;
 let TOKEN = '';
 let HOOK_TOKEN = '';
@@ -116,6 +200,9 @@ async function tryBoot(port) {
     HELM_APPROVAL_HOLD_MS: '1500', // approval tests wait out the fallback
     HELM_UPDATE_URL: ghUrl, // fake "latest release" endpoint (see ghStub)
     HELM_COMPARE_URL: ghCompareUrl, // fake branch-compare endpoint (same stub)
+    HELM_DISCORD_PIPE: discordPipe, // never the real Discord (see the stand-in above)
+    HELM_DISCORD_APP_ID: 'test-app-id',
+    HELM_DISCORD_TICK_MS: '100', // the card tests wait on the 5 s loop otherwise
   };
   delete env.CLAUDE_CONFIG_DIR; // don't inherit a real default account
   child = spawn(process.execPath, ['index.mjs'], {
@@ -185,6 +272,7 @@ before(async () => {
   process.env.HELM_COMPARE_URL = ghCompareUrl;
   // Never let the suite pull over the checkout it is running from.
   process.env.HELM_NO_SELF_UPDATE = '1';
+  await startFakeDiscord();
   for (let i = 0; i < 6; i++) {
     if (await tryBoot(await freePort())) return; // retry only guards the tiny bind race
     await sleep(100);
@@ -202,6 +290,7 @@ after(async () => {
   }
   child?.kill();
   ghStub?.close();
+  await stopFakeDiscord();
   await sleep(300);
   // Windows holds a directory busy while a just-killed process still has a
   // handle on it, so a single rmSync can lose the race (EBUSY on a CI runner).
@@ -2351,4 +2440,409 @@ test('a held request that lapses to the pane reads waiting, even after earlier w
 
   ws.close();
   await authed(`/sessions/${id}`, { method: 'DELETE' });
+});
+
+// ------------------------------------------------------- the Discord card
+// Last in the file because these clear every pane first: the counts on the card
+// are the whole point, and a pane left over from an earlier test would skew them.
+
+const discordInfo = async () => (await authed('/discord')).json();
+const setDiscord = (on) =>
+  authed('/settings', { method: 'PATCH', body: JSON.stringify({ discordPresence: on }) });
+const shareName = async (id, on) =>
+  (
+    await authed(`/workspaces/${id}`, { method: 'PATCH', body: JSON.stringify({ discord: on }) })
+  ).json();
+const lastCard = () => discord.activities.at(-1);
+
+// A clean slate per test, so one failure doesn't cascade through the rest.
+async function discordFresh() {
+  await setDiscord(false);
+  await eventually(() => discord.sockets.size === 0, 'the previous connection to close');
+  for (const s of await (await authed('/sessions')).json()) {
+    await authed(`/sessions/${s.id}`, { method: 'DELETE' });
+  }
+  Object.assign(discord, {
+    connections: 0,
+    handshakes: [],
+    activities: [],
+    raw: [],
+    pongs: [],
+    answer: 'ready',
+    refuseActivity: false,
+  });
+}
+async function paneInProject(name) {
+  const dir = mkdir(path.join(tmp, name));
+  const ws = await (
+    await authed('/workspaces', { method: 'POST', body: JSON.stringify({ name, dir }) })
+  ).json();
+  const pane = await (
+    await authed('/sessions', { method: 'POST', body: JSON.stringify({ workspace: dir }) })
+  ).json();
+  return { ws, dir, pane };
+}
+
+test('discord: off by default, and the pipe is never even opened', async () => {
+  // Before discordFresh() on purpose, because that switches it off: this is the
+  // one check of what a fresh install does on its own. The stand-in has been
+  // listening since before the server booted, so a single connection means Helm
+  // reached for Discord without being asked. A public repo must never do that.
+  assert.equal((await (await authed('/settings')).json()).discordPresence, false);
+  assert.equal(discord.connections, 0, 'a fresh install must not touch the pipe');
+  assert.deepEqual(await discordInfo(), {
+    enabled: false,
+    connected: false,
+    connecting: false,
+    user: null,
+    error: null,
+  });
+
+  // And still nothing with panes running and changing state.
+  await discordFresh();
+  const { pane } = await paneInProject('discord-off');
+  await hook(pane.id, { hook_event_name: 'UserPromptSubmit' });
+  await sleep(500); // five ticks at the test rate
+  assert.equal(discord.connections, 0, 'with the setting off, Helm must not touch the pipe');
+  assert.equal(discord.raw.length, 0);
+  await authed(`/sessions/${pane.id}`, { method: 'DELETE' });
+});
+
+test('discord: turning it on connects and publishes the counts', async () => {
+  await discordFresh();
+  const { pane } = await paneInProject('discord-counts');
+  await setDiscord(true);
+  await eventually(async () => (await discordInfo()).connected, 'READY');
+
+  const info = await discordInfo();
+  assert.equal(info.enabled, true);
+  assert.equal(info.user, 'Test Human', 'the display name, for the settings status line');
+  assert.equal(info.error, null);
+  assert.deepEqual(discord.handshakes, [{ v: 1, client_id: 'test-app-id' }]);
+
+  // A brand-new pane has just done something, so the card goes up at once.
+  await eventually(() => lastCard()?.details === 'Between tasks', 'the first card');
+  assert.equal(lastCard().state, '1 open');
+
+  await hook(pane.id, { hook_event_name: 'UserPromptSubmit' });
+  await eventually(() => lastCard()?.details === '1 agent working', 'the working card');
+  assert.equal(lastCard().state, '1 open');
+  assert.equal(lastCard().type, 0, '"Playing"');
+  assert.equal(lastCard().assets.large_image, 'icon-512');
+  assert.equal(lastCard().buttons[0].label, 'Helm on GitHub');
+  const { start } = lastCard().timestamps;
+  assert.ok(start > 1e12, 'milliseconds');
+
+  // Discord allows 5 updates per 20 s, so nothing changing must mean nothing sent.
+  const sent = discord.activities.length;
+  await sleep(600);
+  assert.equal(discord.activities.length, sent, 'an unchanged card is not resent');
+
+  await hook(pane.id, { hook_event_name: 'Notification', message: 'needs you' });
+  await eventually(() => lastCard()?.details === '1 agent waiting', 'the waiting card');
+  assert.equal(lastCard().timestamps.start, start, 'the elapsed timer must not jump');
+
+  // A dev pane is not an agent, so a running one must not be counted as one.
+  const devProject = await (
+    await authed('/workspaces', {
+      method: 'POST',
+      body: JSON.stringify({
+        name: 'discord-dev',
+        dir: mkdir(path.join(tmp, 'discord-dev')),
+        startCommands: ['node -e "setInterval(() => {}, 1000)"'],
+      }),
+    })
+  ).json();
+  const started = await authed(`/workspaces/${devProject.id}/start`, { method: 'POST' });
+  assert.equal(started.status, 201);
+  const dev = (await started.json()).sessions[0];
+  assert.equal(dev.status, 'running');
+  const withDev = discord.activities.length;
+  await sleep(400);
+  assert.equal(discord.activities.length, withDev, 'a dev pane starting changes nothing');
+  assert.equal(lastCard().state, '1 open', 'still one agent, with a dev server also running');
+
+  // The last agent closing takes the card down, even with that dev pane still up.
+  await authed(`/sessions/${pane.id}`, { method: 'DELETE' });
+  await eventually(() => lastCard() === null, 'the card to be cleared');
+  await authed(`/sessions/${dev.id}`, { method: 'DELETE' });
+
+  await setDiscord(false);
+  await eventually(() => discord.sockets.size === 0, 'turning it off to close the pipe');
+  const connections = discord.connections;
+  await sleep(500);
+  assert.equal(discord.connections, connections, 'off stays off, with no reconnecting');
+  assert.equal((await discordInfo()).connected, false);
+});
+
+test('discord: a project name is private until opted in, and nothing else ever leaves', async () => {
+  await discordFresh();
+  const secret = 'secret-client-name';
+  const { ws, pane } = await paneInProject(secret);
+
+  // Give the server everything it could possibly leak: a task title from a real
+  // prompt, a notification's text. Asserted to exist below, or searching for them
+  // would pass against a pane that never had them.
+  const prompt = 'secret prompt text about the client';
+  const note = 'secret note text from a notification';
+  const tpath = path.join(mkdir(path.join(tmp, '.claude', 'projects', 'discord')), 'dc-1.jsonl');
+  fs.writeFileSync(tpath, `${JSON.stringify({ type: 'user', message: { content: prompt } })}\n`);
+  await hook(pane.id, {
+    hook_event_name: 'UserPromptSubmit',
+    session_id: 'dc-1',
+    transcript_path: tpath,
+  });
+  await hook(pane.id, { hook_event_name: 'Notification', message: note });
+  const known = (await (await authed('/sessions')).json()).find((s) => s.id === pane.id);
+  assert.equal(known.summary, prompt, 'the pane really does have a title to leak');
+  assert.equal(known.activityNote, note, 'and a note');
+
+  const assertNothingLeaked = (frames) => {
+    for (const frame of frames) {
+      for (const forbidden of [prompt, note, known.name, 'helm-smoke-', 'discord-ipc-test']) {
+        assert.ok(!frame.includes(forbidden), `"${forbidden}" reached Discord: ${frame}`);
+      }
+    }
+  };
+
+  // Private by default: the card is up, and the name is nowhere in it.
+  await setDiscord(true);
+  await eventually(() => lastCard()?.details === '1 agent waiting', 'the private card');
+  for (const frame of discord.raw) assert.ok(!frame.includes(secret), `name leaked: ${frame}`);
+  assertNothingLeaked(discord.raw);
+
+  // Opted in: the name appears, and opting in shares only the name.
+  const shared = await shareName(ws.id, true);
+  assert.equal(shared.discord, true);
+  await eventually(() => lastCard()?.details === `Waiting in ${secret}`, 'the named card');
+  assert.equal(lastCard().state, '1 waiting');
+  assertNothingLeaked(discord.raw);
+
+  // Opted back out: gone from the card, and from everything sent after it.
+  const hidden = await shareName(ws.id, false);
+  assert.equal(hidden.discord, undefined, 'opting out stores nothing');
+  await eventually(() => lastCard()?.details === '1 agent waiting', 'the name to go');
+  const afterOptOut = discord.raw.length;
+  await sleep(300);
+  for (const frame of discord.raw.slice(afterOptOut)) {
+    assert.ok(!frame.includes(secret), `name leaked after opting out: ${frame}`);
+  }
+
+  await authed(`/sessions/${pane.id}`, { method: 'DELETE' });
+  await setDiscord(false);
+});
+
+test('discord: survives Discord going away, coming back, and refusing', async () => {
+  await discordFresh();
+  const { pane } = await paneInProject('discord-fail');
+  await hook(pane.id, { hook_event_name: 'UserPromptSubmit' });
+  await setDiscord(true);
+  await eventually(() => lastCard()?.details === '1 agent working', 'the card');
+  const { start } = lastCard().timestamps;
+
+  // Discord quits. That is normal, so it is not an error, and Helm carries on.
+  await stopFakeDiscord();
+  await eventually(async () => !(await discordInfo()).connected, 'noticing Discord left');
+  assert.equal((await discordInfo()).error, null, 'Discord being closed is not an error');
+  assert.equal((await authed('/sessions')).status, 200, 'the server is unharmed');
+
+  // Discord comes back: the same card goes back up with nothing else happening.
+  const before = discord.activities.length;
+  await startFakeDiscord();
+  await eventually(() => discord.activities.length > before, 'the card to be re-sent');
+  assert.equal(lastCard().details, '1 agent working');
+  assert.equal(lastCard().timestamps.start, start, 'the timer carries on across the gap');
+
+  // PING is answered with its own payload. Two at once, because a pipe may hand
+  // over several messages in one read.
+  const [sock] = discord.sockets;
+  sock.write(Buffer.concat([discordFrame(3, { p: 1 }), discordFrame(3, { p: 2 })]));
+  await eventually(() => discord.pongs.length === 2, 'both PONGs');
+  assert.deepEqual(discord.pongs, [{ p: 1 }, { p: 2 }]);
+
+  // A bad app id: Discord's real answer (seen from the real client) is a CLOSE.
+  discord.answer = 'reject';
+  sock.destroy();
+  await eventually(
+    async () => (await discordInfo()).error === 'Invalid Client ID',
+    'the CLOSE reason to reach the status line',
+  );
+  assert.equal((await discordInfo()).connected, false);
+  discord.answer = 'ready';
+  await eventually(async () => {
+    const info = await discordInfo();
+    return info.connected && info.error === null;
+  }, 'recovering once Discord accepts');
+
+  // A pipe that accepts but never says READY must not hang forever.
+  discord.answer = 'silent';
+  for (const s of discord.sockets) s.destroy();
+  await eventually(
+    async () => (await discordInfo()).error === 'Discord did not answer',
+    'giving up on a silent pipe',
+  );
+  discord.answer = 'ready';
+  await eventually(async () => (await discordInfo()).connected, 'reconnecting');
+
+  // A refused card is reported, and not retried on every tick.
+  discord.refuseActivity = true;
+  await hook(pane.id, { hook_event_name: 'Stop' });
+  await eventually(async () => (await discordInfo()).error === 'Nope', 'the refusal');
+  const attempts = discord.activities.length;
+  await sleep(500);
+  assert.equal(discord.activities.length, attempts, 'a refused card is not hammered');
+  discord.refuseActivity = false;
+  await hook(pane.id, { hook_event_name: 'UserPromptSubmit' });
+  await eventually(async () => (await discordInfo()).error === null, 'the next card clearing it');
+
+  await authed(`/sessions/${pane.id}`, { method: 'DELETE' });
+  await setDiscord(false);
+});
+
+test('discord: toggles are validated, and a project cannot be created public', async () => {
+  await discordFresh();
+  assert.equal((await fetch(U('/api/discord'))).status, 401, 'status needs the token');
+
+  const badSetting = await authed('/settings', {
+    method: 'PATCH',
+    body: JSON.stringify({ discordPresence: 'yes' }),
+  });
+  assert.equal(badSetting.status, 400, 'a non-boolean is refused, not coerced');
+  assert.equal((await (await authed('/settings')).json()).discordPresence, false);
+
+  const dir = mkdir(path.join(tmp, 'discord-validate'));
+  const ws = await (
+    await authed('/workspaces', {
+      method: 'POST',
+      body: JSON.stringify({ name: 'validate', dir, discord: true }),
+    })
+  ).json();
+  assert.equal(ws.discord, undefined, 'opting in is a separate, deliberate act');
+
+  const badField = await authed(`/workspaces/${ws.id}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ discord: 'yes' }),
+  });
+  assert.equal(badField.status, 400);
+
+  await authed(`/workspaces/${ws.id}`, { method: 'DELETE' });
+});
+
+test('discord: the setting survives a restart, and a dead server lets go of the pipe', async () => {
+  await discordFresh();
+  const dataDir = seedState('discord-boot', {});
+  fs.writeFileSync(path.join(dataDir, 'settings.json'), JSON.stringify({ discordPresence: true }));
+  const aside = await bootAside(dataDir, {
+    HELM_DISCORD_PIPE: discordPipe,
+    HELM_DISCORD_APP_ID: 'aside-app-id',
+    HELM_DISCORD_TICK_MS: '100',
+  });
+  try {
+    await eventually(
+      () => discord.handshakes.some((h) => h.client_id === 'aside-app-id'),
+      'connecting at boot',
+    );
+    await eventually(
+      async () => (await (await aside.call('/discord')).json()).connected,
+      'READY on the restarted server',
+    );
+  } finally {
+    aside.stop();
+  }
+  // Discord clears the card when the connection drops, so this is the crash path.
+  await eventually(() => discord.sockets.size === 0, 'the pipe to close with the process');
+});
+
+test('discord: what the card says', async () => {
+  const { buildActivity } = await import('../src/discord.mjs');
+  const now = Date.parse('2026-11-05T12:00:00Z');
+  const pane = (activity, minutesAgo, project = null) => ({
+    activity,
+    since: now - minutesAgo * 60_000,
+    project,
+  });
+  const say = (...panes) => {
+    const { activity } = buildActivity(panes, null, now);
+    return activity && [activity.details, activity.state];
+  };
+  const many = (n, ...args) => Array.from({ length: n }, () => pane(...args));
+
+  // The counts, singular and plural.
+  assert.equal(say(), null, 'no panes, no card');
+  assert.deepEqual(say(pane('working', 0)), ['1 agent working', '1 open']);
+  assert.deepEqual(say(...many(3, 'working', 0), pane('waiting', 0), pane('idle', 0)), [
+    '3 agents working',
+    '1 waiting · 5 open',
+  ]);
+  assert.deepEqual(say(...many(2, 'waiting', 0), pane('idle', 0)), ['2 agents waiting', '3 open']);
+  assert.deepEqual(say(...many(5, 'idle', 0)), ['Between tasks', '5 open']);
+  assert.deepEqual(say(pane(null, 0)), ['Between tasks', '1 open'], 'no hook yet reads as idle');
+
+  // Opted-in names.
+  assert.deepEqual(say(...many(3, 'working', 0, 'storefront'), pane('waiting', 0)), [
+    'Working on storefront',
+    '3 agents working · 1 waiting',
+  ]);
+  assert.deepEqual(say(pane('waiting', 0, 'storefront')), ['Waiting in storefront', '1 waiting']);
+  assert.deepEqual(say(pane('idle', 0, 'storefront')), ['In storefront', '1 open']);
+
+  // Which name: working beats waiting beats idle, and the longest in that state
+  // wins, so the name doesn't flip each time another pane changes.
+  assert.equal(
+    say(pane('idle', 0, 'a'), pane('waiting', 0, 'b'), pane('working', 0, 'c'))[0],
+    'Working on c',
+  );
+  assert.equal(say(pane('working', 1, 'new'), pane('working', 9, 'old'))[0], 'Working on old');
+  // A private pane's work must not borrow a shared project's name as "Working on".
+  assert.deepEqual(say(pane('working', 0), pane('idle', 0, 'shop')), [
+    'In shop',
+    '1 agent working',
+  ]);
+  // A shared project that has gone quiet names nothing, even if others are busy.
+  assert.deepEqual(say(pane('working', 0), pane('idle', 45, 'old')), ['1 agent working', '2 open']);
+
+  // A long name is cut, not wrapped, and never mid-character.
+  const long = '😀'.repeat(50);
+  assert.equal(say(pane('working', 0, long))[0], `Working on ${'😀'.repeat(40)}`);
+
+  // The 30-minute rule, and that waiting ages out where working does not.
+  assert.ok(say(pane('idle', 29)), 'recent enough');
+  assert.equal(say(pane('idle', 31)), null);
+  assert.equal(say(pane('waiting', 31)), null, 'away for hours is not "playing"');
+  assert.ok(say(pane('working', 600)), 'a long-running agent is still working');
+  assert.equal(say({ activity: 'idle', since: NaN, project: null }), null, 'an unreadable date');
+
+  // The timer starts when the card appears, holds, and resets when it goes.
+  const first = buildActivity([pane('working', 0)], null, now);
+  assert.equal(first.activeSince, now);
+  assert.equal(first.activity.timestamps.start, now);
+  const later = buildActivity([pane('idle', 0)], first.activeSince, now + 60_000);
+  assert.equal(later.activity.timestamps.start, now, 'held across updates');
+  const gone = buildActivity([], later.activeSince, now + 120_000);
+  assert.equal(gone.activeSince, null);
+  assert.equal(gone.activity, null);
+});
+
+test('discord: the card follows the settled status, not just the hooks', async () => {
+  await discordFresh();
+  const dataDir = seedState('settle-card', {});
+  fs.writeFileSync(path.join(dataDir, 'settings.json'), JSON.stringify({ discordPresence: true }));
+  const aside = await bootAside(dataDir, {
+    HELM_STUCK_AFTER_MS: '2000',
+    HELM_DISCORD_PIPE: discordPipe,
+    HELM_DISCORD_APP_ID: 'settle-app-id',
+    HELM_DISCORD_TICK_MS: '100',
+  });
+  try {
+    const send = asideHook(aside, dataDir);
+    const { id } = await asidePane(aside, 'settle-card-project');
+    await send(id, 'UserPromptSubmit');
+    await eventually(() => lastCard()?.details === '1 agent working', 'the card to say working');
+    // Esc: the pane settles, and the public card must not keep claiming work.
+    await eventually(() => lastCard()?.details === 'Between tasks', 'the card to agree');
+    await aside.call(`/sessions/${id}`, { method: 'DELETE' });
+  } finally {
+    aside.stop();
+  }
+  await eventually(() => discord.sockets.size === 0, 'the aside server to let go of the pipe');
 });

@@ -6,6 +6,14 @@ All notable changes to Helm are documented here. Format follows
 
 ## [Unreleased]
 ### Added
+- **Discord presence.** An optional "Playing Helm" card on your Discord profile,
+  like the VS Code presence extensions: how many agents are working or waiting,
+  an elapsed timer, and a link to the repo. Off by default, because the card is
+  public. Project names stay private unless you right-click a project and choose
+  "Show name on Discord"; prompts, paths, branches and accounts are never sent. It
+  talks to the Discord desktop app over a local pipe with no new dependency, comes
+  back by itself when Discord restarts, and clears after 30 quiet minutes or if
+  Helm stops. Turn it on in Appearance.
 - **The update notice now shows what changed, and can apply it.** Being behind
   `main` used to be one line naming the newest commit, with `git pull` printed
   as a reminder to go and do it yourself. It now lists every new commit's

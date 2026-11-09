@@ -45,6 +45,7 @@ import {
   tunnelInfo,
 } from './src/tunnel.mjs';
 import { checkoutState, runUpdate, startUpdateChecks, updateInfo } from './src/update.mjs';
+import { presenceInfo, startPresence, stopPresence, syncPresence } from './src/discord.mjs';
 
 const { spawn } = ptyPkg;
 
@@ -173,7 +174,15 @@ writeHookSettings();
 // notchAutoCompact: at rest the notch shrinks to a strip of status lights (one
 //   per pane, coloured by what it is doing) and expands to the full list when
 //   the cursor reaches it - the way an auto-hidden taskbar slides back.
-const DEFAULT_SETTINGS = { autoRevive: false, notchFollowsHelm: true, notchAutoCompact: true };
+// discordPresence: show a "Playing Helm" card on the user's Discord profile. Off
+//   by default: the card is public, and a fresh install must not start publishing
+//   anything on its own (server/src/discord.mjs).
+const DEFAULT_SETTINGS = {
+  autoRevive: false,
+  notchFollowsHelm: true,
+  notchAutoCompact: true,
+  discordPresence: false,
+};
 let settings = { ...DEFAULT_SETTINGS };
 {
   const saved = readJsonWithBackup(SETTINGS_FILE, 'settings');
@@ -1831,7 +1840,7 @@ app.post('/api/broadcast', (req, res) => {
 app.get('/api/settings', (_req, res) => res.json(settings));
 
 app.patch('/api/settings', (req, res) => {
-  const { autoRevive, notchFollowsHelm, notchAutoCompact } = req.body || {};
+  const { autoRevive, notchFollowsHelm, notchAutoCompact, discordPresence } = req.body || {};
   if (autoRevive !== undefined) {
     if (typeof autoRevive !== 'boolean') {
       return res.status(400).json({ error: 'autoRevive must be true or false' });
@@ -1850,14 +1859,44 @@ app.patch('/api/settings', (req, res) => {
     }
     settings.notchAutoCompact = notchAutoCompact;
   }
+  if (discordPresence !== undefined) {
+    if (typeof discordPresence !== 'boolean') {
+      return res.status(400).json({ error: 'discordPresence must be true or false' });
+    }
+    settings.discordPresence = discordPresence;
+  }
   saveSettings();
   dbg(
     'settings',
     `autoRevive=${settings.autoRevive} notchFollowsHelm=${settings.notchFollowsHelm} ` +
-      `notchAutoCompact=${settings.notchAutoCompact}`,
+      `notchAutoCompact=${settings.notchAutoCompact} discordPresence=${settings.discordPresence}`,
   );
+  syncPresence(); // connect or disconnect now, so the toggle answers immediately
   res.json(settings);
 });
+
+// Where the Discord card stands, for the status line beside its toggle.
+app.get('/api/discord', (_req, res) => res.json(presenceInfo()));
+
+// Everything the Discord card is allowed to know about the panes. This is the
+// privacy boundary: the card is public, so a project's name is passed along only
+// if the owner opted that project in, and paths, prompts, pane names and accounts
+// never leave this function. Reads the fields directly rather than going through
+// sessionInfo(), which touches the disk and would run every few seconds here.
+function presencePanes() {
+  const shared = workspaces.filter((w) => w.discord === true);
+  return [...sessions.values()]
+    .filter((s) => s.kind !== 'dev' && s.status === 'running')
+    .map((s) => {
+      const { activity, activitySince } = settledActivity(s);
+      return {
+        activity,
+        // No hook yet means no news, not fresh news: same fallback as the notch.
+        since: Date.parse(activitySince ?? s.createdAt),
+        project: shared.find((w) => dirKey(w.dir) === dirKey(s.workspace))?.name ?? null,
+      };
+    });
+}
 
 // Debug console feed for the UI's 🐞 drawer; startedAt/pid let the UI show
 // which server process it is talking to (staleness check).
@@ -2491,6 +2530,17 @@ app.patch('/api/workspaces/:id', (req, res) => {
     if (notch) delete ws.notch;
     else ws.notch = false;
   }
+  // Show this project's NAME on the public Discord card? The opposite default to
+  // the notch: stored only when opted in, so absent means private and a new
+  // project can never go public by accident.
+  const { discord } = req.body || {};
+  if (discord !== undefined) {
+    if (typeof discord !== 'boolean') {
+      return res.status(400).json({ error: 'discord must be true or false' });
+    }
+    if (discord) ws.discord = true;
+    else delete ws.discord;
+  }
   saveWorkspaces();
   res.json(ws);
 });
@@ -2802,6 +2852,7 @@ function gracefulShutdown(signal) {
   // always fails closed (server/src/tunnel.mjs).
   const shared = stopAllTunnels();
   if (shared) dbg('tunnel', `closed ${shared} public share link(s)`);
+  stopPresence(); // takes the Discord card down with us
   // Let go of any permission request we're holding before the panes die, so a
   // pane that outlives us by a moment falls back to its own prompt cleanly.
   for (const requestId of [...pendingApprovals.keys()])
@@ -2839,6 +2890,7 @@ const server = app.listen(PORT, HOST, () => {
   );
   checkClaudeVersion(); // async; populates /api/diagnostics for the drift banner
   startUpdateChecks(); // async; populates /api/update for the update banner
+  startPresence({ enabled: () => settings.discordPresence === true, panes: presencePanes });
 });
 
 server.on('error', (/** @type {NodeJS.ErrnoException} */ err) => {

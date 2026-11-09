@@ -1308,6 +1308,27 @@ against a STALE web/dist, because the frontend had changed since the last
 build - the test serves whatever is on disk, so a rebuild is part of the test,
 not a step after it.
 
+Discord presence (2026-11-05) - a "Playing Helm" card on the owner's Discord
+profile, like the VS Code extensions (Rich Presence, not a Discord "Activity",
+which is a different product). `server/src/discord.mjs` speaks the Discord app's
+local pipe with Node's `net`, so no new dependency. Off by default because the card
+is public; project names are opt-in per project (right-click), the owner's choice,
+and the module is only ever handed `{activity, since, lastOutput, project}`, so it
+cannot leak what it never receives. One 5 s timer does everything, which keeps
+updates inside Discord's rate limit with no throttling code. A throwaway test
+against the real client came first, because Discord's docs say OAuth is required
+and that turned out not to be so. Testing on the real client then found the bug
+this was always going to have: Esc fires no hook, so an interrupted pane would claim
+"1 agent working" publicly until its next prompt (fixed at the source, see the next
+entry). Verified: smoke 60 (7 new), and eight deliberate breaks
+all caught by the tests, one only after fixing an "off by default" check that could
+not fail. On the real client with a real claude 2.1.283 pane: 18/18 UI checks driven
+by CDP, card text and logo confirmed by eye, the card correcting itself 122 s after
+a real Esc, the 30-minute clear firing at exactly 30 minutes, Discord quit and
+reopened (the card came back with nothing touched), and a hard-killed server taking
+the card down. NOT verified: the GitHub button (Discord hides your own buttons, so it needs a
+second account), macOS/Linux, and sitting alongside a VS Code presence extension.
+
 Esc no longer leaves a pane "working" (2026-11-05) - claude fires no hook when Esc
 interrupts a turn, so the badge, sidebar count, notch, HUD and Discord card all said
 "working" until the next prompt: an old bug, found while testing the card. Fixed once
