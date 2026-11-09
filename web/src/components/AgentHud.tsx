@@ -377,8 +377,8 @@ export function AgentHud({
         )}
         {panes.map(row)}
         {quietCount > 0 && (
-          <div className="hud-quiet" title="Still running, just idle for a while">
-            +{quietCount} quiet
+          <div className="hud-quiet" title="Idle or exited — open Helm to use them">
+            +{quietCount} idle
           </div>
         )}
       </div>

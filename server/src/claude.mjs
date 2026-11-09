@@ -49,11 +49,12 @@ function cmpVersion(a, b) {
   return 0;
 }
 
-// Runs once after boot. shell:true so Windows can launch the `claude.cmd` shim.
+// Runs once after boot. shell:true so Windows can launch the `claude.cmd`
+// shim — as ONE command string, since an args array + shell is deprecated
+// (Node DEP0190: args get concatenated unescaped).
 export function checkClaudeVersion() {
   execFile(
-    CLAUDE_CMD,
-    ['--version'],
+    `"${CLAUDE_CMD}" --version`,
     { shell: true, windowsHide: true, timeout: 8000 },
     (err, stdout) => {
       diagnostics.claude.checked = true;

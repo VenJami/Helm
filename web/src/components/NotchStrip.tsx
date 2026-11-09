@@ -1,6 +1,7 @@
 // The notch at rest. Two faces:
 //
-//   quiet   — one light per claude pane, coloured by what that pane is doing.
+//   quiet   — one light per ACTIVE claude pane (the caller has already dropped
+//             idle ones), coloured by what that pane is doing.
 //   needy   — when something is actually blocked, the lights give way to the
 //             project's name and "Needs you". A row of dots can tell you
 //             SOMETHING is amber; it cannot tell you which project, and at a
@@ -27,7 +28,7 @@ export const COMPACT_WIDTH_NEEDY = 330;
 export const compactWidthFor = (sessions: SessionInfo[]) =>
   needyPane(sessions) ? COMPACT_WIDTH_NEEDY : COMPACT_WIDTH_QUIET;
 
-export function NotchStrip({ sessions }: { sessions: SessionInfo[] }) {
+export function NotchStrip({ sessions, idle = 0 }: { sessions: SessionInfo[]; idle?: number }) {
   const panes = claudePanes(sessions);
   const needy = needyPane(sessions);
   const waiting = panes.filter(isBlocked).length;
@@ -57,9 +58,14 @@ export function NotchStrip({ sessions }: { sessions: SessionInfo[] }) {
   const shown = panes.slice(0, MAX_LIGHTS);
   const rest = panes.length - shown.length;
   return (
-    <div className="notch-strip" title={`${panes.length} agents — hover to open`}>
+    <div
+      className="notch-strip"
+      title={`${panes.length} active${idle ? `, ${idle} idle` : ''} — hover to open`}
+    >
       {panes.length === 0 ? (
-        <span className="notch-strip-quiet">no agents</span>
+        // Idle panes are filtered out before we get here, so say so: an empty
+        // strip over five idle panes must not read as "no agents".
+        <span className="notch-strip-quiet">{idle ? 'all idle' : 'no agents'}</span>
       ) : (
         <span className="notch-strip-lights">
           {shown.map((p) => (

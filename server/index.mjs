@@ -169,13 +169,14 @@ writeHookSettings();
 // ---------------------------------------------------------- server settings
 // Small user-facing toggles, persisted in %LOCALAPPDATA%\Helm\settings.json.
 // autoRevive: respawn every 'dead' session automatically at server start.
-// notchFollowsHelm: the native notch window (desktop/HelmNotch) hides itself
-//   whenever Helm's own window is on screen, and shows when it is minimised or
-//   closed. Lives here rather than in localStorage because the notch runs in
-//   its own WebView2 profile and shares no storage with the browser.
-// notchAutoCompact: at rest the notch shrinks to a strip of status lights (one
-//   per pane, coloured by what it is doing) and expands to the full list when
-//   the cursor reaches it - the way an auto-hidden taskbar slides back.
+// notchAutoCompact: at rest the native notch window (desktop/HelmNotch) shrinks
+//   to a strip of status lights (one per pane, coloured by what it is doing)
+//   and expands to the full list when the cursor reaches it - the way an
+//   auto-hidden taskbar slides back. Lives here rather than in localStorage
+//   because the notch runs in its own WebView2 profile and shares no storage
+//   with the browser. (Hiding while Helm's window is up used to be a toggle,
+//   notchFollowsHelm; the owner's copy ended up with it off and the notch
+//   "never hid", so the host now always does it, and a saved value is dropped.)
 // discordPresence: show a "Coding with Helm" card on the user's Discord profile. Off
 //   by default: the card is public, and a fresh install must not start publishing
 //   anything on its own (server/src/discord.mjs).
@@ -186,7 +187,6 @@ writeHookSettings();
 //   thing that can carry something written from a prompt onto the public card.
 const DEFAULT_SETTINGS = {
   autoRevive: false,
-  notchFollowsHelm: true,
   notchAutoCompact: true,
   discordPresence: false,
   taskLines: false,
@@ -194,7 +194,9 @@ const DEFAULT_SETTINGS = {
 let settings = { ...DEFAULT_SETTINGS };
 {
   const saved = readJsonWithBackup(SETTINGS_FILE, 'settings');
-  if (saved && typeof saved === 'object') settings = { ...DEFAULT_SETTINGS, ...saved };
+  if (saved && typeof saved === 'object') {
+    for (const k of Object.keys(DEFAULT_SETTINGS)) if (k in saved) settings[k] = saved[k];
+  }
 }
 
 function saveSettings() {
@@ -1994,19 +1996,12 @@ app.post('/api/broadcast', (req, res) => {
 app.get('/api/settings', (_req, res) => res.json(settings));
 
 app.patch('/api/settings', (req, res) => {
-  const { autoRevive, notchFollowsHelm, notchAutoCompact, discordPresence, taskLines } =
-    req.body || {};
+  const { autoRevive, notchAutoCompact, discordPresence, taskLines } = req.body || {};
   if (autoRevive !== undefined) {
     if (typeof autoRevive !== 'boolean') {
       return res.status(400).json({ error: 'autoRevive must be true or false' });
     }
     settings.autoRevive = autoRevive;
-  }
-  if (notchFollowsHelm !== undefined) {
-    if (typeof notchFollowsHelm !== 'boolean') {
-      return res.status(400).json({ error: 'notchFollowsHelm must be true or false' });
-    }
-    settings.notchFollowsHelm = notchFollowsHelm;
   }
   if (notchAutoCompact !== undefined) {
     if (typeof notchAutoCompact !== 'boolean') {
@@ -2035,9 +2030,8 @@ app.patch('/api/settings', (req, res) => {
   saveSettings();
   dbg(
     'settings',
-    `autoRevive=${settings.autoRevive} notchFollowsHelm=${settings.notchFollowsHelm} ` +
-      `notchAutoCompact=${settings.notchAutoCompact} discordPresence=${settings.discordPresence} ` +
-      `taskLines=${settings.taskLines}`,
+    `autoRevive=${settings.autoRevive} notchAutoCompact=${settings.notchAutoCompact} ` +
+      `discordPresence=${settings.discordPresence} taskLines=${settings.taskLines}`,
   );
   syncPresence(); // connect or disconnect now, so the toggle answers immediately
   res.json(settings);

@@ -42,22 +42,14 @@ export const needyPane = (sessions: SessionInfo[]): SessionInfo | null => {
 };
 
 /**
- * How long a pane must sit idle before the notch stops listing it. Time-based
- * rather than state-based on purpose: in Helm a pane that has just FINISHED is
- * idle, and that is precisely the thing you want to see. An hour later it is
- * furniture.
+ * Is this pane something the notch should NOT list? Only ACTIVE panes make the
+ * cut - working, or waiting on you. Idle ones are out the moment they go idle
+ * (this used to be time-based, listing a just-finished pane for 30 minutes;
+ * the owner wants the notch to be only what is happening right now), and so
+ * are dead ones, which you revive from Helm.
  */
-export const QUIET_AFTER_MS = 30 * 60 * 1000;
-
-/** Has this pane dropped out of the conversation? */
-export const isQuiet = (s: SessionInfo, now = Date.now()) => {
-  if (s.status !== 'running') return true; // dead/exited: revive it from Helm
-  if (isBlocked(s) || s.activity === 'working') return false;
-  // activitySince is when it last changed state; fall back to creation for a
-  // pane whose hooks never reported (no data is not the same as fresh).
-  const since = Date.parse(s.activitySince ?? s.createdAt);
-  return !Number.isFinite(since) || now - since > QUIET_AFTER_MS;
-};
+export const isQuiet = (s: SessionInfo) =>
+  s.status !== 'running' || !(isBlocked(s) || s.activity === 'working');
 
 /**
  * Fold a workspace dir for comparison: separators normalised, trailing ones
@@ -72,15 +64,14 @@ export const foldDir = (dir: string) => dir.replace(/\\/g, '/').replace(/[/]+$/,
  *
  * Two filters, and the count covers only ONE of them. A muted project is gone
  * on purpose and permanently, so counting it would be a reminder that never
- * goes away; panes that merely went quiet are still running and still yours, so
- * the notch says how many rather than silently losing them.
+ * goes away; idle panes are still yours, so the notch says how many rather
+ * than reading as "no agents" when there are several.
  */
 export const notchPanes = (
   sessions: SessionInfo[],
   mutedDirs: Set<string>,
-  now = Date.now(),
 ): { shown: SessionInfo[]; quiet: number } => {
   const all = claudePanes(sessions).filter((s) => !mutedDirs.has(foldDir(s.workspace)));
-  const shown = all.filter((s) => !isQuiet(s, now));
+  const shown = all.filter((s) => !isQuiet(s));
   return { shown, quiet: all.length - shown.length };
 };
