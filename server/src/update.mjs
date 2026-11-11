@@ -43,6 +43,10 @@ const RELEASES_URL =
 const REPO_BRANCH = process.env.HELM_REPO_BRANCH || 'main';
 const COMPARE_URL = process.env.HELM_COMPARE_URL || `https://api.github.com/repos/${REPO}/compare`;
 const DISABLED = process.env.HELM_NO_UPDATE_CHECK === '1';
+// Separate switch from the CHECK above: a managed or shared install may want
+// to be told about updates but never apply them itself. The test suite sets
+// it too, so `npm test` can exercise the route with no chance of a real pull.
+const SELF_UPDATE_OFF = process.env.HELM_NO_SELF_UPDATE === '1';
 const CHECK_EVERY_MS = 2 * 60 * 60 * 1000;
 const FETCH_TIMEOUT_MS = 8000;
 
@@ -73,10 +77,14 @@ const state = {
   // can't say so unambiguously (not a git clone, git missing, commit not on
   // GitHub, or this copy has commits of its own) — see checkCommits.
   commits:
-    /** @type {{ahead: number, url: string|null, latest: string|null, latestAt: string|null}|null} */ (
+    /** @type {{ahead: number, url: string|null, latest: string|null, latestAt: string|null, list: {sha: string, message: string, at: string|null, url: string|null}[]}|null} */ (
       null
     ),
 };
+
+// How many commit subjects to hand the UI. The compare endpoint returns up to
+// 250; the banner is a list to skim before deciding to update, not a log.
+const MAX_LISTED_COMMITS = 30;
 
 /** Snapshot for GET /api/update (copied so callers can't mutate our state). */
 export function updateInfo() {
@@ -193,12 +201,24 @@ export async function checkCommits() {
       state.commits = null;
       return null;
     }
-    const newest = Array.isArray(body?.commits) ? body.commits[body.commits.length - 1] : null;
+    // GitHub returns the range oldest-first; the UI reads newest-first.
+    const all = Array.isArray(body?.commits) ? body.commits : [];
+    const newest = all[all.length - 1] || null;
     state.commits = {
       ahead,
       url: body?.html_url || null,
       latest: String(newest?.commit?.message || '').split('\n')[0] || null,
       latestAt: newest?.commit?.committer?.date || null,
+      list: all
+        .slice(-MAX_LISTED_COMMITS)
+        .reverse()
+        .map((c) => ({
+          sha: String(c?.sha || '').slice(0, 7),
+          message: String(c?.commit?.message || '').split('\n')[0],
+          at: c?.commit?.committer?.date || null,
+          url: c?.html_url || null,
+        }))
+        .filter((c) => c.message),
     };
     dbg('server', `${ahead} new commit(s) on ${REPO_BRANCH} (checkout at ${sha.slice(0, 7)})`);
   } catch (err) {
@@ -213,6 +233,265 @@ export async function checkForUpdate() {
   await checkRelease();
   await checkCommits();
   return updateInfo();
+}
+
+// ---------------------------------------------------------------- applying it
+// The banner's Update button. Everything here is deliberately conservative:
+// this runs git and npm against the user's own checkout, so it refuses on any
+// case it cannot complete cleanly rather than leaving a half-merged tree.
+//
+// What it will NOT do, by design:
+//   - merge. `--ff-only` means the pull either moves the branch pointer or
+//     fails; it can never produce a conflict or a merge commit to untangle.
+//   - touch server/node_modules. The running server has node-pty's .node
+//     binary LOADED, and on Windows npm cannot replace a locked file — so a
+//     server dependency change is reported for the restart, never installed
+//     underneath a live process.
+//   - restart the server. That kills every live pane, so it is the caller's
+//     decision, made with the pane count in front of them.
+const NPM = process.platform === 'win32' ? 'npm.cmd' : 'npm';
+const GIT_TIMEOUT_MS = 60_000;
+const NPM_TIMEOUT_MS = 5 * 60_000;
+// git must never sit waiting on a credential prompt with nobody at the
+// terminal: fail fast instead. The repo is public, so fetching needs no auth.
+const GIT_ENV = { ...process.env, GIT_TERMINAL_PROMPT: '0', GIT_ASKPASS: '', GCM_INTERACTIVE: '0' };
+
+/** @param {string[]} args */
+async function git(args, timeout = GIT_TIMEOUT_MS) {
+  const { stdout } = await execFileAsync('git', args, {
+    cwd: repoRoot,
+    timeout,
+    windowsHide: true,
+    env: GIT_ENV,
+    maxBuffer: 8 * 1024 * 1024,
+  });
+  return stdout.trim();
+}
+
+/** npm in one of the workspaces. `shell` because npm is a .cmd on Windows. */
+async function npm(args, cwd) {
+  const { stdout, stderr } = await execFileAsync(NPM, args, {
+    cwd: path.join(repoRoot, cwd),
+    timeout: NPM_TIMEOUT_MS,
+    windowsHide: true,
+    shell: process.platform === 'win32',
+    maxBuffer: 16 * 1024 * 1024,
+  });
+  return (stdout + stderr).trim();
+}
+
+/**
+ * Where this checkout stands right now: which branch, and whether it is clean.
+ * Read fresh on every GET /api/update (two cheap git calls) rather than cached
+ * with the 2-hourly GitHub answer, because the button LABELS ITSELF from this —
+ * a stale branch here would promise one thing and do another.
+ *
+ * @returns {Promise<{branch: string, tracked: string, dirty: boolean, selfUpdate: boolean}|null>}
+ */
+export async function checkoutState() {
+  try {
+    const branch = await git(['rev-parse', '--abbrev-ref', 'HEAD'], 5000);
+    const dirty = !!(await git(['status', '--porcelain', '--untracked-files=no'], 10_000));
+    return { branch, tracked: REPO_BRANCH, dirty, selfUpdate: !SELF_UPDATE_OFF };
+  } catch {
+    return null; // not a git checkout, or git isn't on PATH
+  }
+}
+
+const refuse = (reason, detail) => ({
+  ok: false,
+  reason,
+  detail,
+  steps: [],
+  needsRestart: false,
+  needsServerInstall: false,
+});
+
+/**
+ * Fast-forward this checkout to the tracked branch and rebuild what changed.
+ *
+ * @returns {Promise<{ok: boolean, reason?: string, detail?: string, from?: string,
+ *   to?: string, pulled?: number, steps: {name: string, ok: boolean, detail: string}[],
+ *   needsRestart: boolean, needsServerInstall: boolean, notchChanged?: boolean}>}
+ */
+async function performUpdate({ switchBranch = false } = {}) {
+  if (SELF_UPDATE_OFF) {
+    return refuse(
+      'disabled',
+      'Self-update is switched off here (HELM_NO_SELF_UPDATE=1). Pull it yourself with git.',
+    );
+  }
+  let branch = '';
+  let from = '';
+  try {
+    branch = await git(['rev-parse', '--abbrev-ref', 'HEAD']);
+    from = await git(['rev-parse', 'HEAD']);
+  } catch {
+    return refuse(
+      'not-a-checkout',
+      'This copy of Helm is not a git clone (or git is not on PATH), so there is nothing to pull. Download the new version from GitHub instead.',
+    );
+  }
+
+  /** @type {{name: string, ok: boolean, detail: string}[]} */
+  const steps = [];
+
+  // The banner compares against main, so anything else has to move first.
+  // Doing that is the caller's explicit decision (the button SAYS "switch to
+  // main and update" when it will), not something that happens by surprise —
+  // but refusing with "go and switch branches" is no use to someone who does
+  // not use git, which is most of the people this button is for. Nothing is
+  // lost either way: the branch being left keeps existing, and the tree is
+  // verified clean below before anything moves.
+  if (branch !== REPO_BRANCH) {
+    if (!switchBranch) {
+      return refuse('wrong-branch', `You are on branch "${branch}", not "${REPO_BRANCH}".`);
+    }
+    const stray = await git(['status', '--porcelain', '--untracked-files=no']);
+    if (stray) {
+      return refuse(
+        'dirty',
+        `You have uncommitted changes on "${branch}". Commit or stash them first — Helm will not move branches over your own edits.`,
+      );
+    }
+    try {
+      await git(['checkout', REPO_BRANCH]);
+    } catch {
+      // No local branch of that name yet (a shallow or single-branch clone):
+      // create it from the remote rather than giving up.
+      try {
+        await git(['checkout', '-b', REPO_BRANCH, `origin/${REPO_BRANCH}`]);
+      } catch (err) {
+        return refuse(
+          'checkout-failed',
+          `Couldn't switch to ${REPO_BRANCH}: ${
+            String(err?.stderr || err?.message || err)
+              .trim()
+              .split('\n')[0]
+          }`,
+        );
+      }
+    }
+    const left = branch;
+    branch = REPO_BRANCH;
+    from = await git(['rev-parse', 'HEAD']);
+    steps.push({
+      name: `switched to ${REPO_BRANCH}`,
+      ok: true,
+      detail: `"${left}" is still there, untouched`,
+    });
+  }
+
+  // Tracked changes only: an untracked scratch file is not a reason to refuse,
+  // and git itself will stop the pull if one is genuinely in the way.
+  const dirty = await git(['status', '--porcelain', '--untracked-files=no']);
+  if (dirty) {
+    const n = dirty.split('\n').length;
+    return refuse(
+      'dirty',
+      `You have ${n} uncommitted change${n === 1 ? '' : 's'} here. Commit or stash them first — Helm will not pull over your own edits.`,
+    );
+  }
+
+  let out = '';
+  try {
+    out = await git(['pull', '--ff-only']);
+  } catch (err) {
+    return refuse(
+      'pull-failed',
+      `git pull could not fast-forward: ${
+        String(err?.stderr || err?.message || err)
+          .trim()
+          .split('\n')[0]
+      }`,
+    );
+  }
+  const to = await git(['rev-parse', 'HEAD']);
+  steps.push({ name: 'git pull', ok: true, detail: out.split('\n').slice(-1)[0] || 'pulled' });
+  if (to === from) {
+    // Nothing came down: the banner was stale (someone already pulled).
+    headSha = undefined;
+    await checkCommits();
+    return {
+      ok: true,
+      from: from.slice(0, 7),
+      to: to.slice(0, 7),
+      pulled: 0,
+      steps,
+      needsRestart: false,
+      needsServerInstall: false,
+    };
+  }
+
+  const changed = (await git(['diff', '--name-only', from, to])).split('\n').filter(Boolean);
+  const touched = (prefix) => changed.some((f) => f.startsWith(prefix));
+  const webDeps = changed.some((f) => /^web\/package(-lock)?\.json$/.test(f));
+  const needsServerInstall = changed.some((f) => /^server\/package(-lock)?\.json$/.test(f));
+
+  if (touched('web/')) {
+    if (webDeps) {
+      try {
+        await npm(['install'], 'web');
+        steps.push({ name: 'npm install (web)', ok: true, detail: 'dependencies updated' });
+      } catch (err) {
+        steps.push({
+          name: 'npm install (web)',
+          ok: false,
+          detail: String(err?.stderr || err?.message || err)
+            .trim()
+            .split('\n')
+            .slice(-1)[0],
+        });
+      }
+    }
+    try {
+      await npm(['run', 'build'], 'web');
+      steps.push({ name: 'npm run build (web)', ok: true, detail: 'frontend rebuilt' });
+    } catch (err) {
+      steps.push({
+        name: 'npm run build (web)',
+        ok: false,
+        detail: String(err?.stderr || err?.message || err)
+          .trim()
+          .split('\n')
+          .slice(-1)[0],
+      });
+    }
+  }
+
+  // The pull moved HEAD, so the cached sha and the "behind main" answer are
+  // both stale — re-ask before the UI polls again.
+  headSha = undefined;
+  await checkCommits();
+  const ok = steps.every((s) => s.ok);
+  dbg(
+    'server',
+    `update: ${from.slice(0, 7)} → ${to.slice(0, 7)}, ${changed.length} file(s), ok=${ok}`,
+  );
+  return {
+    ok,
+    from: from.slice(0, 7),
+    to: to.slice(0, 7),
+    pulled: changed.length,
+    steps,
+    needsRestart: touched('server/'),
+    needsServerInstall,
+    notchChanged: touched('desktop/'),
+  };
+}
+
+// A double-click must not start a second pull on top of the first. Every
+// caller joins the one run in flight and gets the same report.
+let updateInFlight = /** @type {Promise<any>|null} */ (null);
+
+/** @type {typeof performUpdate} */
+export function runUpdate(opts) {
+  if (!updateInFlight) {
+    updateInFlight = performUpdate(opts).finally(() => {
+      updateInFlight = null;
+    });
+  }
+  return updateInFlight;
 }
 
 /** Boot hook: check now, then every 2 h. Unref'd so it never holds the process. */

@@ -208,6 +208,8 @@ export function App() {
   // state, because the notch runs in its own WebView2 profile and cannot see
   // this browser's localStorage.
   const [notchAutoCompact, setNotchAutoCompact] = useState(true);
+  const [discordPresence, setDiscordPresence] = useState(false);
+  const [taskLines, setTaskLinesState] = useState(false);
 
   // Server console window (start-helm.cmd terminal) show/hide toggle.
   // Whether this machine can open the native notch (Windows + built).
@@ -342,6 +344,8 @@ export function App() {
       .then((s) => {
         setAutoRevive(s.autoRevive);
         setNotchAutoCompact(s.notchAutoCompact);
+        setDiscordPresence(s.discordPresence);
+        setTaskLinesState(s.taskLines);
       })
       .catch(() => {});
   }, [refreshCategories]);
@@ -356,6 +360,30 @@ export function App() {
       setNotchAutoCompact(s.notchAutoCompact);
     } catch (err) {
       setNotchAutoCompact(before);
+      toast.error((err as Error).message);
+    }
+  };
+
+  const setDiscord = async (on: boolean) => {
+    const before = discordPresence;
+    setDiscordPresence(on);
+    try {
+      setDiscordPresence((await api.updateSettings({ discordPresence: on })).discordPresence);
+    } catch (err) {
+      setDiscordPresence(before);
+      toast.error((err as Error).message);
+    }
+  };
+
+  // Same shape. Switching off also empties every pane's sentence server-side, and
+  // the next sessions poll carries that to the notch.
+  const setTaskLines = async (on: boolean) => {
+    const before = taskLines;
+    setTaskLinesState(on);
+    try {
+      setTaskLinesState((await api.updateSettings({ taskLines: on })).taskLines);
+    } catch (err) {
+      setTaskLinesState(before);
       toast.error((err as Error).message);
     }
   };
@@ -1109,7 +1137,7 @@ export function App() {
       key: 'appearance',
       label: 'Appearance…',
       icon: 'palette',
-      keywords: 'theme dark light accent colour color font',
+      keywords: 'theme dark light accent colour color font discord presence status',
       run: () => setDialog({ kind: 'appearance' }),
     });
     list.push({
@@ -1291,6 +1319,19 @@ export function App() {
               ws.map((w) => (w.id === id ? { ...w, notch: show ? undefined : false } : w)),
             );
             void api.updateWorkspace(id, { notch: show }).catch((err: Error) => {
+              toast.error(err.message);
+              void api.listWorkspaces().then(setWorkspaces);
+            });
+          }}
+          discordPresence={discordPresence}
+          taskLines={taskLines}
+          onToggleDiscord={(id, show) => {
+            // Optimistic, like the notch above: the server picks it up on its
+            // next tick, and the menu label should not wait for a round trip.
+            setWorkspaces((ws) =>
+              ws.map((w) => (w.id === id ? { ...w, discord: show ? true : undefined } : w)),
+            );
+            void api.updateWorkspace(id, { discord: show }).catch((err: Error) => {
               toast.error(err.message);
               void api.listWorkspaces().then(setWorkspaces);
             });
@@ -1712,6 +1753,11 @@ export function App() {
           onAccent={setAccent}
           notchAutoCompact={notchAutoCompact}
           onNotchAutoCompact={(on) => void setNotchCompact(on)}
+          discordPresence={discordPresence}
+          onDiscordPresence={(on) => void setDiscord(on)}
+          taskLines={taskLines}
+          onTaskLines={(on) => void setTaskLines(on)}
+          sharedProjects={workspaces.filter((w) => w.discord).map((w) => w.name)}
           onClose={closeDialog}
         />
       )}

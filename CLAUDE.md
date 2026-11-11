@@ -54,13 +54,16 @@ helm/
 │   ├── ARCHITECTURE.md     # files, REST/WS API, spawn specifics, hook relay, data dirs
 │   ├── GOTCHAS.md          # hard-won traps — READ BEFORE TOUCHING SERVER CODE
 │   ├── ACCOUNTS.md         # multi-account profiles via CLAUDE_CONFIG_DIR
-│   └── ROADMAP.md          # done list + prioritized backlog
+│   ├── ROADMAP.md          # done list + prioritized backlog
+│   └── discord/            # the Discord card's images + make-art.mjs (linked from
+│                           #   the discord-art-v1 tag, see ARCHITECTURE)
 ├── server/
 │   ├── index.mjs           # backend bootstrap + sessions/PTY + routes + WS
 │   ├── src/                # log.mjs · persist.mjs (atomic state) · claude.mjs
 │   │                       #   (ALL claude-internals: parsing/pricing/drift)
 │   │                       #   · tunnel.mjs (public share links — leaves loopback)
 │   │                       #   · update.mjs (newer release? behind main?)
+│   │                       #   · discord.mjs (the optional Discord profile card)
 │   └── hook-post.mjs       # runs inside panes; relays Claude Code hook events
 ├── desktop/                # OPTIONAL native notch window (C#/WPF, Windows-only)
 │   ├── start-notch.cmd     #   double-click: builds on first run, then launches
@@ -85,10 +88,14 @@ cd server && npm run voice-bench  # review dictation raw/polished pairs side by 
                            #   (record them first: run the server with HELM_VOICE_BENCH=1)
 cd server && npm run voice-rough  # 24-case ADVERSARIAL bench for the polish prompt
                            #   (real claude, ~$0.04; run after editing POLISH_PROMPT)
+cd server && npm run task-rough   # 24-case ADVERSARIAL bench for task lines: leaks,
+                           #   injection, chit-chat (real claude, about a cent;
+                           #   run after editing taskLinePrompt or cleanTaskLine)
 cd server && npm run e2e   # real-claude end-to-end (spawn→hooks→usage→revive); needs
                            #   a logged-in claude, spends a few tokens, NOT in CI
 cd web && npm test         # vitest unit tests (accounts.ts usage math)
 cd web && npm run build    # after frontend changes (or `npm run watch` while developing)
+cd web && npx tsc --noEmit # typecheck the frontend (`build` is plain vite, it won't)
 desktop\start-notch.cmd    # the native notch window (needs Helm already running).
                            #   Builds itself on first run; needs a .NET SDK, NOT
                            #   Visual Studio. Windows-only and optional.

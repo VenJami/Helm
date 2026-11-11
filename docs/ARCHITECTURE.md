@@ -14,7 +14,9 @@ Browser (React + xterm.js grid) <--WS/REST--> Node server <--PTY--> claude.cmd
   cloudflared quick tunnels — read its header comment before touching it, it
   is the one place Helm leaves loopback) · `update.mjs` (is a newer Helm
   released, and how far is `main` ahead of this checkout? two anonymous GitHub
-  calls, off with `HELM_NO_UPDATE_CHECK=1`).
+  calls, off with `HELM_NO_UPDATE_CHECK=1`) · `discord.mjs` (the optional Discord
+  profile card, over the Discord app's local pipe; read its header first, the card
+  is public).
   Sessions map (id → {pty, ring buffer, sockets, name, color, activity,
   claudeSessionId, transcriptPath…}), REST under `/api`, WS attach, hook
   endpoint, usage parsing, persistence.
@@ -139,8 +141,32 @@ Browser (React + xterm.js grid) <--WS/REST--> Node server <--PTY--> claude.cmd
   the anonymous API's 60-requests/hour limit):
   - the latest published GitHub RELEASE vs this checkout's package version
     (`available`) — drives the loud update banner;
-  - `commits: {ahead, url, latest, latestAt} | null` — how far `main` is ahead
-    of the commit `git rev-parse HEAD` reports here, via GitHub's compare API.
+  - `commits: {ahead, url, latest, latestAt, list} | null` — how far `main` is
+    ahead of the commit `git rev-parse HEAD` reports here, via GitHub's compare
+    API. `list` is the commit subjects (newest first, capped at 30) that the
+    banner shows, each `{sha, message, at, url}`.
+  - `checkout: {branch, tracked, dirty, selfUpdate} | null` — read FRESH on
+    every request (two cheap git calls), not cached with the 2-hourly GitHub
+    answer, because the Update button labels itself from it: on a branch other
+    than `tracked` it reads "Switch to main & update". A stale branch here
+    would make the button promise the wrong thing.
+- `POST /api/update/pull` — apply those commits: `git pull --ff-only`, then
+  `npm install`/`npm run build` in `web/` if the new commits touched it.
+  Body `{switchBranch?: boolean}`: with it, a checkout parked on another
+  branch is moved to `tracked` first (clean tree required; the branch left
+  behind is untouched and the move is reported as a step). Without it that is
+  a refusal — the flag exists so the switch only ever happens when the button
+  the user pressed said it would.
+  Answers `{ok, from, to, pulled, steps[], needsRestart, needsServerInstall,
+  notchChanged}`; a refusal is **200 with `ok:false`** plus a `reason`
+  (`not-a-checkout` · `wrong-branch` · `dirty` · `checkout-failed` ·
+  `pull-failed` · `disabled`) and a `detail` sentence written for the user. Deliberately narrow: it never
+  merges (so it cannot leave a conflict), never touches `server/node_modules`
+  (the running server holds node-pty's `.node` open — Windows will not replace
+  a locked file), and never restarts the server (that kills live panes, so the
+  UI asks). Concurrent calls join the one run in flight.
+  `HELM_NO_SELF_UPDATE=1` turns the route into a refusal — the test suite sets
+  it so `npm test` can never pull over the checkout it runs from.
     Drives one quiet line, shown only when there is no release to announce.
     It is `null` on every ambiguous case: not a git checkout, git missing, the
     commit unknown to GitHub (404), or a checkout carrying its own commits
@@ -156,7 +182,12 @@ Browser (React + xterm.js grid) <--WS/REST--> Node server <--PTY--> claude.cmd
   (dump raw hook payloads), `HELM_NO_UPDATE_CHECK=1` (never contact GitHub),
   `HELM_REPO` / `HELM_UPDATE_URL` / `HELM_COMPARE_URL` / `HELM_REPO_BRANCH`
   (point the update check elsewhere — a fork, another tracked branch, or the
-  smoke test's stub). Log entries carry a coarse `level` (`error` for
+  smoke test's stub), `HELM_DISCORD_APP_ID` (run the card under another Discord
+  application, for a fork), `HELM_DISCORD_ART` (where the card's images are linked
+  from), `HELM_DISCORD_PIPE` / `HELM_DISCORD_TICK_MS` (the smoke
+  test's stand-in pipe and a faster loop), `HELM_STUCK_AFTER_MS` (how long a
+  `working` pane may go quiet before it reads idle, default 2 minutes; the tests
+  shorten it). Log entries carry a coarse `level` (`error` for
   error/drift tags, else `info`). On SIGINT/SIGTERM the server persists sessions
   and stops panes (no orphaned claude children).
 - `POST /api/broadcast {text, sessionIds[]}` — type one instruction into
@@ -204,8 +235,10 @@ Browser (React + xterm.js grid) <--WS/REST--> Node server <--PTY--> claude.cmd
   work; POST is a no-op when one is already up (checked with `tasklist` at click
   time rather than polled). Spawned detached and unref'd, so the notch outlives
   the request and a Helm shutdown doesn't close a window you opened on purpose.
-- `GET/PATCH /api/settings` — server toggles: `{autoRevive, notchAutoCompact}`.
-  `notchAutoCompact` lives here rather than in localStorage because the native
+- `GET/PATCH /api/settings` — server toggles:
+  `{autoRevive, notchAutoCompact, discordPresence, taskLines}`. Switching
+  `taskLines` off also empties every pane's `taskLine` (see "Task lines" under
+  Hooks below). `notchAutoCompact` lives here rather than in localStorage because the native
   notch runs in its own WebView2 profile and shares no storage with the browser;
   the notch page polls it and relays it to the host, so the auth token stays in
   the page. (Hiding while Helm's window is up or another app is full screen is
@@ -252,6 +285,59 @@ Browser (React + xterm.js grid) <--WS/REST--> Node server <--PTY--> claude.cmd
   CLAUDE_INTERNALS §6 for the exact invocation). Costs a real few cents and
   takes ~5–20 s. It **only suggests**: nothing is saved and nothing is spawned,
   because the UI shows the commands for the owner to accept first.
+### Discord presence (the profile card)
+Off by default (`discordPresence` in settings), because the card is public. See
+SECURITY.md and the header of `server/src/discord.mjs`.
+- `GET /api/discord` → `{enabled, connected, connecting, user, error}`, for the
+  status line beside the toggle in Appearance. `connected:false` with no `error`
+  and not `connecting` means the Discord desktop app simply isn't running.
+- `PATCH /api/workspaces/:id {discord:boolean}` opts a project's NAME onto the card.
+  Stored only when `true`, the opposite of `notch`: absent means private, so a new
+  project cannot go public by accident, and POST ignores the field.
+- **The privacy boundary is `presencePanes()` in index.mjs:** discord.mjs receives
+  only `{activity, since, project, task}` per running claude pane, with `project`
+  null unless opted in, and `task` (the pane's task line) null unless the project
+  is opted in AND Task lines is on. Prompts never reach it. Dev panes are excluded.
+- **One 5 s timer drives everything:** work out the card (`buildActivity`, pure),
+  send it only if it changed, retry the pipe every 15 s while it's down. That caps
+  sends at 4 per 20 s, inside Discord's limit of 5, with no throttling code. Every
+  card is logged under the `discord` tag in the 🐞 drawer.
+- **The card** shows while an agent is working or a pane changed state in the last
+  30 minutes, otherwise it's cleared. It reads the same settled status as the pane
+  badge, so an interrupted turn stops reading `working` on both (see "Hooks →
+  status/usage"). The elapsed timer starts when the card appears and holds until it
+  clears.
+- **What it shows** (`buildActivity`): the title "Coding with Helm" (`CARD.name`; the
+  verb stays "Playing", as SET_ACTIVITY allows only Playing, Listening, Watching or
+  Competing); a first line only when it says something (the opted-in project, or
+  "1 agent waiting on me"); "Agents working (3 of 5)", where Discord draws the count
+  from a party size; Helm's status dot as the small image (amber if anything waits,
+  else blue while working, else green) with the counts on hover; and the logo
+  turning while agents work.
+- **With Task lines on**, the named pane's own sentence takes the first line while
+  it works or waits, and its project heads the second ("Debugging the reported bug
+  on ticket 7" / "storefront · Agents working (1 of 4)"). The card also sets
+  `status_display_type: 2`, so member lists show that sentence under the owner's
+  name instead of "Coding with Helm". Between tasks the sentence would describe
+  finished work, so the card falls back to its usual text, and so does the member
+  list. **Several busy agents take turns**, 20 s each (`ROTATE_MS`,
+  `HELM_DISCORD_ROTATE_MS`), each with its own project on line 2. The turn comes
+  from the clock, so `buildActivity` stays pure. Only panes in the named pane's
+  state get a turn: while anything works, a pane waiting on its owner sits out, so
+  line 1 never shows a finished task beside "Agents working". A repeated sentence
+  (a broadcast) gets one turn. A turn every 20 s stays well inside Discord's limit
+  of 5 updates per 20 s.
+- **Discord drops what it won't take without an error** (an image it can't load, a
+  field it doesn't know). Its echo of each card is compared with what was sent, and
+  anything missing is logged once as `Discord dropped: …` under the `discord` tag.
+- **Images by link, never uploaded art**, because Discord animates only linked
+  images. They live on the `discord-art-v1` tag: a commit holding just those five
+  files, made by `docs/discord/make-art.mjs`, so the links survive whatever happens to
+  the branches. New art means a new tag and a new `ART`, never a moved tag (Discord
+  caches each link). `HELM_DISCORD_ART` points a fork at its own copy.
+- **Discord setup, for a fork:** any application. Its name and any uploaded art go
+  unused.
+
 ### Public share links (Cloudflare quick tunnels)
 Publishes a **project's dev server** — never Helm's own port — to the internet.
 The URLs are unauthenticated, so the guards are load-bearing; see SECURITY.md
@@ -342,6 +428,24 @@ which POSTs to Helm. This yields per-pane `activity` (working=blue pulsing,
 waiting=amber, idle=green), plus `claudeSessionId` + `transcriptPath` — which
 power revive and usage. Never scrape ANSI output for status; hooks are the way.
 
+The one gap hooks leave: **claude fires no hook when Esc interrupts a turn**, so
+`working` can be stale. `settledActivity` (src/claude.mjs) closes it using only the
+TIMING of a pane's output, never its content: a `working` pane with no sustained
+output for 2 minutes (`HELM_STUCK_AFTER_MS`) is reported as `idle` with
+`presumedIdle: true`, which skips the "finished" alert. Sustained means a run of
+output lasting 8 s or more with no gap over 1.5 s, so a redraw from attaching,
+resizing or focusing a pane doesn't bring it back, while real work resuming does.
+Everything outside the hook route reads this rather than the raw field
+(`sessionInfo`, `presencePanes`). A new prompt always restarts the clock.
+
+The same timing closes the other end of a wait: nothing marks it when you answer a
+question IN THE PANE. A `waiting` pane is silent, so a sustained run that STARTED
+after the wait began reads as `working` (8 s after the answer). Never for a request
+the HUD is holding. The hook route compares each new event against what the pane
+LOOKS like as well as what was recorded, so a second question in the same turn
+starts a fresh waiting clock instead of hiding behind the work that answered the
+first.
+
 A `Notification` event also carries its `message` into `session.activityNote`
 (cleared when the pane starts working or goes idle), surfaced on `sessionInfo`
 so the badge and desktop alert can say *why* a pane is blocked.
@@ -352,6 +456,34 @@ skips meta/command/system-reminder lines, truncates to 100 chars; cached, and
 never re-read once found since the opening prompt is immutable). Shown in each
 pane header and used by the Ctrl+K command palette so search matches on what a
 pane is actually working on, not just its random star-name.
+
+**Task lines** (`taskLines` setting, off by default) add `taskLine`: one sentence
+saying what the pane is doing now, written from its LATEST prompt ("Debugging the
+reported bug on ticket 7"). The notch shows it in place of `summary`, and the
+Discord card shows it for projects whose names are shared.
+- **Trigger:** `UserPromptSubmit` carries the prompt text. After the hook route has
+  answered (the relay gives up at 1.5 s, and a pane must never wait on its own
+  description), `describeTask` runs.
+- **Skipped before any model call:** `isTaskPrompt` (src/claude.mjs) turns away
+  slash commands, claude's own wrappers, prompts under 3 words and replies like
+  "yes do it". The pane keeps its previous sentence.
+- **The call:** the same quick, tool-less `claude -p` as dictation clean-up
+  (`spawnQuickClaude`: Haiku, `--tools ""`, thinking off, neutral cwd, the pane's own
+  account), with the rules on stdin (`taskLinePrompt`) and the prompt cut to 1,500
+  characters. The rules push hard on leaving things out (people, companies, emails,
+  links, paths, keys, money) and on `SKIP` when there is no task.
+- **Vetted in code:** `cleanTaskLine` strips wrapping, then rejects any link, email,
+  path, 7+ digit run, 25+ character token, question, meta-talk, or a line under 2 or
+  over 12 words, and cuts at 60 characters. A rejection keeps the old sentence.
+- **Bookkeeping:** a per-pane counter (`taskSeq`) drops an answer that arrives after
+  a newer prompt. A 50-entry cache keyed on project + prompt makes a broadcast cost
+  one call per project. Calls time out after 20 s. Each outcome is logged under
+  `task` with its time and cost; the prompt itself never is.
+- **Lifetime:** persisted with the pane. `SessionStart` with `source: 'clear'`
+  empties it, and so does switching the setting off (for every pane).
+- **Cost, measured** (23-call bench, claude 2.1.319): about $0.0001 per call,
+  2.5 s median, 3.6 s at worst. `npm run task-rough` is the adversarial bench for
+  the rules (real claude, well under a cent per run).
 
 Frontend notifications are edge-triggered off the 3 s session poll: flip to
 `waiting` → the hook's message (or "needs your input"); `working→idle` →

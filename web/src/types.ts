@@ -22,6 +22,10 @@ export interface SessionInfo {
   exitCode: number | null;
   activity: 'working' | 'waiting' | 'idle' | null; // from Claude Code hooks
   activitySince: string | null; // ISO — when activity last changed ("working 7m")
+  // Reads 'idle' because the terminal went silent, not because claude said so: Esc
+  // fires no hook, so this is how an interrupted turn shows up. Nothing finished,
+  // so it raises no "finished" alert.
+  presumedIdle: boolean;
   activityNote: string | null; // latest Notification message while waiting (why it's blocked)
   // A tool call claude is holding open while the floating HUD offers
   // Approve/Deny. Only ever set while the HUD is open (it heartbeats to arm
@@ -32,6 +36,9 @@ export interface SessionInfo {
   pendingDetail: string | null; // one human line: "Bash: npm run db:migrate"
   pendingSince: string | null; // ISO — when it arrived
   summary: string | null; // auto-title from the conversation's first prompt (search/palette)
+  // What it is doing now, one sentence written from the latest prompt by claude's
+  // quick model ("Debugging the reported bug on ticket 7"). Only with Task lines on.
+  taskLine: string | null;
   canResume: boolean; // claude session id captured → revive resumes it
   hasTranscript: boolean;
   attached: number;
@@ -86,6 +93,9 @@ export interface Workspace {
   // the escape hatch for a project you never want glancing at; the notch drops
   // long-idle panes on its own without any of this.
   notch?: boolean;
+  // Show this project's NAME on the public Discord card? Absent = no, the
+  // opposite of the notch: a new project must never go public by accident.
+  discord?: boolean;
 }
 
 // Per-workspace dev-server liveness for the sidebar. Only workspaces with a
@@ -169,6 +179,21 @@ export interface HelmSettings {
   // (Hiding while Helm's own window is up, or something is full screen, is
   // not a setting - the host always does it.)
   notchAutoCompact: boolean;
+  // Show a "Coding with Helm" card on the user's Discord profile. Public, so off by
+  // default (server/src/discord.mjs).
+  discordPresence: boolean;
+  // One sentence per pane written from each prompt, shown in the notch and on the
+  // Discord card for projects whose names are shared. Off by default.
+  taskLines: boolean;
+}
+
+// GET /api/discord: where the card stands, for the status line beside its toggle.
+export interface DiscordStatus {
+  enabled: boolean;
+  connected: boolean;
+  connecting: boolean; // looking for Discord, or waiting for it to answer
+  user: string | null; // the Discord display name, once connected
+  error: string | null; // why not, when Discord gave a reason
 }
 
 // claude-CLI drift diagnostics — Helm reads undocumented claude formats, so
@@ -206,6 +231,18 @@ export interface UpdateInfo {
   disabled: boolean; // HELM_NO_UPDATE_CHECK=1: no network call is ever made
   error: string | null; // last failure (offline, rate limit) — not shown in the UI
   commits: CommitsBehind | null; // null whenever the answer would be a guess
+  checkout: CheckoutState | null; // null when this isn't a git clone
+}
+
+/**
+ * Where the local checkout stands. The Update button labels itself from this,
+ * so that pressing it never does something it didn't say it would.
+ */
+export interface CheckoutState {
+  branch: string;
+  tracked: string; // the branch updates come from ("main")
+  dirty: boolean; // uncommitted changes to tracked files
+  selfUpdate: boolean; // false when HELM_NO_SELF_UPDATE=1
 }
 
 // Unreleased work: how far the tracked branch is ahead of this checkout. The
@@ -217,6 +254,32 @@ export interface CommitsBehind {
   url: string | null; // GitHub compare page for exactly that range
   latest: string | null; // newest commit's subject line
   latestAt: string | null; // ISO — when that commit landed
+  list: CommitSummary[]; // newest first, capped — what the banner lists
+}
+
+/** One commit in the "what's new" list. */
+export interface CommitSummary {
+  sha: string; // short
+  message: string; // subject line only
+  at: string | null; // ISO
+  url: string | null; // its page on GitHub
+}
+
+/**
+ * What the Update button did. A refusal is `ok:false` with a `detail` sentence
+ * written for the user, not an error code to decode.
+ */
+export interface UpdateResult {
+  ok: boolean;
+  reason?: string;
+  detail?: string;
+  from?: string;
+  to?: string;
+  pulled?: number; // files changed
+  steps: { name: string; ok: boolean; detail: string }[];
+  needsRestart: boolean; // server code changed — panes die on the restart
+  needsServerInstall: boolean; // server deps changed; never installed under a live server
+  notchChanged?: boolean;
 }
 
 // State of the server's own console window (start-helm.cmd terminal).

@@ -258,8 +258,11 @@ export function AgentHud({
           <span className="hud-chip hud-chip-acct">{accountOf(s)}</span>
           <span className="hud-since">{live ? since : s.status}</span>
         </div>
-        {/* What this agent is working on, when we know and the caller wants it. */}
-        {showTask && s.summary && <div className="hud-task">{s.summary}</div>}
+        {/* What this agent is working on, when we know and the caller wants it:
+            Claude's one-line sentence (Task lines), else the first prompt. */}
+        {showTask && (s.taskLine || s.summary) && (
+          <div className="hud-task">{s.taskLine || s.summary}</div>
+        )}
         {/* A row only earns extra height when it actually needs you. */}
         {s.pendingId && note && <div className="hud-ask">{note}</div>}
         {result[s.id] && <div className="hud-result">{result[s.id]}</div>}

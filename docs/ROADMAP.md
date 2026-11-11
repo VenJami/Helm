@@ -1295,6 +1295,209 @@ back to a minimised Helm and restore it, which reads as "the notch hid for no
 reason"; the trace now logs `vis=`/`helmUp=`/`fullScreen=` BEFORE the hide
 decision so it says why.
 
+The update notice becomes an update button (2026-09-14) - owner: "instead of
+that we just put view changes and show the commit messages and an update button
+that auto pull the changes". Fair: the quiet line said main had moved and
+printed `git pull` as a chore to go and do, which is a notification, not a
+feature. The compare API was already returning every commit in the range and we
+were keeping only the newest subject, so the LIST was free - `commits.list`
+(newest first, capped at 30, `{sha, message, at, url}`) and a collapsible panel
+that shows them.
+
+The button is the part that needed deciding, because "auto pull" is never just
+a pull. A bare `git pull` leaves the OLD server running and the OLD web/dist on
+disk, so the UI looks identical afterwards and the button reads as broken. So
+it pulls, then rebuilds what the new commits actually touched, then stops:
+`git pull --ff-only`, `npm install` + `npm run build` in web/ when web/ changed,
+and a plain statement when server/ changed, because only a restart picks that up
+and a restart kills every live pane. Owner chose that shape over both
+alternatives (pull-only, and one-click-including-restart). Web-only updates
+therefore finish completely with a page reload and no panes lost, which is the
+common case for docs and UI fixups.
+
+Owner then: "i want the updating thing to be easy and quick. i dont know how to
+change to main branch" - which retired the original wrong-branch refusal, and
+rightly. Telling someone who does not use git to go and switch branches is a
+dead end, not an instruction, and the owner's own checkout sits on whatever
+feature branch an agent last made. So the button now READS ITS OWN STATE and
+labels itself: on main it says "Update", anywhere else "Switch to main &
+update", and one press does the lot. The switch only ever happens on a request
+that explicitly asks for it, which is only ever the button that said so, with a
+clean tree, and the branch left behind is not touched or deleted - the report
+lists "switched to main" as a step rather than doing it quietly. GET
+/api/update grew `checkout {branch, tracked, dirty, selfUpdate}`, read FRESH per
+request rather than cached with the 2-hourly GitHub answer, because a stale
+branch would make the button promise the wrong thing.
+
+The remaining refusals are each a sentence the panel shows verbatim rather than
+an error code: not a git checkout, and a dirty tree. `--ff-only` is doing real work there: it can never produce a
+conflict or a merge commit for a non-git user to untangle. Two things it
+deliberately will NOT do - touch server/node_modules (the running server holds
+node-pty's .node open and Windows will not replace a locked file, so a server
+dependency change is reported for the restart, never installed underneath a
+live process), and restart itself. Concurrent presses join the one run in
+flight. New `HELM_NO_SELF_UPDATE=1` turns the route into a refusal, which is
+also how the smoke suite covers it without any chance of `npm test` pulling
+over the checkout it is running from.
+
+Verified against a REAL git pull, not a stub: the test copies the working tree
+into a throwaway repo with its own bare origin, lays three commits on it
+(docs-only, web, server - one per branch of the changed-file classification),
+rewinds the checkout and lets the route pull for real - 24/24, including the
+branch switch from a feature branch, that the abandoned branch still exists
+afterwards, that web/dist was genuinely rewritten by vite, and that a second
+press says there is nothing to pull. Then 20/20 in a real browser against that
+same clone, staged ON a `dev-server-panes` branch to match the owner's actual
+situation: the button reading "Switch to main & update", its tooltip promising
+the old branch survives, the three subjects listed newest-first, collapse/
+expand, the working state, and the finished report naming all three steps and
+the restart. Smoke 53. Two traps of my own: the first staging attempt cloned
+`main` and copied two files over it, which would not even boot (main is a whole
+feature set behind the working tree); and the browser run then failed 11 checks
+against a STALE web/dist, because the frontend had changed since the last
+build - the test serves whatever is on disk, so a rebuild is part of the test,
+not a step after it.
+
+Discord presence (2026-11-05) - a "Playing Helm" card on the owner's Discord
+profile, like the VS Code extensions (Rich Presence, not a Discord "Activity",
+which is a different product). `server/src/discord.mjs` speaks the Discord app's
+local pipe with Node's `net`, so no new dependency. Off by default because the card
+is public; project names are opt-in per project (right-click), the owner's choice,
+and the module is only ever handed `{activity, since, lastOutput, project}`, so it
+cannot leak what it never receives. One 5 s timer does everything, which keeps
+updates inside Discord's rate limit with no throttling code. A throwaway test
+against the real client came first, because Discord's docs say OAuth is required
+and that turned out not to be so. Testing on the real client then found the bug
+this was always going to have: Esc fires no hook, so an interrupted pane would claim
+"1 agent working" publicly until its next prompt (fixed at the source, see the next
+entry). Verified: smoke 60 (7 new), and eight deliberate breaks
+all caught by the tests, one only after fixing an "off by default" check that could
+not fail. On the real client with a real claude 2.1.283 pane: 18/18 UI checks driven
+by CDP, card text and logo confirmed by eye, the card correcting itself 122 s after
+a real Esc, the 30-minute clear firing at exactly 30 minutes, Discord quit and
+reopened (the card came back with nothing touched), and a hard-killed server taking
+the card down. NOT verified: the GitHub button (Discord hides your own buttons, so it needs a
+second account), macOS/Linux, and sitting alongside a VS Code presence extension.
+
+Esc no longer leaves a pane "working" (2026-11-05) - claude fires no hook when Esc
+interrupts a turn, so the badge, sidebar count, notch, HUD and Discord card all said
+"working" until the next prompt: an old bug, found while testing the card. Fixed once
+at the source rather than per surface: `settledActivity` in src/claude.mjs reads a
+`working` pane with no sustained output for 2 minutes as idle, flagged `presumedIdle`
+so the "finished" alert stays quiet, and the card's private workaround went away. It
+times output and never reads it, so the "never scrape ANSI" rule stands. A new prompt
+now always restarts the clock. A real pane caught what the unit tests had not: a 3 s
+gap let redraws 2.5 s apart chain into "work" and bring the pane back, so it's now 1.5
+s and an 8 s run. Verified: smoke 62, nine deliberate breaks all caught, real-claude
+e2e 17/17 (3 new, so a claude update that changes this gets noticed), and on a real
+pane a silent 75 s command that read working throughout, nobody attached, and Esc
+settling on the threshold to the tenth of a second. Measured with reduced motion too:
+slower spinner, 0.8 s longest gap, still safe.
+
+Answering in the pane no longer leaves it "waiting" (2026-11-09) - the other end of
+the same gap: nothing marks a wait ending when you answer IN THE PANE, so the badge,
+the "N waiting" pill, the notch's "Needs you" and the card all said "waiting" for the
+rest of the turn. Measured first, because getting it wrong would HIDE a pane that
+needs you: a pane with a prompt open prints nothing (0 frames in 26 s), and once
+answered it prints steadily. So `settledActivity` reads a sustained run that STARTED
+after the wait began as `working`, and three guards keep a real question visible:
+earlier work is no answer, a request the HUD holds is never second-guessed, and each
+new question gets a fresh clock judged on what the pane looks like. Verified: smoke 65
+(stand-in `spin` command added so CI can drive it), five more deliberate breaks all
+caught, real-claude e2e 20/20 on claude 2.1.319 (3 new checks), and on a real pane:
+working 8.3 s after the answer, earlier work ignored, a second question in the same
+turn read waiting 6.2 s after it asked, and a HUD-held request waiting until approved.
+
+Audit advisories cleared again (2026-11-05) - `npm audit --audit-level=high` had gone
+red on both jobs. Server: `express`, `body-parser`, `proxy-addr`, `qs`, now 0
+advisories, node-pty still exactly 1.1.0. Web: dev tooling only, nothing in the bundle
+moved. `npm audit fix` crashes inside npm 10.9.0 on web/, so it ran through a temporary
+npm 11 and was proven with a clean `npm ci` on the machine's own npm (GOTCHAS). Seven
+moderates remain in `typescript-eslint`'s chain: dev-only, under the gate, and npm's
+only fix is a forced downgrade.
+
+The card says "Coding with Helm" (2026-11-09) - owner: "Playing Helm" read like a
+game called Helm. Discord honours a `name` override in SET_ACTIVITY (checked on the
+real client: the card's title and the short status both took it), so the title is
+now "Coding with Helm" and the status reads "Playing Coding with Helm". The verb
+can't change: Discord allows apps only Playing, Listening, Watching or Competing.
+
+The card gets a status dot, a "(3 of 5)" count and a turning logo (2026-11-09) -
+owner wanted it "more cool" and picked these from the menu of everything a card can
+show. Helm's own look: the badge is Helm's status dot on its raised surface (amber if
+anything waits, else blue working, else green), and the large image is the real
+logo, turning slowly while agents work, read off `icon-512.png` rather than redrawn
+(`docs/discord/make-art.mjs`, Node built-ins only, including a small GIF encoder).
+The count is Discord's own party-size display. Images go by LINK, because Discord
+animates only linked images, from the `discord-art-v1` tag: a commit holding just
+the five images, pushed alone, so none of the unpushed work went public and the
+links survive branch merges. Each piece was tried on the real client before it was
+built, then the server drove all three states (working, waiting, between tasks) to
+the real profile and the owner confirmed each by eye. Smoke 65.
+
+Task lines (2026-11-10) - owner: the card should say what an agent is actually doing,
+"debugging the reported bug on ticket 7", not just "Working on <project>", and the notch
+should use the same sentence. Research came first, and ruled out every free source:
+- **Claude's AI session title** is set once per conversation and never updates.
+  Helm's panes don't get one at all, because `-n <star name>` suppresses it.
+- **To-do lines:** zero to-do lists in 30 days of the owner's sessions.
+- **The terminal title** only repeats the pane name.
+So claude's quick model writes the sentence from each prompt, which the hook relay
+already carried and Helm had ignored. It uses the same tool-less, thinking-off call
+as dictation (`spawnPolish` became `spawnQuickClaude`), after the hook has answered.
+Replies like "yes" and slash commands never reach the model (`isTaskPrompt`), and
+`cleanTaskLine` rejects any reply carrying a link, email, path, long number or
+key-like string. A per-pane counter makes the newest prompt win, and a cache makes a
+broadcast cost one call per project. Owner's choices: ONE switch (Appearance > Task
+lines, off by default), shown in the notch and, for projects whose names are already
+shared, on the card. Switching it off clears every sentence. The member list under
+the owner's name shows the sentence too: `status_display_type: 2`, set only while
+there is a sentence. The card compares Discord's echo with what it sent, so a field
+Discord quietly drops gets logged. Verified:
+- **Smoke:** 69 tests (68 pass, 1 old skip), 4 of them new. 9 deliberate breaks were
+  all caught, including both privacy layers broken at once.
+- **`npm run task-rough`** (new, committed): 24 adversarial cases against the real
+  model, 23 checked and 1 judgement call, all passing twice. The privacy cases kept
+  the client name, person, email, URL, key, path, money and password off the line,
+  and "ignore all instructions" was rejected. About $0.0001 per call, 2.5 s median.
+- **Real-claude e2e:** 24/24 on 2.1.319, with 3 new checks: the hook carries
+  `prompt` and `source`, and a real prompt became "Explaining binary search concept".
+- **On the owner's real Helm and Discord:** a real prompt became "Summarizing project
+  structure and purpose" in 3.1 s for $0.0002. The member list showed the sentence,
+  the card showed it over "<project> · Agents working (1 of 4)", and the notch showed it
+  under the pane. With the setting off, the member list read "Coding with Helm"
+  again. Discord dropped no field. One behaviour to know: claude's "waiting for your
+  input" notification, about a minute after a turn, brings the sentence back over
+  "Waiting on me", because the pane is now waiting on its owner.
+
+Busy agents take turns on the card (2026-11-10) - owner asked what the card shows
+with several panes working. It showed one: whichever agent had been working longest.
+That had a quirk: a new prompt to the agent on the card restarted its clock and
+handed the card to the other one. Offered newest-wins, two-per-card, one card per
+agent, or turns; the owner picked turns. Every busy agent's sentence now gets 20
+seconds on line 1, with its own project leading line 2. The count and the member
+list follow along. Only agents in the top state take part, so while anything works,
+a pane waiting on its owner sits out and line 1 never shows a finished task beside
+"Agents working". A broadcast's repeated sentence gets one turn. The turn comes from
+the clock, so `buildActivity` stays pure. Smoke 70: rotation unit cases plus a
+two-pane test with turns sped up to 300 ms. 4 deliberate breaks, all caught. On the
+owner's real Discord the turns ran on the clock's 20 s marks (Rigel's sentence,
+Bosun's, Rigel's again), the owner saw the member list take turns, and Discord
+dropped nothing. The first attempt used real prompts and proved nothing: both
+answers finished in about 8 s, less than one turn, and one prompt got no sentence.
+It was then staged through the hook relay: two panes marked busy with real-sounding
+prompts, so the sentences were really written but no Claude turn ran. Afterwards a
+`SessionStart` `clear` returned both panes to idle and removed the test sentences.
+
+False drift banner fixed (2026-11-10) - after a restart, Helm warned "the claude
+transcript format may have changed". The culprit was a 25 September subagent log:
+82 KB of attachments and one reply, which was claude's own `<synthetic>`
+placeholder for a failed call. It genuinely has no usage, and the check took "big
+file, zero usage" for drift. It now asks whether any reply came in the shape Helm
+reads, placeholders included, so a real field rename still trips it. Smoke 71.
+The new test fails with the old rule restored. The real file now parses to 0 usage
+and no warning.
+
 ## Short-term backlog (rough priority order, owner-approved direction)
 (empty — next items to be chosen with the owner)
 

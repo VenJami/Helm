@@ -6,6 +6,37 @@ All notable changes to Helm are documented here. Format follows
 
 ## [Unreleased]
 ### Added
+- **Discord presence.** An optional "Coding with Helm" card on your Discord profile,
+  like the VS Code presence extensions: how many agents are working, shown as
+  Discord's own "(3 of 5)" count, Helm's status dot, a logo that turns while agents
+  work, an elapsed timer and a link to the repo. Off by default, because the card is
+  public. Project names stay private unless you right-click a project and choose
+  "Show name on Discord"; prompts, paths, branches and accounts are never sent. It
+  talks to the Discord desktop app over a local pipe with no new dependency, comes
+  back by itself when Discord restarts, and clears after 30 quiet minutes or if
+  Helm stops. Turn it on in Appearance.
+- **Task lines: one sentence per pane about what it's doing.** Claude's quick model
+  reads each new prompt and writes a line like "Debugging the reported bug on
+  ticket 7". It shows in the notch in place of the first prompt, and on the
+  Discord card, and under your name in member lists, for projects whose names you
+  share. With several agents busy, the card takes turns, 20 seconds each. Replies
+  like "yes" and slash commands are skipped without a call. The
+  model is told to leave out names, emails, links, paths and keys, and the code
+  rejects a sentence that still has one. Costs well under a cent per prompt, on
+  that pane's own account. Off by default: Appearance > Task lines.
+- **The update notice now shows what changed, and can apply it.** Being behind
+  `main` used to be one line naming the newest commit, with `git pull` printed
+  as a reminder to go and do it yourself. It now lists every new commit's
+  subject (collapsible, newest first) and carries an **Update** button that
+  fast-forwards the checkout and rebuilds the frontend for you. **One press
+  does the whole job**, including getting you back onto `main` if you were
+  parked on some other branch — the button says "Switch to main & update" when
+  that is what it will do, and the branch you leave is untouched. It still
+  refuses rather than guess when it cannot finish cleanly: no pulling over
+  uncommitted changes, and never a merge. When only the frontend changed, a
+  page reload finishes the job and your panes keep running; when server code
+  changed it says so, and leaves the restart — the one step that costs you live
+  panes — to you. `HELM_NO_SELF_UPDATE=1` switches the button off.
 - **Pane categories, with a colour you pick.** Group panes the way Chrome groups
   tabs: make a category, give it a name and any colour from a colour picker, and
   file panes into it from the colour button in a pane's header. The category owns
@@ -83,9 +114,35 @@ All notable changes to Helm are documented here. Format follows
   age, pre-ticking anything past a fortnight.
 
 ### Fixed
+- **No more false "the transcript format may have changed" banner.** A subagent
+  log whose only reply is Claude's placeholder for a failed call has no usage
+  in it, which is correct. Helm took a big file like that for a change in
+  Claude's format and raised the warning. It now knows the difference, and
+  still warns when the format really changes.
 - **Stopping a public share link now really stops it.** Helm closed the link and
   forgot about it, but on some setups the underlying process kept running — a
   public URL still live with nothing left holding it. It is killed properly now.
+- **A pane you stop with Esc no longer says "working" until your next prompt.**
+  Claude sends no signal when a turn is interrupted, so the badge, the sidebar count,
+  the notch and the HUD all kept saying "working". Helm now notices the terminal has
+  gone quiet and shows the pane as idle after 2 minutes, without a false "finished"
+  alert. Looking at or resizing the pane doesn't bring it back; real work resuming
+  does. A new prompt now also restarts the "working 3m" clock after an interrupt,
+  rather than carrying on from the turn you stopped.
+- **A pane you answer in the pane no longer says "waiting" for the rest of its
+  turn.** Approving a tool call or answering a question inside the pane sends no
+  signal either, so the badge, the "N waiting" pill and the notch's "Needs you" kept
+  asking for you while Claude was already working. Helm now sees the pane printing
+  again and shows it as working about 8 seconds after you answer. A question that is
+  still open always reads "waiting", including a second one later in the same turn.
+
+### Security
+- **Dependency advisories cleared.** On the server: `express`, `body-parser`,
+  `proxy-addr` and `qs`, which leaves no advisories there. On the frontend, only
+  build and lint tooling changed (`vite`, `vitest`, `zod`, `source-map-js`,
+  `brace-expansion`, `typescript-eslint`), so nothing in the browser bundle moved.
+  Seven moderate advisories remain in `typescript-eslint`'s dependency chain, which is
+  dev tooling that never ships; npm's only fix is a forced downgrade.
 
 ## [0.3.0] — 2026-09-09
 ### Added

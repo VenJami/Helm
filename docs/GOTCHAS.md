@@ -51,6 +51,12 @@
 - **`npm run dev` (--watch) restarts on server-file edits and kills all live
   panes** (they become revivable `dead` sessions, but still). `npm start` for
   daily use.
+- **A quick restart leaves an open Helm window's panes "disconnected".** A pane
+  reconnects its socket only when its session's status changes, or when you click
+  Reconnect. With auto-revive on, a restart is over in about 3 s, inside the page's
+  3 s poll, so the page never sees the panes die and they sit there disconnected.
+  Seen 2026-11-09: the server log had no `ws` "attached" line in the 17 minutes
+  after a restart. Reload the page (Ctrl+R) after every restart.
 - **Token injection:** the built `index.html` contains the placeholder
   `%%HELM_TOKEN%%`; the server `replaceAll`s it when serving `/`. Don't put
   that placeholder string anywhere else in the HTML (a comment containing it
@@ -494,6 +500,121 @@ Related, in the smoke suite: the MAIN test server takes its data dir from
 `LOCALAPPDATA`, so its state is `tmp\Helm`, while the seeded aside-servers use
 `HELM_DATA_DIR` and theirs is the dir itself. `persistedSessions(tmp)` silently
 returns `[]` against the main server — pass `path.join(tmp, 'Helm')`.
+
+## Discord presence: what the real client actually does
+Checked against a real Discord client on 2026-11-05, because the docs mislead:
+
+- **`SET_ACTIVITY` over the pipe needs no OAuth.** Discord's RPC page says every
+  command needs authentication (error 4006). Handshake, wait for READY, send:
+  accepted, every time.
+- **Dropping the connection clears the card**, with no goodbye needed, so a hard
+  crash can't leave a stale card behind. `activity: null` clears it too.
+- **A bad application id is a CLOSE frame** (opcode 2),
+  `{code: 4000, message: 'Invalid Client ID'}`, then the pipe closes.
+- **`timestamps.start` takes seconds or milliseconds.** Discord's reply shows seconds
+  multiplied up to milliseconds.
+- **An unknown image name fails SILENTLY, which cost a debugging round.** No error,
+  and the card just has no art. The reply is the tell: `assets.large_image` comes
+  back as an id when the name resolved and is missing when it didn't. To see what an
+  application really has, with no auth:
+  `GET https://discord.com/api/v10/oauth2/applications/<id>/assets` →
+  `[{id, type, name}]`. The portal's "Invite Image" slot is NOT the art list: an
+  image there gives a `cover_image` on the app and still no art.
+- **Images can be links, and only links animate.** `large_image` and `small_image`
+  take an https URL; the reply shows it turned into `mp:external/...` (Discord's
+  image proxy), and a GIF plays on the card. Uploaded art never animates. Checked on
+  the real client 2026-11-09 with both a GIF and a GitHub-hosted PNG badge.
+- **`party.size` is drawn as "(3 of 5)"** after the second line. Any party id works;
+  with no join secret, nobody is offered a way to join.
+- **Testing a GIF in a browser:** `ImageDecoder` (which decodes every frame) exists
+  only on secure pages. `about:blank` isn't one, `http://localhost:<port>` is.
+- **The title can be changed, the verb can't.** `name` in SET_ACTIVITY is honoured
+  (checked 2026-11-09): the reply echoes it, the card's title shows it, and the
+  short status reads "Playing <name>". The verb comes from `type`, and SET_ACTIVITY
+  allows only Playing, Listening, Watching and Competing, so no status can say
+  "Coding". Hence "Playing Coding with Helm".
+- **You can't see your own buttons.** Discord's docs say so: buttons on the card show
+  only to other people, so it takes a friend or second account to check one.
+- **The member list's line can be changed, and it doesn't stick.** `status_display_type:
+  2` in SET_ACTIVITY makes member lists show the card's first line (`details`) under
+  the name instead of its title (checked 2026-11-10 on the owner's client: the task
+  line showed there, and Discord's echo kept the field). Leave it out of the next
+  update and the title comes back, so it never has to be reset explicitly.
+- **Discord drops what it won't take without an error.** An unknown image or field
+  simply goes missing from its echo of the card. That echo is the only evidence, so
+  Helm compares it with what it sent and logs `Discord dropped: …`.
+- **Your own profile popup can hide your own card.** Clicking your own name in the
+  member list showed the card folded into a thin bar under "Game Collection", while
+  the bottom-left avatar popup showed it in full. It's Discord's layout, not
+  something the card controls, so check from the avatar or a friend's account.
+- **Reported, not reproduced here:** browser Discord has no pipe, Discord's Activity
+  Privacy setting can hide the card, and running only one of the two apps as
+  Administrator can block the pipe. Check these first when a card won't appear.
+
+**Three testing traps from building this:**
+1. **The real Discord is one setting away.** Only the smoke suite's main server is
+   pinned to the stand-in. An aside server that turns presence on must be given
+   `HELM_DISCORD_PIPE` too, or it publishes to the real profile of whoever runs it.
+2. **A helper that resets state can hide what you're testing.** The "off by default"
+   check first ran after `discordFresh()`, which switches presence off, so it could
+   not fail. Breaking the code on purpose is what exposed it: temporarily flip the
+   default and watch the test go red.
+3. **Check a long-running test really ran long.** A "run a 150 s command" measurement
+   came back with a reassuring number after only 13 s, because the command never
+   ran. Assert on the duration, and read what the pane actually did.
+
+## `working` can be a lie: Esc fires no hook
+Claude sends nothing when Esc interrupts a turn: no `Stop`, no `Notification`. The
+pane read `working` until its next prompt, for 10 minutes and counting when measured,
+on the badge, the sidebar, the notch, the HUD and the public Discord card alike.
+`settledActivity` in src/claude.mjs is the single fix, and everything outside the hook
+route reads it. It goes by output TIMING and never parses content (ARCHITECTURE):
+- **Measured, claude 2.1.283:** a real turn running a silent command printed ~9 frames
+  a second with a longest gap of 0.5 s, and it keeps printing with nobody attached (a
+  75 s command read `working` throughout, past a 30 s threshold). With
+  `prefersReducedMotion` it's ~4 a second, longest gap 0.8 s. After Esc: nothing.
+- **A stopped pane still prints.** Resizing makes a 9 ms burst, a whole window drag
+  under 2 s. So only a sustained run counts as work (8 s, no gap over 1.5 s).
+- **That gap is tighter than it looks like it needs to be.** At 3 s, redraws 2.5 s
+  apart chained into one long run and brought the pane back to `working`. The unit
+  test had used redraws 5 s apart, which passed; only a real pane caught it. Test
+  the awkward spacing, not the comfortable one.
+- **`presumedIdle` exists for the "finished" alert.** That alert fires on
+  working → idle, so a turn you stopped yourself would announce it had finished.
+- **The same gap at the other end of a wait.** A question or permission prompt fires
+  `Notification` about 6 s after it appears and reads `waiting`, but nothing marks
+  the END of the wait: answered IN THE PANE, it read `waiting` for the rest of the
+  turn. Measured: a pane with a prompt open prints nothing at all (0 frames in 26 s,
+  for both a permission prompt and a question), and once answered it prints
+  steadily until the turn ends. So a run of work that STARTS after the wait began
+  means it resumed, and the pane reads `working` 8 s after the answer.
+- **Getting that wrong would hide a pane that needs you, which is worse than the bug
+  it fixes.** Three guards, each with a test that has been broken on purpose to prove
+  it bites: work from BEFORE the question is no answer to it; a request the HUD is
+  holding is never second-guessed; and every new question starts a fresh waiting
+  clock, judged against what the pane LOOKS like, not just what was recorded, or the
+  work that answered the first question would mask the second.
+- **What's left:** the 6 s before `Notification` arrives. A second question in the
+  same turn reads `working` for those 6 s, which is the same delay every first
+  question has always had.
+- **A real model won't always do what a test asks.** Told to write a file, count,
+  then write another, Haiku asked for both writes at once and never counted, so the
+  check meant to see work between two prompts saw none and failed for the wrong
+  reason. Make the script detect whether the situation happened, and say "not
+  exercised" rather than pass or fail on a run that never got there.
+
+## `npm audit fix` can crash inside npm itself
+On npm 10.9.0 (what Node 22.12 ships), `npm audit fix` and `npm update` in `web/` both
+die with `Cannot read properties of null (reading 'edgesOut')`, in arborist's
+`#loadPeerSet`. It is an npm bug, and nothing is changed when it happens, so it's easy
+to read as "the fix did nothing". Run that one command through a newer npm without
+installing it: `npx -y npm@11 audit fix` from inside the package. Then prove the
+result with the machine's own npm, because that's what CI uses: `npm ci`, and
+`npm audit --audit-level=high`. Lockfile format is unchanged, and npm 11 warns about
+esbuild's install script, which the clean `npm ci` takes care of. Also, what's left
+isn't always fixable: "fix available" against `typescript-eslint` means a downgrade
+under `--force`, so check `fixAvailable` in `npm audit --json` before promising a
+clean report.
 
 ## Testing pattern that works
 `cd server && npm run e2e` now codifies this permanently

@@ -169,7 +169,9 @@ export function parseTranscriptFile(file) {
   // `byMessage` dedupes streaming (the same assistant message can be logged on
   // several lines — last occurrence wins) and persists across increments.
   const incremental = entry?.byMessage && stat.size > entry.size;
-  if (!incremental) entry = { byMessage: new Map(), pending: Buffer.alloc(0), sawJson: false };
+  if (!incremental) {
+    entry = { byMessage: new Map(), pending: Buffer.alloc(0), sawJson: false, sawShape: false };
+  }
   let lines;
   try {
     ({ lines, pending: entry.pending } = readAppendedLines(
@@ -191,13 +193,18 @@ export function parseTranscriptFile(file) {
     entry.sawJson = true; // any JSON at all → drift signal below can trust "shape" verdicts
     const usage = e?.message?.usage;
     const model = e?.message?.model;
-    // '<synthetic>' = placeholder entries (errors/retries), not real usage
-    if (e?.type === 'assistant' && usage && model && model !== '<synthetic>') {
-      entry.byMessage.set(e.message.id ?? e.uuid, {
-        model,
-        usage,
-        t: Date.parse(e.timestamp) || 0,
-      });
+    if (e?.type === 'assistant' && usage && typeof model === 'string') {
+      // A reply in the shape we read, even a '<synthetic>' placeholder: the format
+      // is understood, so finding no REAL usage is a fact about this file, not drift.
+      entry.sawShape = true;
+      // '<synthetic>' = placeholder entries (errors/retries), not real usage
+      if (model && model !== '<synthetic>') {
+        entry.byMessage.set(e.message.id ?? e.uuid, {
+          model,
+          usage,
+          t: Date.parse(e.timestamp) || 0,
+        });
+      }
     }
   }
   // Rebuild the aggregate views from the deduped messages (cheap vs parsing).
@@ -220,11 +227,14 @@ export function parseTranscriptFile(file) {
   entry.events = events;
   entry.mtimeMs = stat.mtimeMs;
   entry.size = stat.size;
-  // Drift signal: a substantial, well-formed transcript that yields zero usage
-  // events almost certainly means the JSONL shape changed (assistant/usage
+  // Drift signal: a substantial, well-formed transcript with no reply in the shape
+  // we read almost certainly means the JSONL shape changed (assistant/usage/model
   // fields renamed or moved). Gated by size so fresh/short sessions with no
-  // assistant turn yet don't false-alarm. (noteDrift dedupes by key.)
-  if (entry.sawJson && events.length === 0 && stat.size > 16 * 1024) {
+  // assistant turn yet don't false-alarm. A file whose only replies are claude's
+  // '<synthetic>' placeholders (a subagent whose call failed, padded out by big
+  // attachments) has no usage AND a known shape, so it is not drift: that used to
+  // raise the banner. (noteDrift dedupes by key.)
+  if (entry.sawJson && !entry.sawShape && stat.size > 16 * 1024) {
     noteDrift(
       'transcript-shape',
       `A ${Math.round(stat.size / 1024)} KB transcript parsed as JSON but produced 0 usage entries ` +
@@ -263,6 +273,10 @@ export function transcriptFiles(configDir) {
 // found; before then only the bytes APPENDED since the last poll are read (this
 // runs for every session on every 3 s /api/sessions poll — a full re-read of a
 // growing multi-MB transcript here used to stall the event loop).
+// Text claude wraps around things the person did NOT type (slash-command
+// echoes, system reminders). Both the first-prompt title and task lines skip it.
+export const META_PROMPT_PREFIXES = ['<command-', '<local-command', '<system-reminder', 'Caveat:'];
+
 const summaryCache = new Map(); // transcript path → {mtimeMs, size, pending, summary}
 const SUMMARY_CACHE_MAX = 512; // bound memory like fileUsageCache (sessions churn)
 
@@ -311,14 +325,7 @@ export function firstPromptSummary(file) {
     str = str.replace(/\s+/g, ' ').trim();
     // Skip tool results (no text), slash-command wrappers, and system-reminder
     // injections — we want the human's actual opening ask.
-    if (
-      !str ||
-      str.startsWith('<command-') ||
-      str.startsWith('<local-command') ||
-      str.startsWith('<system-reminder') ||
-      str.startsWith('Caveat:')
-    )
-      continue;
+    if (!str || META_PROMPT_PREFIXES.some((p) => str.startsWith(p))) continue;
     c.summary = str.slice(0, 100);
     break;
   }
@@ -341,6 +348,71 @@ export function accountEmail(configDir) {
   } catch {
     return null;
   }
+}
+
+// ------------------------------------------------ a turn that ended in silence
+// Claude fires NO hook when Esc interrupts a turn: Stop does not run and no
+// Notification follows, so a pane would read 'working' until its next prompt
+// (still so 10 minutes later on 2.1.283, with claude's own screen saying
+// "Interrupted"). The terminal gives it away. While claude works its spinner keeps
+// redrawing, even through a silent long-running command: 994 frames and a longest
+// gap of 0.5 s over a real 107 s turn, against zero frames in 40 s after Esc.
+//
+// Two kinds of output have to be told apart, because a pane that has stopped still
+// prints: attaching, resizing or focusing it makes the TUI redraw, in one brief
+// burst (9 ms for a resize, under 2 s for a whole window drag). Only output that
+// KEEPS coming counts as busy. So looking at an interrupted pane doesn't make it read
+// 'working' again, while real work resuming with no hook to announce it does.
+//
+// The gap has to stay tight, or separate redraws chain into one long run: at 3 s,
+// events 2.5 s apart read as work. Steady typing can still pass for work, which is
+// harmless: the pane reads 'working' a little early, or for 2 minutes if you give up.
+const OUTPUT_GAP_MS = 1500; // a longer pause than this ends a run of output
+const SUSTAINED_OUTPUT_MS = 8000; // a run this long is a spinner, not a redraw
+const STUCK_AFTER_MS = Number(process.env.HELM_STUCK_AFTER_MS) || 2 * 60 * 1000;
+
+/** Call for every chunk a pane prints. Cheap: it runs on the PTY's hot path. */
+export function noteOutput(s, now = Date.now()) {
+  if (s.lastOutputAt === undefined || now - s.lastOutputAt > OUTPUT_GAP_MS) s.outputBurstAt = now;
+  s.lastOutputAt = now;
+  if (now - s.outputBurstAt >= SUSTAINED_OUTPUT_MS) {
+    s.lastBusyAt = now;
+    s.busyFrom = s.outputBurstAt; // where this run of real work began
+  }
+}
+
+/**
+ * What a pane is really doing, as everything outside the hook route should see it.
+ * `presumedIdle` says Helm worked this out from the silence rather than being told,
+ * so the UI can skip the "finished" alert: nothing finished, the turn was stopped.
+ *
+ * @returns {{activity: string|null, activitySince: string|null, presumedIdle: boolean}}
+ */
+export function settledActivity(s, now = Date.now()) {
+  let activity = s.activity;
+  let since = s.activitySince;
+  // Answered IN THE PANE: claude goes back to work and, again, no hook says so. A
+  // waiting pane is silent (0 frames over 26 s with a permission prompt or a
+  // question open), so a run of real work that STARTED after the wait began means it
+  // resumed: 8 s after the answer, measured. A request the HUD is holding is never
+  // second-guessed, because Helm knows for certain that one is still unanswered.
+  if (activity === 'waiting' && !s.pendingId && s.busyFrom > (Date.parse(since) || 0)) {
+    activity = 'working';
+    since = new Date(s.busyFrom).toISOString();
+  }
+  if (activity === 'working') {
+    // The prompt counts as busy too: a turn that has only just started hasn't had
+    // time to print anything yet.
+    const busyAt = Math.max(s.lastBusyAt ?? 0, Date.parse(since) || 0);
+    if (now - busyAt > STUCK_AFTER_MS) {
+      return {
+        activity: 'idle',
+        activitySince: new Date(busyAt).toISOString(),
+        presumedIdle: true,
+      };
+    }
+  }
+  return { activity, activitySince: since, presumedIdle: false };
 }
 
 // ------------------------------------------------ permission-request shapes
@@ -489,4 +561,77 @@ export function cleanPolished(text, transcript) {
   // short dictation ("fix the login bug") from tripping the ratio.
   if (out.length > Math.max(240, transcript.trim().length * 3)) return null;
   return out;
+}
+
+// ------------------------------------------------------------- task lines
+// The one-line "what this pane is doing" sentence ("Debugging the reported bug on
+// ticket 7"), written by claude's quick model from each new prompt when the Task
+// lines setting is on. It shows in the notch, and on the PUBLIC Discord card for
+// projects whose names are shared. These two guard both ends of that call.
+// Both fail closed: a prompt that isn't worth a call, or a reply that isn't fit to
+// show, keeps the pane's previous sentence.
+
+// Replies that carry no new task. Only reached by prompts of 3+ words, so the
+// short ones ("yes", "go ahead") never get this far.
+const ACK_PROMPT =
+  /^(?:y(?:es|ep|eah)?|no(?:pe)?|ok(?:ay)?|sure|thanks?(?: you)?|ty|go(?: ahead| on)?|continue|keep going|proceed|do it|sounds good|lgtm|looks good|perfect|great|nice|cool|done|that works)(?:[\s,.!]+(?:please|thanks?|then|now|do it|go ahead|continue|keep going|ok(?:ay)?))*[\s.!]*$/i;
+
+/** Is this prompt worth a model call? Slash commands, claude's own wrappers,
+ *  short replies and acknowledgements are not: the pane keeps its last line. */
+export function isTaskPrompt(prompt) {
+  if (typeof prompt !== 'string') return false;
+  const text = prompt.replace(/\s+/g, ' ').trim();
+  if (!text || text.startsWith('/')) return false;
+  if (META_PROMPT_PREFIXES.some((p) => text.startsWith(p))) return false;
+  if (text.split(' ').length < 3) return false;
+  return !ACK_PROMPT.test(text);
+}
+
+const TASK_LINE_MAX = 60; // a notch row and one card line; a cut beats a wrap
+const TASK_LEADIN = /^(?:status(?: line)?|task(?: line)?|here(?:'s| is)[^:\n]{0,40})\s*:\s*/i;
+// Never fit for a public card, whatever the prompt told the model. Each is a way a
+// detail from the prompt could ride out on the line.
+/** @type {[RegExp, string][]} */
+const TASK_LEAKS = [
+  [/https?:\/\/|www\./i, 'a link'],
+  [/[^\s@]+@[^\s@]+\.[a-z]{2,}/i, 'an email address'],
+  [/[a-z]:[\\/]|\\\\|(?:^|\s)~?\/[\w.-]+\/|[\w-]+\/[\w.-]+\.[a-z]{1,5}\b/i, 'a file path'],
+  [/\d{7,}/, 'a long number'],
+  [/\S{25,}/, 'a key-like string'],
+];
+// The model talking about the prompt instead of describing the work. Specific on
+// purpose: "the user" alone would also reject "Fixing the user avatar upload".
+const TASK_META =
+  /\b(?:i can(?:'|no)?t|i cannot|i'?m sorry|as an ai|i (?:will|would|need)|the user (?:wants|is asking|asks|asked|requests|would like|needs)|(?:the|this) (?:prompt|message|instruction) (?:is|asks|says|contains|does|has)|no (?:real |clear )?task)\b/i;
+// Quotes, markdown and closing punctuation around the sentence, in any order.
+const stripWrapping = (s) => s.replace(/^[\s"'“‘`*_]+|[\s"'”’`*_.!…]+$/gu, '');
+
+/**
+ * Trim a task-line reply to the bare sentence, or say why it can't be shown.
+ * @param {unknown} text the model's reply
+ * @returns {{line: string|null, why: string|null}} line null = keep the old one
+ */
+export function cleanTaskLine(text) {
+  if (typeof text !== 'string') return { line: null, why: 'no reply' };
+  let out = text.trim();
+  const fence = /^```[a-z]*\s*\n([\s\S]*?)\n?```$/i.exec(out);
+  if (fence) out = fence[1].trim();
+  out = out.split(/\r?\n/).find((l) => l.trim()) ?? '';
+  // Twice: "**Status:** Fixing it." has wrapping on both sides of the lead-in.
+  out = stripWrapping(stripWrapping(out).replace(TASK_LEADIN, '')).replace(/\s+/g, ' ');
+  if (/^skip\b/i.test(out)) return { line: null, why: 'nothing to describe' };
+  if (!out) return { line: null, why: 'empty reply' };
+  for (const [re, what] of TASK_LEAKS) {
+    if (re.test(out)) return { line: null, why: `it contained ${what}` };
+  }
+  if (out.includes('?')) return { line: null, why: 'it was a question' };
+  if (TASK_META.test(out)) return { line: null, why: 'it talked about the prompt' };
+  const words = out.split(' ').length;
+  if (words < 2 || words > 12) {
+    return { line: null, why: `it was ${words} word${words === 1 ? '' : 's'} long` };
+  }
+  if (out.length > TASK_LINE_MAX) {
+    out = out.slice(0, out.lastIndexOf(' ', TASK_LINE_MAX - 1)).replace(/[,;:\s]+$/, '') + '…';
+  }
+  return { line: out[0].toUpperCase() + out.slice(1), why: null };
 }

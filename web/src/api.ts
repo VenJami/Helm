@@ -7,6 +7,7 @@ import type {
   GitInfo,
   HelmSettings,
   LogsResponse,
+  DiscordStatus,
   NotchState,
   ProfilesInfo,
   ServerInfo,
@@ -14,6 +15,7 @@ import type {
   TunnelInfo,
   TunnelsResponse,
   UpdateInfo,
+  UpdateResult,
   UsageInfo,
   Workspace,
 } from './types';
@@ -157,6 +159,10 @@ export const api = {
   getLogs: (after: number) => req<LogsResponse>(`/logs?after=${after}`),
   getDiagnostics: () => req<Diagnostics>('/diagnostics'),
   getUpdate: () => req<UpdateInfo>('/update'),
+  // Pulls and rebuilds. Minutes, not milliseconds (npm install + vite build),
+  // so the caller shows progress rather than assuming this is quick.
+  pullUpdate: (switchBranch = false) =>
+    req<UpdateResult>('/update/pull', { method: 'POST', body: JSON.stringify({ switchBranch }) }),
   broadcast: (text: string, sessionIds: string[]) =>
     req<{ ok: boolean; results: Record<string, 'sent' | 'skipped'> }>('/broadcast', {
       method: 'POST',
@@ -165,6 +171,8 @@ export const api = {
   getSettings: () => req<HelmSettings>('/settings'),
   updateSettings: (patch: Partial<HelmSettings>) =>
     req<HelmSettings>('/settings', { method: 'PATCH', body: JSON.stringify(patch) }),
+
+  getDiscord: () => req<DiscordStatus>('/discord'),
 
   getNotch: () => req<NotchState>('/notch'),
   // Launches the floating notch if it isn't already up. One window per machine;
@@ -188,6 +196,7 @@ export const api = {
       port?: number | null;
       startCommands?: string[] | null;
       notch?: boolean;
+      discord?: boolean;
     },
   ) => req<Workspace>(`/workspaces/${id}`, { method: 'PATCH', body: JSON.stringify(patch) }),
   // ▶ — run the project's start command(s), one dev pane each (created on first

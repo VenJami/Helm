@@ -29,6 +29,9 @@ const wrapper = path.join(testDir, IS_WIN ? 'fake-claude.cmd' : 'fake-claude.sh'
 // Stand-in for cloudflared, so share links can be driven without the real
 // binary or any network (see fake-cloudflared.mjs).
 const cfWrapper = path.join(testDir, IS_WIN ? 'fake-cloudflared.cmd' : 'fake-cloudflared.sh');
+// The fake claude logs every task-line call here (the prompt's last word), so the
+// task-line tests count real calls instead of guessing from timing.
+const taskLog = path.join(tmp, 'task-calls.log');
 
 let child;
 // Stand-in for the GitHub releases + compare APIs, so both halves of the
@@ -45,8 +48,12 @@ let ghCompare = {
   behind_by: 0,
   html_url: 'https://example.invalid/compare/abc...main',
   commits: [
-    { commit: { message: 'Older thing', committer: { date: '2026-08-27T00:00:00Z' } } },
     {
+      sha: '1111111111111111111111111111111111111111',
+      commit: { message: 'Older thing', committer: { date: '2026-08-27T00:00:00Z' } },
+    },
+    {
+      sha: '2222222222222222222222222222222222222222',
       commit: {
         message: 'Newest thing\n\nbody text',
         committer: { date: '2026-08-28T00:00:00Z' },
@@ -54,6 +61,100 @@ let ghCompare = {
     },
   ],
 };
+// Stand-in for the Discord desktop app's local pipe, so the presence card can be
+// driven without Discord and without publishing anything (HELM_DISCORD_PIPE pins
+// the server to it). `raw` keeps every JSON body the server sent, unparsed,
+// because that is what the privacy test has to search.
+const discordPipe = IS_WIN
+  ? `\\\\.\\pipe\\helm-smoke-discord-${process.pid}`
+  : path.join(tmp, 'discord-ipc-test');
+const discord = {
+  server: null,
+  sockets: new Set(),
+  connections: 0,
+  handshakes: [],
+  activities: [], // the activity of every SET_ACTIVITY, in order; null = cleared
+  raw: [],
+  pongs: [],
+  answer: 'ready', // how a handshake is answered: 'ready' | 'reject' | 'silent'
+  refuseActivity: false,
+  // Fields left out of the echo, the way the real Discord quietly drops what it
+  // won't take (an image it can't load, a field it doesn't know).
+  dropFields: [],
+};
+const without = (obj, keys) =>
+  obj && Object.fromEntries(Object.entries(obj).filter(([k]) => !keys.includes(k)));
+const discordFrame = (op, payload) => {
+  const body = Buffer.from(JSON.stringify(payload));
+  const header = Buffer.alloc(8);
+  header.writeUInt32LE(op, 0);
+  header.writeUInt32LE(body.length, 4);
+  return Buffer.concat([header, body]);
+};
+function onDiscordMessage(sock, op, msg) {
+  if (op === 4) discord.pongs.push(msg);
+  if (op === 0) {
+    discord.handshakes.push(msg);
+    if (discord.answer === 'reject') {
+      sock.end(discordFrame(2, { code: 4000, message: 'Invalid Client ID' }));
+    } else if (discord.answer === 'ready') {
+      const ready = discordFrame(1, {
+        cmd: 'DISPATCH',
+        evt: 'READY',
+        data: { v: 1, user: { username: 'tester', global_name: 'Test Human' } },
+      });
+      // In two pieces, cut inside the 8-byte header: a pipe owes nobody whole
+      // messages, so this is what proves the server reassembles them.
+      sock.write(ready.subarray(0, 5));
+      setTimeout(() => {
+        if (!sock.destroyed) sock.write(ready.subarray(5));
+      }, 20);
+    }
+  }
+  if (op === 1 && msg.cmd === 'SET_ACTIVITY') {
+    discord.activities.push(msg.args.activity);
+    sock.write(
+      discordFrame(
+        1,
+        discord.refuseActivity
+          ? { cmd: msg.cmd, evt: 'ERROR', nonce: msg.nonce, data: { code: 4000, message: 'Nope' } }
+          : {
+              cmd: msg.cmd,
+              evt: null,
+              nonce: msg.nonce,
+              data: without(msg.args.activity, discord.dropFields),
+            },
+      ),
+    );
+  }
+}
+function startFakeDiscord() {
+  discord.server = net.createServer((sock) => {
+    discord.connections++;
+    discord.sockets.add(sock);
+    sock.on('close', () => discord.sockets.delete(sock));
+    sock.on('error', () => {});
+    let buf = Buffer.alloc(0);
+    sock.on('data', (chunk) => {
+      buf = Buffer.concat([buf, chunk]);
+      while (buf.length >= 8) {
+        const op = buf.readUInt32LE(0);
+        const length = buf.readUInt32LE(4);
+        if (buf.length < 8 + length) break;
+        const body = buf.subarray(8, 8 + length).toString('utf8');
+        buf = buf.subarray(8 + length);
+        discord.raw.push(body);
+        onDiscordMessage(sock, op, JSON.parse(body));
+      }
+    });
+  });
+  return new Promise((resolve) => discord.server.listen(discordPipe, resolve));
+}
+function stopFakeDiscord() {
+  for (const sock of discord.sockets) sock.destroy();
+  return new Promise((resolve) => (discord.server ? discord.server.close(resolve) : resolve()));
+}
+
 let PORT = 0;
 let TOKEN = '';
 let HOOK_TOKEN = '';
@@ -112,6 +213,11 @@ async function tryBoot(port) {
     HELM_APPROVAL_HOLD_MS: '1500', // approval tests wait out the fallback
     HELM_UPDATE_URL: ghUrl, // fake "latest release" endpoint (see ghStub)
     HELM_COMPARE_URL: ghCompareUrl, // fake branch-compare endpoint (same stub)
+    HELM_DISCORD_PIPE: discordPipe, // never the real Discord (see the stand-in above)
+    HELM_DISCORD_APP_ID: 'test-app-id',
+    HELM_DISCORD_TICK_MS: '100', // the card tests wait on the 5 s loop otherwise
+    HELM_DISCORD_ROTATE_MS: '300', // busy agents' turns on the card, rather than 20 s
+    HELM_FAKE_TASK_LOG: taskLog, // the fake claude counts task-line calls here
   };
   delete env.CLAUDE_CONFIG_DIR; // don't inherit a real default account
   child = spawn(process.execPath, ['index.mjs'], {
@@ -179,6 +285,9 @@ before(async () => {
   // any test touches update.mjs.
   process.env.HELM_UPDATE_URL = ghUrl;
   process.env.HELM_COMPARE_URL = ghCompareUrl;
+  // Never let the suite pull over the checkout it is running from.
+  process.env.HELM_NO_SELF_UPDATE = '1';
+  await startFakeDiscord();
   for (let i = 0; i < 6; i++) {
     if (await tryBoot(await freePort())) return; // retry only guards the tiny bind race
     await sleep(100);
@@ -196,6 +305,7 @@ after(async () => {
   }
   child?.kill();
   ghStub?.close();
+  await stopFakeDiscord();
   await sleep(300);
   // Windows holds a directory busy while a just-killed process still has a
   // handle on it, so a single rmSync can lose the race (EBUSY on a CI runner).
@@ -237,6 +347,43 @@ test('diagnostics report claude health (drift alarm)', async () => {
   assert.equal(d.claude.version, '2.1.198');
   assert.ok(Array.isArray(d.warnings));
   assert.equal(d.warnings.filter((w) => w.key.startsWith('claude-')).length, 0);
+});
+
+test('drift alarm: placeholder replies are not mistaken for a format change', async () => {
+  const { parseTranscriptFile, diagnostics } = await import('../src/claude.mjs');
+  diagnostics.warnings.delete('transcript-shape');
+  const dir = mkdir(path.join(tmp, 'transcript-shape'));
+  const attachment = JSON.stringify({
+    type: 'attachment',
+    attachment: { text: 'x'.repeat(20000) },
+  });
+
+  // What raised the banner for real: a subagent whose only reply is claude's
+  // placeholder for a failed call, made big by its attachments. No usage, but a
+  // shape Helm reads, so not drift.
+  const placeholder = path.join(dir, 'agent-placeholder.jsonl');
+  const synthetic = {
+    id: 'p1',
+    model: '<synthetic>',
+    usage: { input_tokens: 0, output_tokens: 0 },
+  };
+  fs.writeFileSync(
+    placeholder,
+    `${attachment}\n${JSON.stringify({ type: 'assistant', message: synthetic })}\n`,
+  );
+  assert.equal(parseTranscriptFile(placeholder).events.length, 0, 'a placeholder is not usage');
+  assert.equal(diagnostics.warnings.has('transcript-shape'), false, 'and not drift either');
+
+  // The alarm still works: replies whose usage moved somewhere Helm doesn't read.
+  const moved = path.join(dir, 'moved.jsonl');
+  const renamed = { id: 'm1', modelName: 'claude-x', tokenUsage: { input: 5, output: 1 } };
+  fs.writeFileSync(
+    moved,
+    `${attachment}\n${JSON.stringify({ type: 'assistant', message: renamed })}\n`,
+  );
+  parseTranscriptFile(moved);
+  assert.equal(diagnostics.warnings.has('transcript-shape'), true, 'a renamed field is drift');
+  diagnostics.warnings.delete('transcript-shape'); // the module is shared with later tests
 });
 
 test('update check reports a newer release (cached server-side)', async () => {
@@ -292,6 +439,31 @@ test('update check also reports unreleased commits on main', async () => {
   assert.equal(info.commits.url, 'https://example.invalid/compare/abc...main');
   assert.equal(info.commits.latest, 'Newest thing'); // subject only, body dropped
   assert.equal(info.commits.latestAt, '2026-08-28T00:00:00Z');
+  // The banner lists the subjects, newest first — GitHub returns them the
+  // other way round.
+  assert.deepEqual(
+    info.commits.list.map((c) => c.message),
+    ['Newest thing', 'Older thing'],
+  );
+  assert.equal(info.commits.list[0].sha, '2222222');
+  assert.equal(info.commits.list[0].at, '2026-08-28T00:00:00Z');
+});
+
+test('the Update button needs the token, and honours the off switch', async () => {
+  // NB this suite runs with HELM_NO_SELF_UPDATE=1 (set before boot): the route
+  // must be reachable and correct with NO chance of `npm test` running a real
+  // `git pull` over the checkout it is being run from.
+  const noAuth = await fetch(U('/api/update/pull'), { method: 'POST' });
+  assert.equal(noAuth.status, 401, 'pulling is not something an unauthed page may trigger');
+
+  const res = await authed('/update/pull', { method: 'POST' });
+  assert.equal(res.status, 200, 'a refusal is a 200 with ok:false, not an error');
+  const body = await res.json();
+  assert.equal(body.ok, false);
+  assert.equal(body.reason, 'disabled');
+  assert.match(body.detail, /HELM_NO_SELF_UPDATE/, 'the refusal says why, in a sentence');
+  assert.deepEqual(body.steps, []);
+  assert.equal(body.needsRestart, false);
 });
 
 test('commit check stays silent on every ambiguous answer', async (t) => {
@@ -1776,7 +1948,7 @@ async function tryBootAside(dataDir, extraEnv, port) {
               ...opts.headers,
             },
           });
-        return { call, stop };
+        return { call, stop, port, token };
       }
     } catch {
       /* not up yet */
@@ -2060,4 +2232,1021 @@ test('favorites: a pane can be starred, and it survives a restart', async () => 
   });
   assert.equal((await off.json()).favorite, false);
   await authed(`/sessions/${pane.id}`, { method: 'DELETE' });
+});
+
+// ------------------------------------------- status the hooks can't report
+// Claude fires no hook when Esc interrupts a turn, and none when you answer a
+// question in the pane and it goes back to work. Helm reads both off the timing of
+// a pane's output (settledActivity in src/claude.mjs).
+
+async function eventually(check, what, ms = 5000) {
+  const deadline = Date.now() + ms;
+  while (Date.now() < deadline) {
+    if (await check()) return;
+    await sleep(25);
+  }
+  assert.fail(`timed out waiting for: ${what}`);
+}
+
+// Send a hook event to an aside server, the way a pane's relay would.
+const asideHook = (aside, dataDir) => {
+  const hookToken = fs.readFileSync(path.join(dataDir, 'hook-token'), 'utf8').trim();
+  return (sessionId, hook_event_name) =>
+    aside.call('/hook', {
+      method: 'POST',
+      headers: { 'x-helm-hook': hookToken },
+      body: JSON.stringify({ sessionId, event: { hook_event_name } }),
+    });
+};
+async function asidePane(aside, name) {
+  const dir = mkdir(path.join(tmp, name));
+  await aside.call('/workspaces', { method: 'POST', body: JSON.stringify({ name, dir }) });
+  const { id } = await (
+    await aside.call('/sessions', { method: 'POST', body: JSON.stringify({ workspace: dir }) })
+  ).json();
+  const info = async () => (await (await aside.call('/sessions')).json()).find((p) => p.id === id);
+  return { id, info };
+}
+
+test('a turn that ended in silence reads idle, and a redraw does not bring it back', async () => {
+  const { noteOutput, settledActivity } = await import('../src/claude.mjs');
+  const t0 = Date.parse('2026-11-05T12:00:00Z');
+  const at = (seconds) => t0 + seconds * 1000;
+  const started = new Date(t0).toISOString();
+  const turn = () => ({ activity: 'working', activitySince: started });
+  // Print every 400 ms between two moments, the way claude's spinner does.
+  const spin = (s, from, to) => {
+    for (let t = from; t <= to; t += 0.4) noteOutput(s, at(t));
+  };
+
+  // Only 'working' is ever second-guessed: a pane blocked for hours is still blocked.
+  for (const activity of ['idle', 'waiting', null]) {
+    assert.deepEqual(settledActivity({ activity, activitySince: started }, at(99_999)), {
+      activity,
+      activitySince: started,
+      presumedIdle: false,
+    });
+  }
+
+  // However long a turn runs, it stays working while the terminal keeps printing,
+  // and its clock still counts from the prompt.
+  const s = turn();
+  spin(s, 0, 600);
+  assert.deepEqual(settledActivity(s, at(600)), {
+    activity: 'working',
+    activitySince: started,
+    presumedIdle: false,
+  });
+
+  // Then silence: nothing changes until 2 minutes have passed.
+  assert.equal(settledActivity(s, at(600 + 119)).activity, 'working');
+  const settled = settledActivity(s, at(600 + 121));
+  assert.equal(settled.activity, 'idle');
+  assert.equal(settled.presumedIdle, true, 'so the UI can skip the "finished" alert');
+  assert.ok(
+    Math.abs(Date.parse(settled.activitySince) - at(600)) < 1000,
+    'idle since it went quiet, not since the prompt',
+  );
+
+  // Looking at the pane must not bring it back: a redraw is one brief burst...
+  noteOutput(s, at(900));
+  noteOutput(s, at(900.2));
+  assert.equal(settledActivity(s, at(901)).activity, 'idle', 'a redraw is not work');
+  assert.equal(settledActivity(s, at(901)).activitySince, settled.activitySince);
+  // ...and neither do several of them with pauses between.
+  // 2.5 s apart is the case a real pane caught: a looser gap chained them into a run.
+  for (const t of [910, 912.5, 915, 917.5, 920, 922.5, 925, 927.5, 930]) noteOutput(s, at(t));
+  assert.equal(settledActivity(s, at(931)).activity, 'idle', 'nor do repeated redraws');
+
+  // Real work resuming announces itself with no hook, and has to be believed.
+  spin(s, 1000, 1009);
+  assert.deepEqual(settledActivity(s, at(1009)), {
+    activity: 'working',
+    activitySince: started,
+    presumedIdle: false,
+  });
+
+  // A turn that has only just started hasn't had time to print anything.
+  const fresh = turn();
+  assert.equal(settledActivity(fresh, at(119)).activity, 'working', 'quiet start is not stuck');
+  assert.equal(settledActivity(fresh, at(121)).activity, 'idle');
+});
+
+test('a pane answered in the pane goes back to working, and a held request never does', async () => {
+  const { noteOutput, settledActivity } = await import('../src/claude.mjs');
+  const t0 = Date.parse('2026-11-05T12:00:00Z');
+  const at = (seconds) => t0 + seconds * 1000;
+  const iso = (seconds) => new Date(at(seconds)).toISOString();
+  const spin = (s, from, to) => {
+    for (let t = from; t <= to; t += 0.4) noteOutput(s, at(t));
+  };
+  const asked = () => ({ activity: 'waiting', activitySince: iso(0) });
+
+  // Waiting is silent (measured: nothing at all for 26 s), so it stays waiting.
+  const s = asked();
+  assert.equal(settledActivity(s, at(9_999)).activity, 'waiting', 'however long you take');
+  // Answering prints a keystroke or two, which is not work yet.
+  noteOutput(s, at(30));
+  noteOutput(s, at(30.1));
+  assert.equal(settledActivity(s, at(31)).activity, 'waiting');
+  // Then the spinner: working again 8 s in, on a clock from when it resumed.
+  spin(s, 40, 47);
+  assert.equal(settledActivity(s, at(47)).activity, 'waiting', 'not before 8 s of it');
+  spin(s, 47.4, 49);
+  assert.deepEqual(settledActivity(s, at(49)), {
+    activity: 'working',
+    activitySince: iso(40),
+    presumedIdle: false,
+  });
+  // And it can still be stopped with Esc, like any other turn.
+  const stopped = settledActivity(s, at(49 + 125));
+  assert.equal(stopped.activity, 'idle');
+  assert.equal(stopped.presumedIdle, true);
+
+  // The spinner running up to the moment claude asked is not an answer.
+  const busy = { activity: 'working', activitySince: iso(0) };
+  spin(busy, 0, 20);
+  busy.activity = 'waiting';
+  busy.activitySince = iso(26); // the Notification lands ~6 s after the prompt shows
+  assert.equal(settledActivity(busy, at(60)).activity, 'waiting', 'earlier work is not an answer');
+
+  // A request the HUD is holding is never second-guessed: Helm knows it's unanswered.
+  const held = { ...asked(), pendingId: 'req-1' };
+  spin(held, 5, 20);
+  assert.equal(settledActivity(held, at(20)).activity, 'waiting', 'a held request stays waiting');
+});
+
+test('a stopped pane settles, a new prompt wakes it, and an answer in the pane is noticed', async () => {
+  const dataDir = seedState('settle', {});
+  // The rules are unit-tested above; this checks the server is wired to them.
+  const aside = await bootAside(dataDir, { HELM_STUCK_AFTER_MS: '2000' });
+  try {
+    const send = asideHook(aside, dataDir);
+    const { id, info } = await asidePane(aside, 'settle-project');
+
+    // Esc: no hook comes, the terminal just goes quiet. The stand-in never prints.
+    await send(id, 'UserPromptSubmit');
+    const first = await info();
+    assert.equal(first.activity, 'working');
+    assert.equal(first.presumedIdle, false);
+    // Esc and a new prompt straight away, before the silence rule could notice: the
+    // new turn still gets its own clock, not the stopped one's.
+    await sleep(20);
+    await send(id, 'UserPromptSubmit');
+    const working = await info();
+    assert.ok(
+      Date.parse(working.activitySince) > Date.parse(first.activitySince),
+      'a new prompt restarts the clock even before the pane settles',
+    );
+    await eventually(async () => (await info()).activity === 'idle', 'the pane to settle');
+    assert.equal((await info()).presumedIdle, true, 'the list reports it as presumed');
+
+    // The next prompt wakes it at once, on a fresh clock rather than the old turn's.
+    await send(id, 'UserPromptSubmit');
+    const woken = await info();
+    assert.equal(woken.activity, 'working', 'a new prompt is believed immediately');
+    assert.equal(woken.presumedIdle, false);
+    assert.ok(
+      Date.parse(woken.activitySince) > Date.parse(working.activitySince),
+      'the new turn gets its own clock',
+    );
+
+    // A question, answered in the pane: claude goes back to work, and no hook says so.
+    await send(id, 'Notification');
+    const asked = await info();
+    assert.equal(asked.activity, 'waiting');
+    const ws = new WebSocket(`ws://127.0.0.1:${aside.port}/ws?session=${id}&token=${aside.token}`);
+    await new Promise((resolve, reject) => {
+      ws.once('open', resolve);
+      ws.once('error', reject);
+    });
+    ws.send(JSON.stringify({ type: 'input', data: 'spin\r' })); // the stand-in's spinner
+    await eventually(
+      async () => (await info()).activity === 'working',
+      'the answered pane to read working',
+      15000,
+    );
+    const resumed = await info();
+    assert.equal(resumed.presumedIdle, false);
+    assert.ok(
+      Date.parse(resumed.activitySince) > Date.parse(asked.activitySince),
+      'on a clock from when it resumed',
+    );
+
+    // The case that must never go wrong: the next question reads waiting at once,
+    // rather than hiding behind the work that answered the last one.
+    await send(id, 'Notification');
+    assert.equal((await info()).activity, 'waiting', 'a second question is not masked');
+
+    // A real finish is still told apart from a presumed one.
+    await send(id, 'Stop');
+    const done = await info();
+    assert.equal(done.activity, 'idle');
+    assert.equal(done.presumedIdle, false, 'claude said so, nothing is presumed');
+    ws.close();
+    await aside.call(`/sessions/${id}`, { method: 'DELETE' });
+  } finally {
+    aside.stop();
+  }
+});
+
+test('a held request that lapses to the pane reads waiting, even after earlier work', async () => {
+  const id = await newPane('lapseproj');
+  const info = async () => (await (await authed('/sessions')).json()).find((x) => x.id === id);
+  await hook(id, { hook_event_name: 'UserPromptSubmit' });
+  await hook(id, { hook_event_name: 'Notification', message: 'needs you' });
+
+  // Answered in the pane, so it went back to work (the stand-in's spinner).
+  const ws = new WebSocket(`ws://127.0.0.1:${PORT}/ws?session=${id}&token=${TOKEN}`);
+  await new Promise((resolve, reject) => {
+    ws.once('open', resolve);
+    ws.once('error', reject);
+  });
+  ws.send(JSON.stringify({ type: 'input', data: 'spin\r' }));
+  await eventually(
+    async () => (await info()).activity === 'working',
+    'the answered pane to read working',
+    15000,
+  );
+
+  // Then it asks again, the HUD holds it, nobody answers, and it falls back to the
+  // pane's own prompt (the hold is 1.5 s under test). That prompt must read waiting:
+  // the work before it is no answer to it.
+  await authed('/hud/ping', { method: 'POST' });
+  const lapsing = relayOut(id, permissionEvent());
+  const held = await waitForPending(id);
+  assert.equal(held?.activity, 'waiting', 'waiting while the HUD holds it');
+  await lapsing;
+  const after = await info();
+  assert.equal(after.pendingId, null, 'the hold lapsed');
+  assert.equal(after.activity, 'waiting', "the pane's own prompt is not masked by earlier work");
+
+  ws.close();
+  await authed(`/sessions/${id}`, { method: 'DELETE' });
+});
+
+// ------------------------------------------------------------- task lines
+// One sentence per pane, written from each new prompt by claude's quick model
+// (the fake one here: see its <prompt> branch), driven through the real hook route.
+// Calls are counted from the fake's own log, never guessed from timing.
+
+const setTaskLines = (on) =>
+  authed('/settings', { method: 'PATCH', body: JSON.stringify({ taskLines: on }) });
+const typePrompt = (id, prompt) => hook(id, { hook_event_name: 'UserPromptSubmit', prompt });
+const lineOf = async (id) =>
+  (await (await authed('/sessions')).json()).find((s) => s.id === id)?.taskLine;
+const taskCalls = () => {
+  try {
+    return fs.readFileSync(taskLog, 'utf8').split('\n').filter(Boolean);
+  } catch {
+    return [];
+  }
+};
+const logLines = async (tag) =>
+  (await (await authed('/logs?after=0')).json()).entries
+    .filter((e) => e.tag === tag)
+    .map((e) => e.msg);
+
+test('task lines: off by default, then each real prompt becomes a sentence', async () => {
+  assert.equal((await (await authed('/settings')).json()).taskLines, false, 'off by default');
+  const { pane } = await paneInProject('tasks-basic');
+  const start = taskCalls().length;
+
+  // Off, a prompt reaches nobody. On, the reply comes back wrapped as
+  // `Status: "Fixing the alpha bug."` and is stored bare.
+  await typePrompt(pane.id, 'fix the redirect for zulu');
+  await setTaskLines(true);
+  await typePrompt(pane.id, 'please fix the login redirect for alpha');
+  await eventually(async () => (await lineOf(pane.id)) === 'Fixing the alpha bug', 'the sentence');
+  assert.deepEqual(taskCalls().slice(start), ['alpha'], 'nothing was sent while it was off');
+
+  // Replies and commands never reach the model. Followed by a real prompt, so
+  // "no call" is measured against a call that did happen.
+  let before = taskCalls().length;
+  for (const p of ['yes do it', 'continue', '/compact', 'ok', 'sounds good thanks']) {
+    await typePrompt(pane.id, p);
+  }
+  await typePrompt(pane.id, 'now tidy up the settings page for bravo');
+  await eventually(async () => (await lineOf(pane.id)) === 'Fixing the bravo bug', 'the next one');
+  assert.deepEqual(taskCalls().slice(before), ['bravo'], 'one call, for the one real prompt');
+
+  // A reply carrying an email, a SKIP and a failed call each keep the sentence.
+  for (const [p, why] of [
+    ['send the report out, leak charlie', 'it contained an email address'],
+    ['nothing to do here skipme delta', 'nothing to describe'],
+    ['this one goes boom echo', 'claude gave no answer'],
+  ]) {
+    before = (await logLines('task')).length;
+    await typePrompt(pane.id, p);
+    await eventually(
+      async () => (await logLines('task')).slice(before).some((m) => m.includes(why)),
+      `"${why}" for "${p}"`,
+    );
+  }
+  assert.equal(await lineOf(pane.id), 'Fixing the bravo bug', 'kept through all three');
+  for (const m of await logLines('task')) {
+    assert.ok(!/leak charlie|skipme delta|boom echo/.test(m), `a prompt reached the log: ${m}`);
+  }
+
+  // Saved with the pane, so a restart keeps it.
+  await eventually(() => {
+    const saved = JSON.parse(fs.readFileSync(path.join(helmDir, 'sessions.json'), 'utf8'));
+    return saved.sessions.find((s) => s.id === pane.id)?.taskLine === 'Fixing the bravo bug';
+  }, 'the sentence on disk');
+
+  await authed(`/sessions/${pane.id}`, { method: 'DELETE' });
+  await setTaskLines(false);
+});
+
+test('task lines: the newest prompt wins, /clear empties, and off clears them all', async () => {
+  await setTaskLines(true);
+  const { dir, pane } = await paneInProject('tasks-order');
+
+  // A slow answer to an older prompt must not overwrite the newer one's.
+  await typePrompt(pane.id, 'slowly work through the first change for foxtrot');
+  await typePrompt(pane.id, 'then handle the second change for golf');
+  await eventually(async () => (await lineOf(pane.id)) === 'Fixing the golf bug', 'the newer one');
+  await sleep(1700); // the slow answer arrives inside this window and must be dropped
+  assert.equal(await lineOf(pane.id), 'Fixing the golf bug');
+
+  // The same prompt in two panes of one project, as a broadcast sends it: one call.
+  const twin = await (
+    await authed('/sessions', { method: 'POST', body: JSON.stringify({ workspace: dir }) })
+  ).json();
+  const before = taskCalls().length;
+  await typePrompt(pane.id, 'rename the export button for hotel');
+  await eventually(async () => (await lineOf(pane.id)) === 'Fixing the hotel bug', 'pane one');
+  await typePrompt(twin.id, 'rename the export button for hotel');
+  await eventually(async () => (await lineOf(twin.id)) === 'Fixing the hotel bug', 'pane two');
+  assert.equal(taskCalls().length, before + 1, 'one call for the same prompt in the same project');
+
+  // /clear starts the conversation over; a plain resume does not.
+  await hook(pane.id, { hook_event_name: 'SessionStart', source: 'clear' });
+  assert.equal(await lineOf(pane.id), null);
+  await hook(twin.id, { hook_event_name: 'SessionStart', source: 'resume' });
+  assert.equal(await lineOf(twin.id), 'Fixing the hotel bug');
+
+  // A non-boolean is refused; off clears every pane's sentence.
+  const bad = await authed('/settings', {
+    method: 'PATCH',
+    body: JSON.stringify({ taskLines: 'yes' }),
+  });
+  assert.equal(bad.status, 400);
+  await setTaskLines(false);
+  assert.equal(await lineOf(twin.id), null, 'off means off everywhere');
+
+  for (const id of [pane.id, twin.id]) await authed(`/sessions/${id}`, { method: 'DELETE' });
+});
+
+test('task lines: which prompts are worth a call, and which replies are fit to show', async () => {
+  const { isTaskPrompt, cleanTaskLine } = await import('../src/claude.mjs');
+  for (const p of [
+    'fix the login redirect on ticket 7',
+    'great, now add tests for it',
+    'why does CI fail on main?',
+  ]) {
+    assert.equal(isTaskPrompt(p), true, p);
+  }
+  for (const p of [
+    'yes do it',
+    'ok go ahead then',
+    'continue',
+    '/clear',
+    '<command-name>/x</command-name>',
+    'sounds good thanks',
+    '',
+    null,
+  ]) {
+    assert.equal(isTaskPrompt(p), false, String(p));
+  }
+
+  const line = (reply) => cleanTaskLine(reply).line;
+  assert.equal(
+    line('Status: "Fixing the login bug on ticket 7."'),
+    'Fixing the login bug on ticket 7',
+  );
+  assert.equal(line('**Status:** Debugging the reported bug.'), 'Debugging the reported bug');
+  assert.equal(
+    line('```\nAdding retry to the update check\n```'),
+    'Adding retry to the update check',
+  );
+  assert.equal(line('fixing the user avatar upload'), 'Fixing the user avatar upload');
+  // Each of these could carry something private onto a public card.
+  for (const [reply, what] of [
+    ['Updating https://acme.com docs', 'a link'],
+    ['Emailing bob@acme.com about the release', 'an email address'],
+    ['Editing C:\\Users\\alex\\notes', 'a file path'],
+    ['Fixing the src/app.tsx crash', 'a file path'],
+    ['Calling 09171234567 about the outage', 'a long number'],
+    ['Rotating key sk-ant-api03-abcdefghijklmnopqrstuvwxyz', 'a key-like string'],
+  ]) {
+    assert.deepEqual(cleanTaskLine(reply), { line: null, why: `it contained ${what}` }, reply);
+  }
+  assert.equal(cleanTaskLine('Is this a bug in the parser?').why, 'it was a question');
+  assert.equal(cleanTaskLine('I cannot describe this prompt').why, 'it talked about the prompt');
+  assert.equal(cleanTaskLine('SKIP').why, 'nothing to describe');
+  assert.equal(cleanTaskLine('Fixing').why, 'it was 1 word long');
+  const long = line('Refactoring the notch window resize logic so the strip stops jittering');
+  assert.ok(long.length <= 61 && long.endsWith('…'), `cut at a word: ${long}`);
+});
+
+// ------------------------------------------------------- the Discord card
+// Last in the file because these clear every pane first: the counts on the card
+// are the whole point, and a pane left over from an earlier test would skew them.
+
+const discordInfo = async () => (await authed('/discord')).json();
+const setDiscord = (on) =>
+  authed('/settings', { method: 'PATCH', body: JSON.stringify({ discordPresence: on }) });
+const shareName = async (id, on) =>
+  (
+    await authed(`/workspaces/${id}`, { method: 'PATCH', body: JSON.stringify({ discord: on }) })
+  ).json();
+const lastCard = () => discord.activities.at(-1);
+
+// A clean slate per test, so one failure doesn't cascade through the rest.
+async function discordFresh() {
+  await setDiscord(false);
+  await eventually(() => discord.sockets.size === 0, 'the previous connection to close');
+  for (const s of await (await authed('/sessions')).json()) {
+    await authed(`/sessions/${s.id}`, { method: 'DELETE' });
+  }
+  Object.assign(discord, {
+    connections: 0,
+    handshakes: [],
+    activities: [],
+    raw: [],
+    pongs: [],
+    answer: 'ready',
+    refuseActivity: false,
+    dropFields: [],
+  });
+}
+async function paneInProject(name) {
+  const dir = mkdir(path.join(tmp, name));
+  const ws = await (
+    await authed('/workspaces', { method: 'POST', body: JSON.stringify({ name, dir }) })
+  ).json();
+  const pane = await (
+    await authed('/sessions', { method: 'POST', body: JSON.stringify({ workspace: dir }) })
+  ).json();
+  return { ws, dir, pane };
+}
+
+test('discord: off by default, and the pipe is never even opened', async () => {
+  // Before discordFresh() on purpose, because that switches it off: this is the
+  // one check of what a fresh install does on its own. The stand-in has been
+  // listening since before the server booted, so a single connection means Helm
+  // reached for Discord without being asked. A public repo must never do that.
+  assert.equal((await (await authed('/settings')).json()).discordPresence, false);
+  assert.equal(discord.connections, 0, 'a fresh install must not touch the pipe');
+  assert.deepEqual(await discordInfo(), {
+    enabled: false,
+    connected: false,
+    connecting: false,
+    user: null,
+    error: null,
+  });
+
+  // And still nothing with panes running and changing state.
+  await discordFresh();
+  const { pane } = await paneInProject('discord-off');
+  await hook(pane.id, { hook_event_name: 'UserPromptSubmit' });
+  await sleep(500); // five ticks at the test rate
+  assert.equal(discord.connections, 0, 'with the setting off, Helm must not touch the pipe');
+  assert.equal(discord.raw.length, 0);
+  await authed(`/sessions/${pane.id}`, { method: 'DELETE' });
+});
+
+test('discord: turning it on connects and publishes the counts', async () => {
+  await discordFresh();
+  const { pane } = await paneInProject('discord-counts');
+  await setDiscord(true);
+  await eventually(async () => (await discordInfo()).connected, 'READY');
+
+  const info = await discordInfo();
+  assert.equal(info.enabled, true);
+  assert.equal(info.user, 'Test Human', 'the display name, for the settings status line');
+  assert.equal(info.error, null);
+  assert.deepEqual(discord.handshakes, [{ v: 1, client_id: 'test-app-id' }]);
+
+  // A brand-new pane has just done something, so the card goes up at once.
+  await eventually(() => lastCard()?.state === 'Between tasks', 'the first card');
+  assert.equal(lastCard().details, undefined, 'no first line when there is nothing to say');
+  assert.equal(lastCard().party, undefined, 'and no count with nobody working');
+  assert.match(lastCard().assets.small_image, /\/idle\.png$/, 'the green dot');
+  assert.match(lastCard().assets.large_image, /\/helm\.png$/, 'a still logo between tasks');
+
+  await hook(pane.id, { hook_event_name: 'UserPromptSubmit' });
+  await eventually(() => lastCard()?.state === 'Agents working', 'the working card');
+  assert.deepEqual(lastCard().party.size, [1, 1], 'drawn by Discord as (1 of 1)');
+  assert.equal(lastCard().type, 0, '"Playing"');
+  assert.equal(lastCard().name, 'Coding with Helm', 'the card reads as coding, not a game');
+  assert.match(
+    lastCard().assets.large_image,
+    /\/discord-art-v1\/docs\/discord\/helm-working\.gif$/,
+    'the turning logo, by link',
+  );
+  assert.match(lastCard().assets.small_image, /\/working\.png$/, 'the blue dot');
+  assert.equal(lastCard().assets.small_text, '1 working · 1 open');
+  assert.equal(lastCard().buttons[0].label, 'Helm on GitHub');
+  const { start } = lastCard().timestamps;
+  assert.ok(start > 1e12, 'milliseconds');
+
+  // Discord allows 5 updates per 20 s, so nothing changing must mean nothing sent.
+  const sent = discord.activities.length;
+  await sleep(600);
+  assert.equal(discord.activities.length, sent, 'an unchanged card is not resent');
+
+  await hook(pane.id, { hook_event_name: 'Notification', message: 'needs you' });
+  await eventually(() => lastCard()?.details === '1 agent waiting on me', 'the waiting card');
+  assert.equal(lastCard().state, 'Waiting on me');
+  assert.match(lastCard().assets.small_image, /\/waiting\.png$/, 'the amber dot');
+  assert.match(lastCard().assets.large_image, /\/helm\.png$/, 'the logo stops turning');
+  assert.equal(lastCard().timestamps.start, start, 'the elapsed timer must not jump');
+
+  // A dev pane is not an agent, so a running one must not be counted as one.
+  const devProject = await (
+    await authed('/workspaces', {
+      method: 'POST',
+      body: JSON.stringify({
+        name: 'discord-dev',
+        dir: mkdir(path.join(tmp, 'discord-dev')),
+        startCommands: ['node -e "setInterval(() => {}, 1000)"'],
+      }),
+    })
+  ).json();
+  const started = await authed(`/workspaces/${devProject.id}/start`, { method: 'POST' });
+  assert.equal(started.status, 201);
+  const dev = (await started.json()).sessions[0];
+  assert.equal(dev.status, 'running');
+  const withDev = discord.activities.length;
+  await sleep(400);
+  assert.equal(discord.activities.length, withDev, 'a dev pane starting changes nothing');
+  assert.deepEqual(
+    lastCard().party.size,
+    [1, 1],
+    'still one agent, with a dev server also running',
+  );
+
+  // The last agent closing takes the card down, even with that dev pane still up.
+  await authed(`/sessions/${pane.id}`, { method: 'DELETE' });
+  await eventually(() => lastCard() === null, 'the card to be cleared');
+  await authed(`/sessions/${dev.id}`, { method: 'DELETE' });
+
+  await setDiscord(false);
+  await eventually(() => discord.sockets.size === 0, 'turning it off to close the pipe');
+  const connections = discord.connections;
+  await sleep(500);
+  assert.equal(discord.connections, connections, 'off stays off, with no reconnecting');
+  assert.equal((await discordInfo()).connected, false);
+});
+
+test('discord: a project name is private until opted in, and nothing else ever leaves', async () => {
+  await discordFresh();
+  const secret = 'secret-client-name';
+  const { ws, pane } = await paneInProject(secret);
+
+  // Give the server everything it could possibly leak: a task title from a real
+  // prompt, a notification's text. Asserted to exist below, or searching for them
+  // would pass against a pane that never had them.
+  const prompt = 'secret prompt text about the client';
+  const note = 'secret note text from a notification';
+  const tpath = path.join(mkdir(path.join(tmp, '.claude', 'projects', 'discord')), 'dc-1.jsonl');
+  fs.writeFileSync(tpath, `${JSON.stringify({ type: 'user', message: { content: prompt } })}\n`);
+  await hook(pane.id, {
+    hook_event_name: 'UserPromptSubmit',
+    session_id: 'dc-1',
+    transcript_path: tpath,
+  });
+  await hook(pane.id, { hook_event_name: 'Notification', message: note });
+  const known = (await (await authed('/sessions')).json()).find((s) => s.id === pane.id);
+  assert.equal(known.summary, prompt, 'the pane really does have a title to leak');
+  assert.equal(known.activityNote, note, 'and a note');
+
+  const assertNothingLeaked = (frames) => {
+    for (const frame of frames) {
+      for (const forbidden of [prompt, note, known.name, 'helm-smoke-', 'discord-ipc-test']) {
+        assert.ok(!frame.includes(forbidden), `"${forbidden}" reached Discord: ${frame}`);
+      }
+    }
+  };
+
+  // Private by default: the card is up, and the name is nowhere in it.
+  await setDiscord(true);
+  await eventually(() => lastCard()?.details === '1 agent waiting on me', 'the private card');
+  for (const frame of discord.raw) assert.ok(!frame.includes(secret), `name leaked: ${frame}`);
+  assertNothingLeaked(discord.raw);
+
+  // Opted in: the name appears, and opting in shares only the name.
+  const shared = await shareName(ws.id, true);
+  assert.equal(shared.discord, true);
+  await eventually(() => lastCard()?.details === `Waiting in ${secret}`, 'the named card');
+  assert.equal(lastCard().state, 'Waiting on me');
+  assertNothingLeaked(discord.raw);
+
+  // Opted back out: gone from the card, and from everything sent after it.
+  const hidden = await shareName(ws.id, false);
+  assert.equal(hidden.discord, undefined, 'opting out stores nothing');
+  await eventually(() => lastCard()?.details === '1 agent waiting on me', 'the name to go');
+  const afterOptOut = discord.raw.length;
+  await sleep(300);
+  for (const frame of discord.raw.slice(afterOptOut)) {
+    assert.ok(!frame.includes(secret), `name leaked after opting out: ${frame}`);
+  }
+
+  await authed(`/sessions/${pane.id}`, { method: 'DELETE' });
+  await setDiscord(false);
+});
+
+test('discord: a task line reaches the card only for a shared project', async () => {
+  await discordFresh();
+  await setTaskLines(true);
+  const { ws, pane } = await paneInProject('discord-tasks');
+  const prompt = 'please sort out the flaky upload for kilo';
+  await typePrompt(pane.id, prompt);
+  await eventually(async () => (await lineOf(pane.id)) === 'Fixing the kilo bug', 'the sentence');
+
+  // Private project: the plain working card, and the sentence is nowhere in it.
+  await setDiscord(true);
+  await eventually(() => lastCard()?.state === 'Agents working', 'the private card');
+  assert.equal(lastCard().details, undefined);
+  assert.equal(lastCard().status_display_type, undefined, 'the member list keeps the title');
+  for (const frame of discord.raw) {
+    assert.ok(!frame.includes('kilo'), `a private project's sentence leaked: ${frame}`);
+  }
+
+  // Shared: the sentence leads, its project heads line 2, the member list shows it.
+  await shareName(ws.id, true);
+  await eventually(() => lastCard()?.details === 'Fixing the kilo bug', 'the sentence on the card');
+  assert.equal(lastCard().state, 'discord-tasks · Agents working');
+  assert.deepEqual(lastCard().party.size, [1, 1], 'still drawn as (1 of 1)');
+  assert.equal(lastCard().status_display_type, 2, 'the member list shows line 1');
+
+  // Between tasks the sentence would describe finished work: the usual card.
+  await hook(pane.id, { hook_event_name: 'Stop' });
+  await eventually(() => lastCard()?.details === 'In discord-tasks', 'the between-tasks card');
+  assert.equal(lastCard().status_display_type, undefined);
+
+  // Discord quietly leaving a field out is noticed rather than assumed away.
+  discord.dropFields = ['status_display_type'];
+  await hook(pane.id, { hook_event_name: 'UserPromptSubmit' }); // working again, same sentence
+  await eventually(() => lastCard()?.status_display_type === 2, 'the sentence card again');
+  await eventually(
+    async () => (await logLines('discord')).includes('Discord dropped: status_display_type'),
+    'the dropped field to be logged',
+  );
+  discord.dropFields = [];
+
+  // Task lines off: the sentence goes, shared project or not.
+  await setTaskLines(false);
+  await eventually(() => lastCard()?.details === 'Working on discord-tasks', 'the sentence to go');
+  assert.equal(lastCard().status_display_type, undefined);
+
+  // The prompt itself never reached Discord at any point.
+  for (const frame of discord.raw) {
+    assert.ok(!frame.includes(prompt), `the prompt reached Discord: ${frame}`);
+  }
+  await authed(`/sessions/${pane.id}`, { method: 'DELETE' });
+  await setDiscord(false);
+});
+
+test('discord: several busy agents take turns on the card', async () => {
+  await discordFresh();
+  await setTaskLines(true);
+  const { ws, dir, pane } = await paneInProject('discord-turns');
+  const other = await (
+    await authed('/sessions', { method: 'POST', body: JSON.stringify({ workspace: dir }) })
+  ).json();
+  await typePrompt(pane.id, 'please sort out the cache headers for lima');
+  await typePrompt(other.id, 'please sort out the retry logic for mike');
+  await eventually(
+    async () =>
+      (await lineOf(pane.id)) === 'Fixing the lima bug' &&
+      (await lineOf(other.id)) === 'Fixing the mike bug',
+    'both sentences',
+  );
+  await shareName(ws.id, true);
+  await setDiscord(true);
+
+  // Turns run every 300 ms here (HELM_DISCORD_ROTATE_MS), so both come round.
+  const shown = () => new Set(discord.activities.filter(Boolean).map((a) => a.details));
+  await eventually(
+    () => shown().has('Fixing the lima bug') && shown().has('Fixing the mike bug'),
+    'each agent to get a turn',
+  );
+  for (const card of discord.activities.filter((a) => a?.details?.startsWith('Fixing the'))) {
+    assert.equal(card.state, 'discord-turns · Agents working');
+    assert.deepEqual(card.party.size, [2, 2], 'the count stays put while the sentence turns');
+    assert.equal(card.status_display_type, 2, 'and the member list follows each turn');
+  }
+
+  for (const id of [pane.id, other.id]) await authed(`/sessions/${id}`, { method: 'DELETE' });
+  await setTaskLines(false);
+  await setDiscord(false);
+});
+
+test('discord: survives Discord going away, coming back, and refusing', async () => {
+  await discordFresh();
+  const { pane } = await paneInProject('discord-fail');
+  await hook(pane.id, { hook_event_name: 'UserPromptSubmit' });
+  await setDiscord(true);
+  await eventually(() => lastCard()?.state === 'Agents working', 'the card');
+  const { start } = lastCard().timestamps;
+
+  // Discord quits. That is normal, so it is not an error, and Helm carries on.
+  await stopFakeDiscord();
+  await eventually(async () => !(await discordInfo()).connected, 'noticing Discord left');
+  assert.equal((await discordInfo()).error, null, 'Discord being closed is not an error');
+  assert.equal((await authed('/sessions')).status, 200, 'the server is unharmed');
+
+  // Discord comes back: the same card goes back up with nothing else happening.
+  const before = discord.activities.length;
+  await startFakeDiscord();
+  await eventually(() => discord.activities.length > before, 'the card to be re-sent');
+  assert.equal(lastCard().state, 'Agents working');
+  assert.equal(lastCard().timestamps.start, start, 'the timer carries on across the gap');
+
+  // PING is answered with its own payload. Two at once, because a pipe may hand
+  // over several messages in one read.
+  const [sock] = discord.sockets;
+  sock.write(Buffer.concat([discordFrame(3, { p: 1 }), discordFrame(3, { p: 2 })]));
+  await eventually(() => discord.pongs.length === 2, 'both PONGs');
+  assert.deepEqual(discord.pongs, [{ p: 1 }, { p: 2 }]);
+
+  // A bad app id: Discord's real answer (seen from the real client) is a CLOSE.
+  discord.answer = 'reject';
+  sock.destroy();
+  await eventually(
+    async () => (await discordInfo()).error === 'Invalid Client ID',
+    'the CLOSE reason to reach the status line',
+  );
+  assert.equal((await discordInfo()).connected, false);
+  discord.answer = 'ready';
+  await eventually(async () => {
+    const info = await discordInfo();
+    return info.connected && info.error === null;
+  }, 'recovering once Discord accepts');
+
+  // A pipe that accepts but never says READY must not hang forever.
+  discord.answer = 'silent';
+  for (const s of discord.sockets) s.destroy();
+  await eventually(
+    async () => (await discordInfo()).error === 'Discord did not answer',
+    'giving up on a silent pipe',
+  );
+  discord.answer = 'ready';
+  await eventually(async () => (await discordInfo()).connected, 'reconnecting');
+
+  // A refused card is reported, and not retried on every tick.
+  discord.refuseActivity = true;
+  await hook(pane.id, { hook_event_name: 'Stop' });
+  await eventually(async () => (await discordInfo()).error === 'Nope', 'the refusal');
+  const attempts = discord.activities.length;
+  await sleep(500);
+  assert.equal(discord.activities.length, attempts, 'a refused card is not hammered');
+  discord.refuseActivity = false;
+  await hook(pane.id, { hook_event_name: 'UserPromptSubmit' });
+  await eventually(async () => (await discordInfo()).error === null, 'the next card clearing it');
+
+  await authed(`/sessions/${pane.id}`, { method: 'DELETE' });
+  await setDiscord(false);
+});
+
+test('discord: toggles are validated, and a project cannot be created public', async () => {
+  await discordFresh();
+  assert.equal((await fetch(U('/api/discord'))).status, 401, 'status needs the token');
+
+  const badSetting = await authed('/settings', {
+    method: 'PATCH',
+    body: JSON.stringify({ discordPresence: 'yes' }),
+  });
+  assert.equal(badSetting.status, 400, 'a non-boolean is refused, not coerced');
+  assert.equal((await (await authed('/settings')).json()).discordPresence, false);
+
+  const dir = mkdir(path.join(tmp, 'discord-validate'));
+  const ws = await (
+    await authed('/workspaces', {
+      method: 'POST',
+      body: JSON.stringify({ name: 'validate', dir, discord: true }),
+    })
+  ).json();
+  assert.equal(ws.discord, undefined, 'opting in is a separate, deliberate act');
+
+  const badField = await authed(`/workspaces/${ws.id}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ discord: 'yes' }),
+  });
+  assert.equal(badField.status, 400);
+
+  await authed(`/workspaces/${ws.id}`, { method: 'DELETE' });
+});
+
+test('discord: the setting survives a restart, and a dead server lets go of the pipe', async () => {
+  await discordFresh();
+  const dataDir = seedState('discord-boot', {});
+  fs.writeFileSync(path.join(dataDir, 'settings.json'), JSON.stringify({ discordPresence: true }));
+  const aside = await bootAside(dataDir, {
+    HELM_DISCORD_PIPE: discordPipe,
+    HELM_DISCORD_APP_ID: 'aside-app-id',
+    HELM_DISCORD_TICK_MS: '100',
+  });
+  try {
+    await eventually(
+      () => discord.handshakes.some((h) => h.client_id === 'aside-app-id'),
+      'connecting at boot',
+    );
+    await eventually(
+      async () => (await (await aside.call('/discord')).json()).connected,
+      'READY on the restarted server',
+    );
+  } finally {
+    aside.stop();
+  }
+  // Discord clears the card when the connection drops, so this is the crash path.
+  await eventually(() => discord.sockets.size === 0, 'the pipe to close with the process');
+});
+
+test('discord: what the card says', async () => {
+  const { buildActivity, describeCard } = await import('../src/discord.mjs');
+  const now = Date.parse('2026-11-05T12:00:00Z');
+  const pane = (activity, minutesAgo, project = null) => ({
+    activity,
+    since: now - minutesAgo * 60_000,
+    project,
+  });
+  // The card as a person reads it: "line 1 / line 2 (n of m) · [badge]".
+  const say = (...panes) => {
+    const { activity } = buildActivity(panes, null, now);
+    return activity && describeCard(activity);
+  };
+  const many = (n, ...args) => Array.from({ length: n }, () => pane(...args));
+
+  // The counts, singular and plural, and which dot.
+  assert.equal(say(), null, 'no panes, no card');
+  assert.equal(say(pane('working', 0)), 'Agents working (1 of 1) · [working]');
+  assert.equal(
+    say(...many(3, 'working', 0), pane('waiting', 0), pane('idle', 0)),
+    '1 agent waiting on me / Agents working (3 of 5) · [waiting]',
+    'anything waiting turns the dot amber',
+  );
+  assert.equal(
+    say(...many(2, 'waiting', 0), pane('idle', 0)),
+    '2 agents waiting on me / Waiting on me (2 of 3) · [waiting]',
+  );
+  assert.equal(say(...many(5, 'idle', 0)), 'Between tasks · [idle]');
+  assert.equal(say(pane(null, 0)), 'Between tasks · [idle]', 'no hook yet reads as idle');
+
+  // Opted-in names take the first line.
+  assert.equal(
+    say(...many(3, 'working', 0, 'storefront'), pane('waiting', 0)),
+    'Working on storefront / Agents working (3 of 4) · [waiting]',
+  );
+  assert.equal(
+    say(pane('waiting', 0, 'storefront')),
+    'Waiting in storefront / Waiting on me (1 of 1) · [waiting]',
+  );
+  assert.equal(say(pane('idle', 0, 'storefront')), 'In storefront / Between tasks · [idle]');
+
+  // Which name: working beats waiting beats idle, and the longest in that state
+  // wins, so the name doesn't flip each time another pane changes.
+  assert.match(
+    say(pane('idle', 0, 'a'), pane('waiting', 0, 'b'), pane('working', 0, 'c')),
+    /^Working on c \//,
+  );
+  assert.match(say(pane('working', 1, 'new'), pane('working', 9, 'old')), /^Working on old \//);
+  // A private pane's work must not borrow a shared project's name as "Working on".
+  assert.equal(
+    say(pane('working', 0), pane('idle', 0, 'shop')),
+    'In shop / Agents working (1 of 2) · [working]',
+  );
+  // A shared project that has gone quiet names nothing, even if others are busy.
+  assert.equal(
+    say(pane('working', 0), pane('idle', 45, 'old')),
+    'Agents working (1 of 2) · [working]',
+  );
+
+  // A long name is cut, not wrapped, and never mid-character.
+  const long = '😀'.repeat(50);
+  assert.match(say(pane('working', 0, long)), new RegExp(`^Working on ${'😀'.repeat(40)} /`, 'u'));
+
+  // Task lines: the named pane's sentence leads while it works or waits, its
+  // project heads line 2, and the member list shows the sentence.
+  const tasked = (activity, project, task) => ({ ...pane(activity, 0, project), task });
+  assert.equal(
+    say(tasked('working', 'shop', 'Fixing the cart total'), pane('idle', 0)),
+    'Fixing the cart total / shop · Agents working (1 of 2) · [working] · list: line 1',
+  );
+  assert.equal(
+    say(tasked('waiting', 'shop', 'Fixing the cart total')),
+    'Fixing the cart total / shop · Waiting on me (1 of 1) · [waiting] · list: line 1',
+  );
+  assert.equal(
+    say(tasked('idle', 'shop', 'Fixing the cart total')),
+    'In shop / Between tasks · [idle]',
+    'between tasks, finished work is not claimed',
+  );
+  // A sentence with no shared project behind it is never used (presencePanes never
+  // sends one, and the card doesn't trust that alone).
+  assert.equal(
+    say(tasked('working', null, 'Fixing the cart total')),
+    'Agents working (1 of 1) · [working]',
+  );
+  // The named pane's own sentence, not some other pane's.
+  assert.match(
+    say(
+      tasked('working', 'a', 'Fixing the old thing'),
+      tasked('idle', 'b', 'Fixing the new thing'),
+    ),
+    /^Fixing the old thing \/ a · /,
+  );
+
+  // Several busy agents take turns on line 1, 20 s each, each with its own project
+  // on line 2. A waiting pane sits out while others work, so line 1 never shows a
+  // finished task beside "Agents working", and a repeated sentence gets one turn.
+  const turnAt = (k, panes) => {
+    const t = (Math.floor(now / 20_000) + k) * 20_000 + 1; // just inside turn k
+    return describeCard(buildActivity(panes, null, t).activity);
+  };
+  const busy = [
+    { ...pane('working', 9, 'a'), task: 'Fixing the old thing' },
+    { ...pane('working', 1, 'b'), task: 'Adding the new thing' },
+    { ...pane('waiting', 0, 'a'), task: 'Waiting on a reply' },
+    { ...pane('working', 0, 'b'), task: 'Adding the new thing' }, // a broadcast twin
+  ];
+  const seen = [0, 1, 2, 3].map((k) => turnAt(k, busy));
+  assert.deepEqual(
+    new Set(seen),
+    new Set([
+      'Fixing the old thing / a · Agents working (3 of 4) · [waiting] · list: line 1',
+      'Adding the new thing / b · Agents working (3 of 4) · [waiting] · list: line 1',
+    ]),
+    'both working sentences take turns, and nothing else does',
+  );
+  assert.notEqual(seen[0], seen[1], 'the turns alternate');
+  assert.equal(seen[0], seen[2], 'two turns, not three: the repeated sentence counts once');
+  // With nothing working, the agents waiting on me take the turns instead.
+  const asking = [
+    { ...pane('waiting', 5, 'a'), task: 'Fixing the old thing' },
+    { ...pane('waiting', 2, 'a'), task: 'Adding the new thing' },
+  ];
+  assert.deepEqual(
+    new Set([0, 1].map((k) => turnAt(k, asking))),
+    new Set([
+      'Fixing the old thing / a · Waiting on me (2 of 2) · [waiting] · list: line 1',
+      'Adding the new thing / a · Waiting on me (2 of 2) · [waiting] · list: line 1',
+    ]),
+  );
+
+  // The images: the logo turns only while agents work; the dot follows the state;
+  // the hover text spells the counts out.
+  const art = (panes) => buildActivity(panes, null, now).activity.assets;
+  assert.match(art([pane('working', 0)]).large_image, /\/helm-working\.gif$/);
+  assert.match(art([pane('waiting', 0)]).large_image, /\/helm\.png$/);
+  assert.match(art([pane('idle', 0)]).large_image, /\/helm\.png$/);
+  assert.equal(
+    art([...many(3, 'working', 0), pane('waiting', 0), pane('idle', 0)]).small_text,
+    '3 working · 1 waiting on me · 5 open',
+  );
+  assert.equal(art([pane('idle', 0)]).small_text, '1 open');
+
+  // The 30-minute rule, and that waiting ages out where working does not.
+  assert.ok(say(pane('idle', 29)), 'recent enough');
+  assert.equal(say(pane('idle', 31)), null);
+  assert.equal(say(pane('waiting', 31)), null, 'away for hours is not "playing"');
+  assert.ok(say(pane('working', 600)), 'a long-running agent is still working');
+  assert.equal(say({ activity: 'idle', since: NaN, project: null }), null, 'an unreadable date');
+
+  // The timer starts when the card appears, holds, and resets when it goes.
+  const first = buildActivity([pane('working', 0)], null, now);
+  assert.equal(first.activeSince, now);
+  assert.equal(first.activity.timestamps.start, now);
+  const later = buildActivity([pane('idle', 0)], first.activeSince, now + 60_000);
+  assert.equal(later.activity.timestamps.start, now, 'held across updates');
+  const gone = buildActivity([], later.activeSince, now + 120_000);
+  assert.equal(gone.activeSince, null);
+  assert.equal(gone.activity, null);
+});
+
+test('discord: the card follows the settled status, not just the hooks', async () => {
+  await discordFresh();
+  const dataDir = seedState('settle-card', {});
+  fs.writeFileSync(path.join(dataDir, 'settings.json'), JSON.stringify({ discordPresence: true }));
+  const aside = await bootAside(dataDir, {
+    HELM_STUCK_AFTER_MS: '2000',
+    HELM_DISCORD_PIPE: discordPipe,
+    HELM_DISCORD_APP_ID: 'settle-app-id',
+    HELM_DISCORD_TICK_MS: '100',
+  });
+  try {
+    const send = asideHook(aside, dataDir);
+    const { id } = await asidePane(aside, 'settle-card-project');
+    await send(id, 'UserPromptSubmit');
+    await eventually(() => lastCard()?.state === 'Agents working', 'the card to say working');
+    // Esc: the pane settles, and the public card must not keep claiming work.
+    await eventually(() => lastCard()?.state === 'Between tasks', 'the card to agree');
+    await aside.call(`/sessions/${id}`, { method: 'DELETE' });
+  } finally {
+    aside.stop();
+  }
+  await eventually(() => discord.sockets.size === 0, 'the aside server to let go of the pipe');
 });

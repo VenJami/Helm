@@ -1729,20 +1729,35 @@ input::placeholder { color: var(--faint); }
 .update-link:hover { text-decoration: underline; }
 
 /* Unreleased commits on main — the quiet half of the update check. Deliberately
-   NOT the banner treatment: one muted line that ellipsises, no accent bar, no
-   title. Shown only when there is no release to announce. */
+   NOT the banner treatment: muted, no accent bar, no title. Shown only when
+   there is no release to announce. One summary row, the commit subjects under
+   it, and whatever the Update button has to report. */
 .commits-note {
   display: flex;
-  align-items: center;
-  gap: 8px;
+  flex-direction: column;
+  gap: 6px;
   margin: 8px 12px 0;
-  padding: 5px 8px 5px 10px;
+  padding: 6px 8px 7px 10px;
   font-size: 11.5px;
   color: var(--muted);
   background: var(--panel);
   border: 1px solid var(--border);
   border-radius: 6px;
 }
+.commits-head { display: flex; align-items: center; gap: 8px; }
+.commits-toggle {
+  flex-shrink: 0;
+  width: 14px;
+  padding: 0;
+  background: none;
+  border: 0;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 10px;
+  line-height: 1;
+  font-family: inherit;
+}
+.commits-toggle:hover { color: var(--text); }
 .commits-count { color: var(--text); font-weight: 600; flex-shrink: 0; }
 .commits-msg {
   flex: 1;
@@ -1755,6 +1770,48 @@ input::placeholder { color: var(--faint); }
 .commits-note .update-cmd { flex-shrink: 0; }
 .commits-note .update-cmd { font-size: 11px; }
 .commits-note .drift-close { padding: 1px; }
+.commits-note .commits-update { flex-shrink: 0; }
+
+/* The subjects. Capped and scrollable: a copy left alone for a month can be
+   thirty commits behind, and this sits above the panes. */
+.commits-list {
+  list-style: none;
+  margin: 0;
+  padding: 2px 0 0 22px;
+  max-height: 148px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.commits-list li { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.commits-sha {
+  flex-shrink: 0;
+  font-family: ui-monospace, Consolas, monospace;
+  font-size: 10.5px;
+  opacity: 0.75;
+}
+.commits-subject {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text);
+}
+.commits-when { flex-shrink: 0; font-size: 10.5px; }
+
+.commits-progress,
+.commits-outcome,
+.commits-next { padding-left: 22px; line-height: 1.65; }
+.commits-outcome strong { color: var(--text); font-weight: 600; }
+.commits-outcome-bad strong { color: var(--danger); }
+/* Each build step on its own line, so a failure is readable rather than a
+   sentence the eye slides off. */
+.commits-step { display: block; }
+.commits-step-bad { color: var(--danger); }
+.commits-next { margin-top: 3px; }
+.commits-next .commits-update { vertical-align: middle; }
 
 .pane-slot {
   display: flex;

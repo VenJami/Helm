@@ -100,6 +100,19 @@ What that means concretely:
 - **`HELM_NO_UPDATE_CHECK=1` disables it completely** — the server then makes no
   outbound request at all and reports `disabled` on `GET /api/update`.
 
+The banner's **Update** button (`POST /api/update/pull`) runs `git pull
+--ff-only` and, when the new commits touched `web/`, `npm install` + `npm run
+build` there. It carries the same bearer token as every other route, so a
+drive-by page cannot trigger it, and it is bounded on purpose: fast-forward
+only (never a merge), never over uncommitted changes, and never a server
+restart. It will move a checkout parked on another branch onto the tracked one
+first, but only when the request says so — which is only when the button the
+user pressed said so too — and only with a clean tree; the branch left behind
+is not modified or deleted. It pulls from whatever
+`origin` your checkout already has — Helm does not choose the remote, and the
+code it fetches is whatever you already trusted enough to clone. Set
+**`HELM_NO_SELF_UPDATE=1`** to refuse it outright.
+
 ## Dictation (where your voice goes)
 
 The mic button on a pane uses the **browser's** built-in speech recognition
@@ -125,6 +138,54 @@ and installs nothing. Being straight about the trade:
 
 If you would rather no audio ever left the machine, don't use the button — every
 other part of Helm works exactly as before without it.
+
+## Discord presence (what leaves your machine)
+
+Helm can put a "Coding with Helm" card on your Discord profile, the way the VS Code
+presence extensions do. After the share links and the mic, this is the third
+thing in Helm that leaves your machine, so here is exactly what it does:
+
+- **It is off until you turn it on.** With the setting off, Helm never opens the
+  connection at all. Appearance > Discord turns it on and off, and off takes
+  effect immediately.
+- **The card is public.** Anyone who can see your Discord profile can read it,
+  including people who only share a server with you.
+- **Helm itself sends nothing over the network.** It connects to the Discord
+  desktop app through a local pipe (`discord-ipc-0` to `9`) and says what the card
+  should read; the Discord app publishes it. No new port is opened and nothing
+  listens for incoming connections. What Discord does with the text after that is
+  covered by Discord's own policies, not by Helm.
+- **What is on the card:** how many agents are working, waiting or open, an elapsed
+  timer, Helm's logo and status dot, and a link to this repository. Opt-in extras:
+  project names, and task lines (both below).
+- **The images come from this repository.** Discord fetches them by fixed public
+  links on GitHub and shows them through its own image proxy. Nothing about you or
+  your projects is in those links, and they are the same for everyone.
+- **Project names are opt-in, per project.** A name appears only after you
+  right-click that project and choose "Show name on Discord". New projects are
+  private, and a project cannot be created public.
+- **Task lines are the one thing written from your prompts, and they are opt-in
+  twice over.** With the Task lines setting on (off by default), claude's quick
+  model writes one sentence per prompt, such as "Debugging the reported bug on
+  ticket 7". That sentence reaches the card, and the member list under your name,
+  only for projects whose names you share. The prompt itself never does. The
+  model is told to leave out people, companies, emails, links, paths, keys and
+  money, and the code rejects any sentence that still contains a link, an email,
+  a path, a long number or a key-like string. `npm run task-rough` is a committed
+  bench of leak and injection cases. Writing the sentence sends your prompt to
+  claude on that pane's own account, which is where the prompt was already going.
+- **Never sent:** your prompts, the first-prompt titles, file paths, git branches,
+  account emails, tool details, or pane names. This is enforced by construction:
+  the module that talks to Discord (`server/src/discord.mjs`) is never handed any
+  of them, and a smoke test searches every byte sent to a stand-in Discord for them.
+- **You can check what went out.** Every card is written to the debug drawer.
+- **The card clears itself** after 30 minutes with nothing happening, and when Helm
+  stops or crashes, because Discord takes the card down when the connection drops.
+
+The application id in the source is public by design, like the one VS Code
+extensions ship. Helm has no Discord credentials and never asks for your login. A
+malicious local process could pretend to be Discord's pipe and read the card text,
+but that is the out-of-scope case below, and it would learn only what the card says.
 
 ## Approving tool calls from the floating HUD
 

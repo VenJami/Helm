@@ -90,7 +90,25 @@ the polish call gets slow again but never wrong.
   profile's own settings): `SessionStart`, `UserPromptSubmit`, `Stop`,
   `Notification`, `PermissionRequest`. Relay script: `server/hook-post.mjs`.
 - Hook payload fields read: `session_id`, `transcript_path`, `hook_event_name`,
-  `message` (Notification text → the pane's `activityNote`).
+  `message` (Notification text → the pane's `activityNote`), and for Task lines
+  `prompt` (UserPromptSubmit: the full text as typed) and `source` (SessionStart:
+  `startup`/`resume`/`clear`/`compact`; a `clear` empties the pane's task line).
+  `npm run e2e` checks both are present. If `prompt` went missing, task lines would
+  silently stop updating; if `source` did, `/clear` would just keep the old line.
+- **`Stop` does NOT fire when Esc interrupts a turn, and no `Notification` follows**
+  (observed on 2.1.283: still `working` 10 minutes later, with claude's own screen
+  reading "Interrupted"). So `working` can be stale until the next prompt. The
+  terminal gives it away: 994 output frames and a longest silence of 0.5 s during a
+  real 107 s turn running a silent command, against 0 frames in 40 s after Esc.
+  `settledActivity` in src/claude.mjs relies on both halves, and `npm run e2e` checks
+  both: if a claude update makes the spinner go quiet, real turns would read idle.
+- **`Notification` fires about a minute after a turn finishes** ("waiting for your
+  input"), so an idle pane reads `waiting` from then on, not just one that's blocked.
+- **A question or permission prompt fires `PermissionRequest`, then `Notification`
+  about 6 s later, and NOTHING when it's answered in the pane.** The turn just carries
+  on. Measured on 2.1.283: 0 frames of output in 26 s while a prompt is open, then a
+  steady run from the answer to the end of the turn. `settledActivity` reads that as
+  back to `working`, and `npm run e2e` checks it.
 
 ### 5a. `PermissionRequest` — the only hook whose REPLY we send back
 
@@ -142,6 +160,14 @@ rarely appear. That is correct behaviour, not a Helm bug.
 `--login`, `--version` (the drift check). On Windows the executable is the
 `claude.cmd` shim (node-pty can't run the `.ps1`).
 
+`-n` also writes the name into the transcript (`{type:'custom-title', customTitle}`),
+and a session with a name gets **no AI title** (`{type:'ai-title', aiTitle}`, the
+title claude otherwise generates for its resume list and the terminal title). On
+2.1.319, none of the 11 named Helm pane transcripts checked had one; the only
+unnamed one did. Where an AI title exists it is set once per conversation and
+never updated (10 of 10 conversations checked had a single title throughout), which
+is why task lines write their own sentence instead of reading it.
+
 Headless (the "ask claude how to start this project" call, `POST
 /api/workspaces/:id/suggest-start`): `-p` with the prompt on **stdin**,
 `--output-format json`, `--allowed-tools "Read,Glob,Grep"` (read-only: it works
@@ -169,12 +195,13 @@ Everything else in the envelope is ignored. Output is normally one JSON line;
 the parser also accepts a trailing/leading extra line by taking the last line
 that parses. A shape change here is drift, not a caller bug — see below.
 
-Two callers use it:
+Three callers use it:
 
 | Call | Flags | Notes |
 |---|---|---|
 | suggest-start | `-p --output-format json --allowed-tools "Read,Glob,Grep" --max-turns 12` | runs in the project dir; the reply's first JSON array is the command list |
 | dictation polish | `-p --output-format json --model haiku --tools "" --max-turns 1 --system-prompt "…"` | **runs in a neutral cwd on purpose** |
+| task lines | identical to polish (`spawnQuickClaude`), different system prompt | one call per real prompt while Task lines is on; reply vetted by `cleanTaskLine` |
 
 Three of those flags were measured against the real CLI, and the naive version
 of this call cost **28x more and returned nothing usable**. Numbers from
@@ -201,7 +228,8 @@ of this call cost **28x more and returned nothing usable**. Numbers from
 User-level `~/.claude` memory still loads and isn't ours to skip. `--bare`
 would skip it, but it also refuses OAuth and requires `ANTHROPIC_API_KEY` —
 exactly the second bill this feature exists to avoid, so it is not an option.
-`HELM_POLISH_MODEL` overrides the model if `haiku` is ever refused.
+`HELM_POLISH_MODEL` overrides the model if `haiku` is ever refused, for task lines
+as well as dictation.
 
 The polish reply is then run through `cleanPolished`, because a prompt is not a
 contract: it strips a "Here's the cleaned version:" preamble, a code fence, and
@@ -223,11 +251,13 @@ inline signals), exposed at `GET /api/diagnostics`:
 | CLI missing | `claude-missing` | `claude --version` fails to run |
 | Below floor | `claude-below-floor` | version < `CLAUDE_VERSION_FLOOR` |
 | Unknown model | `unknown-model:<model>` | a real model with tokens matches no `MODEL_PRICING` row |
-| Transcript shape | `transcript-shape` | a >16 KB transcript parses as JSON but yields 0 usage entries |
+| Transcript shape | `transcript-shape` | a >16 KB transcript parses as JSON but has no assistant reply in the shape Helm reads (`message.usage` + `message.model`). claude's `<synthetic>` placeholders count as readable: a subagent whose only reply is one (a failed call padded out by attachments) legitimately has no usage, and used to raise this falsely |
 | Suggest: not JSON | `suggest-nonjson` | `claude -p --output-format json` printed something unparseable |
 | Suggest: no result | `suggest-noresult` | that envelope had no string `result` field |
 | Polish: not JSON | `polish-nonjson` | the dictation-polish call printed something unparseable |
 | Polish: no result | `polish-noresult` | that envelope had no string `result` field |
+| Task lines: not JSON | `tasks-nonjson` | the task-line call printed something unparseable |
+| Task lines: no result | `tasks-noresult` | that envelope had no string `result` field |
 | PermissionRequest shape | `permissionrequest-shape` | the hook fired with no `tool_name` — the HUD can no longer say what a pane is asking, so Approve/Deny is disabled (panes still prompt normally) |
 
 Warnings are deduped by key, counted, and shown until dismissed; a *new* key
